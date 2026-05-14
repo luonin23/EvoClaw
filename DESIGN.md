@@ -642,34 +642,34 @@ async def check_single_pair_close(self, all_positions, skip):
         # if avg_rate >= threshold → 双向平仓
 ```
 
-**亏损加仓**（v1.4 多空阈值分离）：
+**亏损加仓**（v1.4-fix：可重复触发 + 按当前持仓量加仓）：
 
 ```python
 async def check_margin_call(self, all_positions, skip):
-    """扫描所有持仓（不限于候选列表），排除白名单。"""
+    """扫描所有持仓（不限于候选列表），排除白名单。
+    可重复触发：每轮 tick 只要亏损率仍 >= 阈值，就会再次加仓。
+    """
     cfg = self.config
-    # v1.4: 多单/空单使用独立阈值，向后兼容旧的 margin_call_threshold
     threshold_long = cfg.get("margin_call_threshold_long", cfg.get("margin_call_threshold", 0.01))
     threshold_short = cfg.get("margin_call_threshold_short", cfg.get("margin_call_threshold", 0.01))
     multiplier = cfg.get("margin_call_multiplier", 2)
-
-    system_positions = self.db.get_open_positions()
-    margin_called = {(sp["symbol"], sp["side"]) for sp in system_positions if sp.get("margin_called", 0)}
 
     for p in all_positions:
         sym = self.client.user_symbol(p["symbol"])
         if sym in skip:
             continue
         side = p.get("side")
-        if (sym, side) in margin_called:
-            continue
         # ... 计算 loss_rate ...
         threshold = threshold_long if side == "long" else threshold_short
         if loss_rate >= threshold:
+            # v1.4-fix: 加仓数量 = 当前持仓合约数 × multiplier
+            add_amount = contracts * multiplier
             # add_position + 累加 open_fee
 ```
 
-> **v1.4 改动**：`margin_call_threshold` 拆分为 `margin_call_threshold_long` 和 `margin_call_threshold_short`，多空单分别独立设置加仓触发条件。旧配置中的 `margin_call_threshold` 仍可作为默认值向后兼容。
+> **v1.4-fix 改动**：
+> 1. 移除 `margin_called` 一次性限制。加仓**可重复触发**：只要亏损率持续 ≥ 阈值，每轮 tick 都会继续加仓。
+> 2. 加仓数量从 `calc_min_contracts × multiplier` 改为 `当前持仓合约数 × multiplier`。即加仓量与现有仓位成正比，而非固定最小合约数。
 >
 > **加仓手续费**：加仓时累加 `added_fee = result["average"] * add_amount * cs * 0.0005` 到 `open_positions.open_fee`
 
@@ -1077,10 +1077,9 @@ T0+0:  get_positions(candidate_symbols) → 重新获取
 
 T0+0:  check_margin_call() [扫描 ALL positions，不限于候选列表]
        ├─ 排除白名单
-       ├─ margin_called=1 → 跳过
        ├─ pnl >= 0 → 跳过
-       ├─ loss_rate >= side-specific threshold → add_position() + 累加 open_fee + mark_margin_called
-       └─ 继续下一个
+       ├─ loss_rate >= side-specific threshold → add_position(当前持仓×multiplier) + 累加 open_fee + mark_margin_called
+       └─ 继续下一个（下一轮tick若仍满足条件，会继续加仓）
 
 T0+0:  get_positions(candidate_symbols) → 重新获取
 

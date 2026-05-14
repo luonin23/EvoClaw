@@ -5,93 +5,48 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EvoClaw 交易仪表盘</title>
 <style>
-/* ═══════════════════════════════════════════
-   设计令牌 (Design Tokens) — 深色交易主题
-   ═══════════════════════════════════════════ */
 :root {
-  /* — 色彩系统 — */
   --color-primary: #0ea5e9;
   --color-primary-dim: #0284c7;
-  --color-primary-glow: rgba(14,165,233,0.15);
   --color-success: #10b981;
-  --color-success-bg: rgba(16,185,129,.1);
   --color-error: #ef4444;
-  --color-error-bg: rgba(239,68,68,.1);
   --color-warning: #f59e0b;
-  --color-warning-bg: rgba(245,158,11,.1);
-
-  /* — 表面色 — */
   --surface-bg: #0b0f19;
   --surface-card: #111827;
   --surface-card-hover: #1a2234;
   --surface-input: #0b0f19;
   --surface-border: #1e2a3a;
-
-  /* — 文字色 — */
   --text-primary: #e5e7eb;
   --text-secondary: #9ca3af;
   --text-tertiary: #6b7280;
-
-  /* — 字体 — */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro", "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
-
-  /* — 字阶 (1.2× 比列) — */
-  --text-xs: 11px;
-  --text-sm: 13px;
-  --text-base: 15px;
-  --text-lg: 18px;
-  --text-xl: 22px;
-
-  /* — 间距 (4pt 网格) — */
-  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
-  --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
-  --sp-8: 32px; --sp-10: 40px; --sp-12: 48px;
-
-  /* — 圆角 — */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-
-  /* — 阴影 — */
-  --shadow-card: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
-  --shadow-glow: 0 0 20px rgba(14,165,233,.08);
-
-  /* — 动效 — */
-  --duration-fast: 150ms;
-  --duration-base: 250ms;
-  --ease-out: cubic-bezier(.16,1,.3,1);
 }
 
-/* ═══════════════════════════════════════════
-   全局重置 & 基础
-   ═══════════════════════════════════════════ */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-html{font-size:var(--text-base);scroll-behavior:smooth}
+html{font-size:14px}
 body{
   font-family:var(--font-sans);
   background:var(--surface-bg);
   color:var(--text-primary);
-  line-height:1.6;
-  padding:var(--sp-4);
-  max-width:860px;
+  line-height:1.5;
+  padding:12px;
+  max-width:960px;
   margin:0 auto;
   -webkit-font-smoothing:antialiased;
 }
 
-/* ═══════════════════════════════════════════
-   组件: 页面头部
-   ═══════════════════════════════════════════ */
+/* Header */
 .page-header{
   display:flex;
   align-items:center;
   justify-content:space-between;
-  padding:var(--sp-4) 0 var(--sp-6);
+  padding:8px 0 12px;
   border-bottom:1px solid var(--surface-border);
-  margin-bottom:var(--sp-6);
+  margin-bottom:12px;
 }
 .page-header h1{
-  font-size:var(--text-xl);
+  font-size:20px;
   font-weight:700;
   letter-spacing:-.02em;
   background:linear-gradient(135deg,var(--color-primary),#a78bfa);
@@ -102,11 +57,11 @@ body{
 .status-pill{
   display:inline-flex;
   align-items:center;
-  gap:var(--sp-1);
-  font-size:var(--text-xs);
+  gap:6px;
+  font-size:11px;
   color:var(--text-secondary);
   background:var(--surface-card);
-  padding:4px var(--sp-3);
+  padding:3px 10px;
   border-radius:9999px;
   border:1px solid var(--surface-border);
 }
@@ -118,212 +73,229 @@ body{
 }
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-/* ═══════════════════════════════════════════
-   组件: 卡片
-   ═══════════════════════════════════════════ */
+/* Tabs */
+.tab-bar{
+  display:flex;
+  gap:4px;
+  margin-bottom:12px;
+  background:var(--surface-card);
+  border:1px solid var(--surface-border);
+  border-radius:8px;
+  padding:3px;
+}
+.tab-btn{
+  flex:1;
+  background:transparent;
+  border:none;
+  color:var(--text-secondary);
+  font-size:13px;
+  font-weight:600;
+  padding:8px 0;
+  border-radius:6px;
+  cursor:pointer;
+  transition:all .15s;
+  font-family:var(--font-sans);
+}
+.tab-btn:hover{color:var(--text-primary)}
+.tab-btn.active{
+  background:var(--color-primary);
+  color:#fff;
+}
+.tab-panel{display:none;animation:fadeIn .25s ease}
+.tab-panel.active{display:block}
+
+/* Card */
 .card{
   background:var(--surface-card);
   border:1px solid var(--surface-border);
-  border-radius:var(--radius-lg);
-  padding:var(--sp-5);
-  margin-bottom:var(--sp-4);
-  box-shadow:var(--shadow-card);
-  transition:border-color var(--duration-fast) var(--ease-out);
+  border-radius:10px;
+  padding:12px;
+  margin-bottom:10px;
+  box-shadow:0 1px 4px rgba(0,0,0,.4);
 }
-.card:hover{border-color:#2a3a4e}
 .card-head{
   display:flex;
   align-items:center;
-  gap:var(--sp-2);
-  margin-bottom:var(--sp-4);
+  gap:8px;
+  margin-bottom:10px;
 }
 .card-head .icon{
-  width:28px;height:28px;
+  width:22px;height:22px;
   display:flex;align-items:center;justify-content:center;
-  border-radius:var(--radius-sm);
-  font-size:var(--text-sm);
+  border-radius:5px;
+  font-size:13px;
   flex-shrink:0;
 }
 .card-head h2{
-  font-size:var(--text-sm);
+  font-size:12px;
   font-weight:600;
   text-transform:uppercase;
   letter-spacing:.06em;
   color:var(--text-secondary);
 }
 
-/* ═══════════════════════════════════════════
-   组件: 统计网格
-   ═══════════════════════════════════════════ */
+/* Stat Grid - compact 4-col */
 .stat-grid{
   display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(120px,1fr));
-  gap:var(--sp-3);
+  grid-template-columns:repeat(4,1fr);
+  gap:8px;
 }
 .stat-card{
   background:var(--surface-input);
   border:1px solid var(--surface-border);
-  border-radius:var(--radius-md);
-  padding:var(--sp-3) var(--sp-3);
+  border-radius:8px;
+  padding:8px 4px;
   text-align:center;
-  transition:all var(--duration-fast) var(--ease-out);
+  transition:all .15s;
 }
 .stat-card:hover{
   background:var(--surface-card-hover);
   border-color:#2a3a4e;
-  transform:translateY(-1px);
 }
 .stat-value{
-  font-size:var(--text-lg);
+  font-size:15px;
   font-weight:700;
   font-family:var(--font-mono);
-  letter-spacing:-.01em;
   margin-bottom:2px;
   white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
 .stat-label{
-  font-size:var(--text-xs);
+  font-size:10px;
   color:var(--text-tertiary);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
 
-/* ═══════════════════════════════════════════
-   组件: 表单
-   ═══════════════════════════════════════════ */
+/* Config Form */
 .form-grid{
   display:grid;
   grid-template-columns:1fr 1fr;
-  gap:var(--sp-3);
+  gap:10px;
 }
-.field{display:flex;flex-direction:column;gap:var(--sp-1)}
+.field{display:flex;flex-direction:column;gap:3px}
 .field.full{grid-column:1/-1}
 .field label{
-  font-size:var(--text-xs);
+  font-size:11px;
+  font-weight:500;
   color:var(--text-secondary);
-  margin-bottom:2px;
 }
 .field input,.field select,.field textarea{
   background:var(--surface-input);
   border:1px solid var(--surface-border);
   color:var(--text-primary);
-  padding:var(--sp-2) var(--sp-3);
-  border-radius:var(--radius-sm);
-  font-size:var(--text-sm);
+  padding:7px 10px;
+  border-radius:6px;
+  font-size:13px;
   font-family:var(--font-sans);
-  transition:border-color var(--duration-fast);
+  transition:border-color .15s;
   outline:none;
+  height:34px;
 }
 .field input:focus,.field select:focus,.field textarea:focus{
   border-color:var(--color-primary);
-  box-shadow:0 0 0 3px var(--color-primary-glow);
 }
-.field textarea{min-height:44px;max-height:80px;resize:vertical}
+.field textarea{min-height:60px;height:auto;resize:vertical}
 .field select{cursor:pointer}
 
-/* 配置分组 */
+/* Config Group */
 .config-group{
   border:1px solid var(--surface-border);
-  border-radius:var(--radius-md);
-  padding:var(--sp-3);
-  margin-bottom:var(--sp-3);
+  border-radius:8px;
+  padding:10px;
+  margin-bottom:8px;
   background:rgba(255,255,255,.02);
 }
 .config-group-title{
-  font-size:var(--text-xs);
+  font-size:11px;
   font-weight:600;
   color:var(--text-tertiary);
   text-transform:uppercase;
-  letter-spacing:.08em;
-  margin-bottom:var(--sp-3);
-  padding-bottom:var(--sp-2);
+  letter-spacing:.06em;
+  margin-bottom:8px;
+  padding-bottom:6px;
   border-bottom:1px solid var(--surface-border);
 }
 
-/* ═══════════════════════════════════════════
-   组件: 按钮
-   ═══════════════════════════════════════════ */
-.btn-row{display:flex;gap:var(--sp-2);margin-top:var(--sp-3);flex-wrap:wrap}
+/* Buttons */
+.btn-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
 .btn{
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  gap:var(--sp-1);
-  height:var(--sp-5);
-  padding:0 var(--sp-4);
+  gap:4px;
+  height:36px;
+  padding:0 16px;
   border:none;
-  border-radius:var(--radius-sm);
-  font-size:var(--text-sm);
-  font-weight:500;
+  border-radius:6px;
+  font-size:13px;
+  font-weight:600;
   cursor:pointer;
-  transition:all var(--duration-fast) var(--ease-out);
+  transition:all .15s;
   font-family:var(--font-sans);
 }
-.btn-primary{
-  background:var(--color-primary);
-  color:#fff;
-}
+.btn-primary{background:var(--color-primary);color:#fff}
 .btn-primary:hover{background:var(--color-primary-dim)}
-.btn-danger{
-  background:var(--color-error);
-  color:#fff;
-}
+.btn-danger{background:var(--color-error);color:#fff}
 .btn-danger:hover{background:#dc2626}
+.btn-secondary{
+  background:var(--surface-card-hover);
+  color:var(--text-primary);
+  border:1px solid var(--surface-border);
+}
+.btn-secondary:hover{background:#1f2937}
 .btn:active{transform:scale(.97)}
 
-/* ═══════════════════════════════════════════
-   组件: 开关
-   ═══════════════════════════════════════════ */
-.switch{position:relative;width:40px;height:22px;flex-shrink:0;cursor:pointer}
+/* Switch */
+.switch-wrap{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:34px;
+}
+.switch{position:relative;width:44px;height:24px;flex-shrink:0;cursor:pointer}
 .switch input{opacity:0;width:0;height:0;position:absolute}
 .switch .track{
   position:absolute;inset:0;
   background:#374151;
-  border-radius:11px;
-  transition:background var(--duration-fast);
+  border-radius:12px;
+  transition:background .15s;
 }
 .switch .track::before{
   content:"";
   position:absolute;
-  width:16px;height:16px;
+  width:18px;height:18px;
   left:3px;bottom:3px;
   background:#fff;
   border-radius:50%;
-  transition:transform var(--duration-fast) var(--ease-out);
+  transition:transform .15s;
 }
 .switch input:checked+.track{background:var(--color-success)}
-.switch input:checked+.track::before{transform:translateX(18px)}
+.switch input:checked+.track::before{transform:translateX(20px)}
+.switch-label{font-size:12px;color:var(--text-secondary)}
 
-/* ═══════════════════════════════════════════
-   工具: 颜色 & 动画
-   ═══════════════════════════════════════════ */
+/* Helpers */
 .text-green{color:var(--color-success)}
 .text-red{color:var(--color-error)}
-.empty-state{
-  text-align:center;
-  color:var(--text-tertiary);
-  padding:var(--sp-6) var(--sp-3);
-  font-size:var(--text-sm);
-}
-.flash{animation:flash .6s ease 3}
-@keyframes flash{50%{opacity:.3}}
-@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.card{animation:fadeIn .3s var(--ease-out)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 
-/* ═══════════════════════════════════════════
-   响应式 (Breakpoints)
-   ═══════════════════════════════════════════ */
+/* Responsive */
 @media(max-width:640px){
-  body{padding:var(--sp-3)}
-  .page-header h1{font-size:var(--text-lg)}
-  .stat-grid{grid-template-columns:repeat(2,1fr)}
+  body{padding:8px}
+  .stat-grid{grid-template-columns:repeat(3,1fr)}
   .form-grid{grid-template-columns:1fr}
   .field.full{grid-column:auto}
-  .card{padding:var(--sp-4)}
+  .page-header h1{font-size:18px}
+}
+@media(max-width:400px){
+  .stat-grid{grid-template-columns:repeat(2,1fr)}
 }
 </style>
 </head>
 <body>
 
-<!-- ═══ 页面头部 ═══ -->
 <header class="page-header">
   <h1>⚡ EvoClaw</h1>
   <div class="status-pill" id="statusBar">
@@ -332,14 +304,76 @@ body{
   </div>
 </header>
 
-<!-- ═══ 配置区 ═══ -->
-<section class="card">
-  <div class="card-head">
-    <div class="icon" style="background:rgba(14,165,233,.12);color:var(--color-primary)">⚙</div>
-    <h2>交易配置</h2>
-  </div>
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
+  <button class="tab-btn" onclick="switchTab('config')" id="tab-config">交易配置</button>
+</div>
 
-  <!-- 组1: 币种筛选 -->
+<!-- Tab 1: Dashboard -->
+<div id="panel-dashboard" class="tab-panel active">
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(16,185,129,.1);color:var(--color-success)">￥</div>
+      <h2>账户概览</h2>
+    </div>
+    <div id="accActiveSymbols" style="margin-bottom:10px;padding:8px;background:var(--surface-input);border:1px solid var(--surface-border);border-radius:6px;font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);line-height:1.7;word-break:break-all;">
+      <span style="color:var(--text-tertiary)">筛选币种加载中...</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" id="accBalance">-</div><div class="stat-label">账户余额</div></div>
+      <div class="stat-card"><div class="stat-value" id="accAvailable">-</div><div class="stat-label">可转出余额</div></div>
+      <div class="stat-card"><div class="stat-value" id="accUnrealized">-</div><div class="stat-label">未实现盈亏</div></div>
+      <div class="stat-card"><div class="stat-value" id="accRealtimeRate">-</div><div class="stat-label">实时盈亏率</div></div>
+      <div class="stat-card"><div class="stat-value" id="accAllClose">-</div><div class="stat-label">全平次数</div></div>
+      <div class="stat-card"><div class="stat-value" id="accPairClose">-</div><div class="stat-label">对冲平仓</div></div>
+      <div class="stat-card"><div class="stat-value" id="accSingleClose">-</div><div class="stat-label">单项平仓</div></div>
+      <div class="stat-card"><div class="stat-value" id="accMarginCall">-</div><div class="stat-label">加仓次数</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(167,139,250,.1);color:#a78bfa">📋</div>
+      <h2>持仓状态</h2>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" id="posCount">-</div><div class="stat-label">持仓数</div></div>
+      <div class="stat-card"><div class="stat-value" id="posLongCount">-</div><div class="stat-label">多单</div></div>
+      <div class="stat-card"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
+      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史最大亏损</div></div>
+      <div class="stat-card"><div class="stat-value" id="posTotalPnl">-</div><div class="stat-label">持仓总盈亏</div></div>
+      <div class="stat-card"><div class="stat-value" id="posTotalRate">-</div><div class="stat-label">持仓盈亏率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">最大亏损额</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">最大亏损率</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(245,158,11,.1);color:var(--color-warning)">📊</div>
+      <h2>交易统计</h2>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" id="stTotalPnl">-</div><div class="stat-label">累计盈亏</div></div>
+      <div class="stat-card"><div class="stat-value" id="stTotalFee">-</div><div class="stat-label">累计手续费</div></div>
+      <div class="stat-card"><div class="stat-value" id="stWinRate">-</div><div class="stat-label">胜率</div></div>
+      <div class="stat-card"><div class="stat-value" id="stMaxRate">-</div><div class="stat-label">最高盈利率</div></div>
+      <div class="stat-card"><div class="stat-value" id="stAcctRate">-</div><div class="stat-label">累计盈利率</div></div>
+      <div class="stat-card"><div class="stat-value" id="stLong">-</div><div class="stat-label">多单平仓</div></div>
+      <div class="stat-card"><div class="stat-value" id="stShort">-</div><div class="stat-label">空单平仓</div></div>
+      <div class="stat-card"><div class="stat-value" id="stLongPnl">-</div><div class="stat-label">多单盈利</div></div>
+      <div class="stat-card"><div class="stat-value" id="stLongRate">-</div><div class="stat-label">多单盈利率</div></div>
+      <div class="stat-card"><div class="stat-value" id="stShortPnl">-</div><div class="stat-label">空单盈利</div></div>
+      <div class="stat-card"><div class="stat-value" id="stShortRate">-</div><div class="stat-label">空单盈利率</div></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- Tab 2: Config -->
+<div id="panel-config" class="tab-panel">
+
   <div class="config-group">
     <div class="config-group-title">币种筛选</div>
     <div class="form-grid">
@@ -355,14 +389,13 @@ body{
         <label>币种刷新间隔 (秒)</label>
         <input type="number" id="cfgSymbolRefreshInterval" step="1" min="1" value="86400">
       </div>
-      <div class="field">
-        <label>手动刷新</label>
-        <button class="btn btn-primary" style="height:var(--sp-5);margin-top:4px;width:100%" onclick="refreshSymbolsNow()">立即刷新币种</button>
+      <div class="field full">
+        <label></label>
+        <button class="btn btn-secondary" style="width:100%" onclick="refreshSymbolsNow()">立即刷新币种</button>
       </div>
     </div>
   </div>
 
-  <!-- 组2: 基础交易 -->
   <div class="config-group">
     <div class="config-group-title">基础交易</div>
     <div class="form-grid">
@@ -381,7 +414,6 @@ body{
     </div>
   </div>
 
-  <!-- 组3: 补仓设置 -->
   <div class="config-group">
     <div class="config-group-title">补仓设置</div>
     <div class="form-grid">
@@ -389,22 +421,20 @@ body{
         <label>停补阈值 (%)</label>
         <input type="number" id="cfgReplenishStop" step="0.1" min="0" value="10">
       </div>
-      <div class="field">
-        <label>说明</label>
-        <span style="font-size:var(--text-xs);color:var(--text-secondary);display:block;padding-top:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span>
+      <div class="field" style="justify-content:flex-end">
+        <span style="font-size:11px;color:var(--text-secondary);padding-bottom:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span>
       </div>
     </div>
   </div>
 
-  <!-- 组4: 全平功能 -->
   <div class="config-group">
     <div class="config-group-title">账户级全平</div>
     <div class="form-grid">
       <div class="field">
         <label>启用全平</label>
-        <div style="display:flex;align-items:center;gap:var(--sp-2);margin-top:4px">
+        <div class="switch-wrap">
           <label class="switch"><input type="checkbox" id="cfgEnableAllClose"><span class="track"></span></label>
-          <span style="font-size:var(--text-xs);color:var(--text-secondary)">账户整体盈利达标时全部平仓</span>
+          <span class="switch-label">账户整体盈利达标时全部平仓</span>
         </div>
       </div>
       <div class="field">
@@ -414,15 +444,14 @@ body{
     </div>
   </div>
 
-  <!-- 组5: 亏损加仓 -->
   <div class="config-group">
     <div class="config-group-title">亏损加仓</div>
     <div class="form-grid">
       <div class="field">
         <label>启用加仓</label>
-        <div style="display:flex;align-items:center;gap:var(--sp-2);margin-top:4px">
+        <div class="switch-wrap">
           <label class="switch"><input type="checkbox" id="cfgEnableMarginCall"><span class="track"></span></label>
-          <span style="font-size:var(--text-xs);color:var(--text-secondary)">亏损达标时自动追加仓位</span>
+          <span class="switch-label">亏损达标时自动追加仓位</span>
         </div>
       </div>
       <div class="field">
@@ -440,15 +469,14 @@ body{
     </div>
   </div>
 
-  <!-- 组6: 多空对平 -->
   <div class="config-group">
     <div class="config-group-title">多空对平</div>
     <div class="form-grid">
       <div class="field">
         <label>启用对平</label>
-        <div style="display:flex;align-items:center;gap:var(--sp-2);margin-top:4px">
+        <div class="switch-wrap">
           <label class="switch"><input type="checkbox" id="cfgEnableSinglePairClose"><span class="track"></span></label>
-          <span style="font-size:var(--text-xs);color:var(--text-secondary)">多空平均盈利达标时双向平仓</span>
+          <span class="switch-label">多空平均盈利达标时双向平仓</span>
         </div>
       </div>
       <div class="field">
@@ -458,7 +486,6 @@ body{
     </div>
   </div>
 
-  <!-- 组6: 白名单 -->
   <div class="config-group">
     <div class="config-group-title">白名单</div>
     <div class="form-grid">
@@ -470,156 +497,24 @@ body{
   </div>
 
   <div class="btn-row">
-    <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
+    <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
     <button class="btn btn-danger" onclick="toggleTrading()" id="btnToggle">停止交易</button>
   </div>
-</section>
 
-<!-- ═══ 账户概览 ═══ -->
-<section class="card">
-  <div class="card-head">
-    <div class="icon" style="background:rgba(16,185,129,.1);color:var(--color-success)">￥</div>
-    <h2>账户概览</h2>
-  </div>
-  <div id="accActiveSymbols" style="margin-bottom:var(--sp-4);padding:var(--sp-3);background:var(--surface-input);border:1px solid var(--surface-border);border-radius:var(--radius-md);font-size:var(--text-xs);font-family:var(--font-mono);color:var(--text-secondary);line-height:1.8;word-break:break-all;">
-    <span style="color:var(--text-tertiary)">筛选币种加载中...</span>
-  </div>
-  <div class="stat-grid">
-    <div class="stat-card">
-      <div class="stat-value" id="accBalance">-</div>
-      <div class="stat-label">账户余额 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accAvailable">-</div>
-      <div class="stat-label">可转出余额 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accUnrealized">-</div>
-      <div class="stat-label">未实现盈亏</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accRealtimeRate">-</div>
-      <div class="stat-label">EvoClaw 实时盈亏率</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accAllClose">-</div>
-      <div class="stat-label">账户级全平次数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accPairClose">-</div>
-      <div class="stat-label">对冲平仓次数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accSingleClose">-</div>
-      <div class="stat-label">单项平仓次数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="accMarginCall">-</div>
-      <div class="stat-label">执行加仓次数</div>
-    </div>
-  </div>
-</section>
-
-<!-- ═══ 持仓状态 ═══ -->
-<section class="card">
-  <div class="card-head">
-    <div class="icon" style="background:rgba(167,139,250,.1);color:#a78bfa">📋</div>
-    <h2>持仓状态</h2>
-  </div>
-  <div class="stat-grid">
-    <div class="stat-card">
-      <div class="stat-value" id="posCount">-</div>
-      <div class="stat-label">当前持仓数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posLongCount">-</div>
-      <div class="stat-label">多单持仓数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posShortCount">-</div>
-      <div class="stat-label">空单持仓数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posMaxLossRate">-</div>
-      <div class="stat-label">历史最大亏损比例</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posTotalPnl">-</div>
-      <div class="stat-label">持仓总盈亏 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posTotalRate">-</div>
-      <div class="stat-label">持仓总盈亏率</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posWorstPnl">-</div>
-      <div class="stat-label">最大亏损金额 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="posWorstRate">-</div>
-      <div class="stat-label">最大亏损比例</div>
-    </div>
-  </div>
-</section>
-
-<!-- ═══ 统计面板 ═══ -->
-<section class="card">
-  <div class="card-head">
-    <div class="icon" style="background:rgba(245,158,11,.1);color:var(--color-warning)">📊</div>
-    <h2>交易统计</h2>
-  </div>
-  <div class="stat-grid">
-    <div class="stat-card">
-      <div class="stat-value" id="stTotalPnl">-</div>
-      <div class="stat-label">累计盈亏 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stTotalFee">-</div>
-      <div class="stat-label">累计手续费 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stWinRate">-</div>
-      <div class="stat-label">胜率</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stMaxRate">-</div>
-      <div class="stat-label">最高单笔盈利率</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stAcctRate">-</div>
-      <div class="stat-label">累计盈利率</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stLong">-</div>
-      <div class="stat-label">多单平仓总数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stShort">-</div>
-      <div class="stat-label">空单平仓总数</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stLongPnl">-</div>
-      <div class="stat-label">多单平仓盈利 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stLongRate">-</div>
-      <div class="stat-label">多单平仓盈利率</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stShortPnl">-</div>
-      <div class="stat-label">空单平仓盈利 (USDT)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="stShortRate">-</div>
-      <div class="stat-label">空单平仓盈利率</div>
-    </div>
-  </div>
-</section>
+</div>
 
 <script>
 let trading = true;
+let currentTab = 'dashboard';
 
-/* ── API 请求封装 ── */
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  document.getElementById('panel-' + tab).classList.add('active');
+}
+
 async function api(path) {
   try {
     const r = await fetch(path);
@@ -628,7 +523,6 @@ async function api(path) {
   } catch { return null }
 }
 
-/* ── 加载配置 ── */
 async function loadConfig() {
   const d = await api('/api/config');
   if (!d) return;
@@ -649,7 +543,6 @@ async function loadConfig() {
   document.getElementById('cfgSide').value = d.side || 'both';
 }
 
-/* ── 保存配置 ── */
 async function saveConfig() {
   const skip = document.getElementById('cfgSkip').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
   await fetch('/api/config', {
@@ -676,7 +569,6 @@ async function saveConfig() {
   showToast('配置已保存');
 }
 
-/* ── 手动刷新币种 ── */
 async function refreshSymbolsNow() {
   const btn = document.querySelector('button[onclick="refreshSymbolsNow()"]');
   const oldText = btn.textContent;
@@ -694,7 +586,6 @@ async function refreshSymbolsNow() {
   }
 }
 
-/* ── 启停切换 ── */
 function toggleTrading() {
   trading = !trading;
   const btn = document.getElementById('btnToggle');
@@ -703,19 +594,16 @@ function toggleTrading() {
   showToast(trading ? '交易已停止' : '交易已启动');
 }
 
-/* ── 格式化工具 ── */
 function clr(v) { return (v || 0) >= 0 ? 'text-green' : 'text-red'; }
 function fmtP(p) { return (p >= 0 ? '+' : '') + p.toFixed(4); }
 function fmtR(r) { return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
 
-/* ── 提示消息 ── */
 function showToast(msg) {
   const bar = document.getElementById('statusText');
   bar.textContent = msg;
   setTimeout(() => { bar.textContent = '运行中 | ' + new Date().toLocaleTimeString(); }, 2000);
 }
 
-/* ── 账户信息 ── */
 async function loadAccount() {
   const d = await api('/api/account');
   if (!d) return;
@@ -732,13 +620,12 @@ async function loadAccount() {
   rtEl.className = 'stat-value ' + clr(rt);
   const symEl = document.getElementById('accActiveSymbols');
   if (d.active_symbols && d.active_symbols.length) {
-    symEl.innerHTML = '<span style="color:var(--text-tertiary);margin-right:var(--sp-2)">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
-      d.active_symbols.map(s => '<span style="display:inline-block;background:var(--surface-card-hover);padding:2px 8px;border-radius:var(--radius-sm);margin:2px">' + s + '</span>').join(' ');
+    symEl.innerHTML = '<span style="color:var(--text-tertiary);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
+      d.active_symbols.map(s => '<span style="display:inline-block;background:var(--surface-card-hover);padding:2px 7px;border-radius:4px;margin:2px;font-size:10px">' + s + '</span>').join(' ');
   } else {
     symEl.innerHTML = '<span style="color:var(--text-tertiary)">当前无匹配币种 (0个)</span>';
   }
 
-  // Populate 持仓状态 section
   document.getElementById('posCount').textContent = d.position_count || 0;
   document.getElementById('posLongCount').textContent = d.long_position_count || 0;
   document.getElementById('posShortCount').textContent = d.short_position_count || 0;
@@ -768,7 +655,6 @@ async function loadAccount() {
   document.getElementById('accMarginCall').textContent = d.margin_call_count || 0;
 }
 
-/* ── 统计数据 ── */
 async function loadStats() {
   const d = await api('/api/stats');
   if (!d) return;
@@ -789,7 +675,6 @@ async function loadStats() {
   document.getElementById('accPairClose').textContent = d.pair_close_count || 0;
   document.getElementById('accSingleClose').textContent = d.single_count || 0;
 
-  // New stats
   const lpEl = document.getElementById('stLongPnl');
   lpEl.textContent = fmtP(d.long_pnl || 0);
   lpEl.className = 'stat-value ' + clr(d.long_pnl);
@@ -804,7 +689,6 @@ async function loadStats() {
   srEl.className = 'stat-value ' + clr(d.short_pnl_rate);
 }
 
-/* ── 刷新循环 ── */
 async function refresh() {
   await Promise.all([loadAccount(), loadStats()]);
   document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();

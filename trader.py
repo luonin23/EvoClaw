@@ -320,6 +320,7 @@ class Trader:
 
     async def check_margin_call(self, all_positions, skip):
         """When position loss rate >= side-specific threshold, add position by multiplier.
+        Repeatable: triggers every tick if condition still holds.
         Checks ALL exchange positions (skip whitelist only)."""
         cfg = self.config
         # Backward-compatible: fall back to legacy margin_call_threshold if new keys missing
@@ -327,19 +328,12 @@ class Trader:
         threshold_short = cfg.get("margin_call_threshold_short", cfg.get("margin_call_threshold", 0.01))
         multiplier = cfg.get("margin_call_multiplier", 2)
 
-        # Get margin-called status from DB
-        system_positions = self.db.get_open_positions()
-        margin_called = {(sp["symbol"], sp["side"]) for sp in system_positions if sp.get("margin_called", 0)}
-
         # Check all exchange positions (skip whitelist)
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])
             if sym in skip:
                 continue
             side = p.get("side")
-            # Skip if already margin-called
-            if (sym, side) in margin_called:
-                continue
 
             pnl = float(p.get("unrealizedPnl", 0) or 0)
             if pnl >= 0:
@@ -356,17 +350,17 @@ class Trader:
             loss_rate = abs(pnl) / val
             threshold = threshold_long if side == "long" else threshold_short
             if loss_rate >= threshold:
-                add_amount = self.client.calc_min_contracts(sym) * multiplier
+                # v1.4-fix: add based on current position size, not min contracts
+                add_amount = contracts * multiplier
                 log.info(
                     f"MARGIN CALL {sym} {side}: loss={loss_rate:.4%} threshold={threshold:.4%} "
-                    f"adding {add_amount} contracts"
+                    f"adding {add_amount} contracts (current={contracts} x {multiplier})"
                 )
                 result = await self.client.add_position(sym, side, add_amount)
                 if result:
                     self.db.increment_margin_call_count()
                     new_total = contracts + add_amount
                     added_fee = result["average"] * add_amount * cs * 0.0005
-                    # Ensure tracked, then mark margin-called
                     if self.db.has_open(sym, side):
                         self.db.mark_margin_called(sym, side, new_total, added_fee)
                     else:
