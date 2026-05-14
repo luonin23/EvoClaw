@@ -1,6 +1,6 @@
 # EvoClaw - 高速微盈利交易系统 设计文档
 
-> 最后更新: 2026-05-13 | 版本: v1.3 (前端重构 + 持仓状态 + 多空统计)
+> 最后更新: 2026-05-14 | 版本: v1.4 (补仓停补阈值 + 加仓多空分离)
 
 ## 一、系统设计目标
 
@@ -65,6 +65,7 @@
 ```
 /home/claudeuser/EvoClaw/
 ├── main.py                  # 入口：启动所有模块
+├── restart.sh               # **v1.4** 一键重启脚本（停止→清理→启动）
 ├── config.json              # 配置文件（前端可修改，热加载）
 ├── DESIGN.md                # 本文档
 ├── requirements.txt         # 依赖清单
@@ -92,9 +93,14 @@
     },
     "side": "both",
     "profit_threshold": 0.002,
+    "replenish_stop_threshold": 0.10,
     "enable_all_close": false,
     "all_close_threshold": 0.002,
     "skip_symbols": [],
+    "enable_margin_call": false,
+    "margin_call_threshold_long": 0.25,
+    "margin_call_threshold_short": 0.25,
+    "margin_call_multiplier": 2,
     "position_check_interval": 1,
     "volume_threshold": 50000000,
     "price_threshold": 0.1,
@@ -109,11 +115,14 @@
 | ~~`symbols`~~ | ~~list[str]~~ | ~~`[]`~~ | ~~【已废弃】原手动交易对列表，现由 volume_threshold + price_threshold 自动筛选替代~~ |
 | `side` | str | `"both"` | `"long"` / `"short"` / `"both"` 多空方向 |
 | `profit_threshold` | float | `0.002` | 单币种平仓毛盈利率阈值 |
+| `replenish_stop_threshold` | float | `0.10` | **v1.4** 补仓停补阈值：对方持仓开仓价与市价偏离≥此值时，停止补该方向仓位 |
 | `enable_all_close` | bool | `false` | 是否启用账户级全平功能 |
 | `all_close_threshold` | float | `0.002` | 全平触发毛盈利率阈值 |
 | `skip_symbols` | list[str] | `[]` | 跳过盈利平仓的币种白名单（全平、加仓也不处理） |
 | `enable_margin_call` | bool | `false` | 是否启用亏损加仓功能 |
-| `margin_call_threshold` | float | `0.01` | 亏损加仓触发阈值（1%=亏损1%时加仓） |
+| `margin_call_threshold` | float | `0.01` | 【已废弃，向后兼容】原统一亏损加仓阈值 |
+| `margin_call_threshold_long` | float | `0.25` | **v1.4** 多单（long）亏损加仓触发阈值 |
+| `margin_call_threshold_short` | float | `0.25` | **v1.4** 空单（short）亏损加仓触发阈值 |
 | `margin_call_multiplier` | float | `2` | 加仓倍数（相对于最小合约数） |
 | `enable_single_pair_close` | bool | `false` | 是否启用单币种多空对平功能 |
 | `pair_close_threshold` | float | `0.002` | 单币种对平触发盈利率（可独立于 profit_threshold） |
@@ -491,11 +500,21 @@ async def _do_open(self, symbol: str, open_side: str, side: str):
 
 > **手续费计算**：买入 0.05%，即 `entry_price * contracts * contract_size * 0.0005`
 
-**补仓逻辑**（只在候选列表中补）：
+**补仓逻辑**（v1.4 增加停补阈值检查）：
 
 ```python
 async def replenish_missing(self, positions, symbols, sides):
-    # symbols 现在是 candidate_symbols（动态筛选后的列表）
+    cfg = self._get_config()
+    stop_threshold = cfg.get("replenish_stop_threshold", 0)
+
+    # v1.4: 获取所有持仓以检查对方方向的 entry_price
+    all_positions = await self.client.get_positions()
+    position_map = {}
+    for p in all_positions:
+        sym = self.client.user_symbol(p["symbol"])
+        side = p.get("side")
+        position_map[f"{sym}:{side}"] = p
+
     current = set()
     for p in positions:
         sym = self.client.user_symbol(p["symbol"])
@@ -507,11 +526,32 @@ async def replenish_missing(self, positions, symbols, sides):
         for side in sides:
             key = f"{sym}:{side}"
             if key not in current and not self.db.has_open(sym, side):
+                # v1.4: 停补检查 — 若对方持仓开仓价与市价偏离≥阈值，则跳过
+                if stop_threshold > 0:
+                    opposite_side = "short" if side == "long" else "long"
+                    opposite_pos = position_map.get(f"{sym}:{opposite_side}")
+                    if opposite_pos:
+                        entry_price = float(opposite_pos.get("entryPrice", 0) or 0)
+                        if entry_price > 0:
+                            resolved = self.client.resolve_symbol(sym)
+                            price = self.client._prices.get(resolved)
+                            if not price or price <= 0:
+                                market = self.client.get_market_info(sym)
+                                price_str = market.get("info", {}).get("lastPrice")
+                                if price_str:
+                                    price = float(price_str)
+                            if price and price > 0:
+                                deviation = abs(entry_price - price) / entry_price
+                                if deviation >= stop_threshold:
+                                    log.info(f"REPLENISH STOP {sym} {side}: ...")
+                                    continue
                 open_side = "buy" if side == "long" else "sell"
                 tasks.append(self._do_open(sym, open_side, side))
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 ```
+
+> **v1.4 新增设计**：补仓前检查同一币种**相反方向**的持仓。若对方持仓的开仓价与当前市价偏离比例 ≥ `replenish_stop_threshold`，则**暂停补仓**。这避免了在对方持仓已大幅偏离时继续叠加风险。
 
 **单币种盈利平仓**（v1.2 含 open_fee 传递）：
 
@@ -602,11 +642,17 @@ async def check_single_pair_close(self, all_positions, skip):
         # if avg_rate >= threshold → 双向平仓
 ```
 
-**亏损加仓**（v1.2 改为扫描所有持仓）：
+**亏损加仓**（v1.4 多空阈值分离）：
 
 ```python
 async def check_margin_call(self, all_positions, skip):
     """扫描所有持仓（不限于候选列表），排除白名单。"""
+    cfg = self.config
+    # v1.4: 多单/空单使用独立阈值，向后兼容旧的 margin_call_threshold
+    threshold_long = cfg.get("margin_call_threshold_long", cfg.get("margin_call_threshold", 0.01))
+    threshold_short = cfg.get("margin_call_threshold_short", cfg.get("margin_call_threshold", 0.01))
+    multiplier = cfg.get("margin_call_multiplier", 2)
+
     system_positions = self.db.get_open_positions()
     margin_called = {(sp["symbol"], sp["side"]) for sp in system_positions if sp.get("margin_called", 0)}
 
@@ -617,9 +663,14 @@ async def check_margin_call(self, all_positions, skip):
         side = p.get("side")
         if (sym, side) in margin_called:
             continue
-        # 亏损率达标 → add_position + 累加 open_fee
+        # ... 计算 loss_rate ...
+        threshold = threshold_long if side == "long" else threshold_short
+        if loss_rate >= threshold:
+            # add_position + 累加 open_fee
 ```
 
+> **v1.4 改动**：`margin_call_threshold` 拆分为 `margin_call_threshold_long` 和 `margin_call_threshold_short`，多空单分别独立设置加仓触发条件。旧配置中的 `margin_call_threshold` 仍可作为默认值向后兼容。
+>
 > **加仓手续费**：加仓时累加 `added_fee = result["average"] * add_amount * cs * 0.0005` 到 `open_positions.open_fee`
 
 **交易记录**（v1.2 含手续费）：
@@ -883,6 +934,7 @@ async def api_refresh_symbols(self, request):
 // GET /api/account
 {
     "balance": 39.97,
+    "available_balance": 15.50,   // v1.4: 可转出余额（availableBalance）
     "unrealized_pnl": -5.43,
     "position_count": 50,
     "long_position_count": 25,    // v1.3
@@ -923,9 +975,9 @@ async def api_refresh_symbols(self, request):
 │  [账户概览]                   │
 │  当前筛选币种 (16个):        │   ← v1.3 移到卡片上方
 │  ENAUSDT DOGEUSDT ...        │
-│  ┌────┬────┬────┬────┬────┐│
-│  │余额│未实│实时│全平│对冲│单项│
-│  └────┴────┴────┴────┴────┘│
+│  ┌────┬────┬────┬────┬────┬────┐│
+│  │余额│可转│未实│实时│全平│对冲│单项│
+│  └────┴────┴────┴────┴────┴────┘│
 ├─────────────────────────────┤
 │  [持仓状态]      ← v1.3 新增 │
 │  ┌────┬────┬────┬────┬────┐│
@@ -1027,16 +1079,18 @@ T0+0:  check_margin_call() [扫描 ALL positions，不限于候选列表]
        ├─ 排除白名单
        ├─ margin_called=1 → 跳过
        ├─ pnl >= 0 → 跳过
-       ├─ loss_rate >= threshold → add_position() + 累加 open_fee + mark_margin_called
+       ├─ loss_rate >= side-specific threshold → add_position() + 累加 open_fee + mark_margin_called
        └─ 继续下一个
 
 T0+0:  get_positions(candidate_symbols) → 重新获取
 
 T0+0:  replenish_missing()
+       ├─ 获取所有持仓 → position_map（用于停补检查）
        ├─ 构建交易所持仓集合
        ├─ 对每个 candidate_symbol × side（只在候选列表中补）：
        │   ├─ 交易所已有 → 跳过
        │   ├─ DB有跟踪 → 跳过
+       │   ├─ v1.4: 对方持仓偏离 >= replenish_stop_threshold → 跳过（停补）
        │   └─ 都没有 → _do_open() → open + record_open（含open_fee）
        └─ asyncio.gather 并发执行
 ```
@@ -1220,10 +1274,12 @@ if profit_rate >= profit_threshold:  # 默认 0.002 = 0.2%
 | **币种筛选** | 立即刷新币种 | 按钮 | POST /api/refresh-symbols，立即重新筛选 |
 | **基础交易** | 交易方向 | 下拉选择 | 双向 / 多 / 空 |
 | **基础交易** | 平仓利润率 | 数字输入 | 默认 0.2，单位 % |
+| **补仓设置** | 停补阈值 | 数字输入 | **v1.4** 默认 10%，单位 % |
 | **账户级全平** | 启用全平 | 开关 | 默认关闭，热加载即时生效 |
 | **账户级全平** | 全平利润率 | 数字输入 | 默认 0.2，单位 % |
 | **亏损加仓** | 启用加仓 | 开关 | 默认关闭 |
-| **亏损加仓** | 亏损加仓阈值 | 数字输入 | 默认 1.0，单位 % |
+| **亏损加仓** | 多单亏损加仓阈值 | 数字输入 | **v1.4** 默认 25%，单位 % |
+| **亏损加仓** | 空单亏损加仓阈值 | 数字输入 | **v1.4** 默认 25%，单位 % |
 | **亏损加仓** | 加仓倍数 | 数字输入 | 默认 2，倍于最小合约数 |
 | **多空对平** | 启用对平 | 开关 | 默认关闭 |
 | **多空对平** | 对平利润率 | 数字输入 | 默认 0.2，单位 %（可独立于平仓利润率） |
@@ -1303,7 +1359,11 @@ async def safe_open(self, symbol, side, retries=1):
 cd /home/claudeuser/EvoClaw
 python3 main.py
 
-# systemd 服务（推荐）
+# 一键重启（推荐开发调试使用）
+# 自动完成：停止进程 → 清理端口 → 备份并清空日志 → 启动服务
+cd /home/claudeuser/EvoClaw && ./restart.sh
+
+# systemd 服务（推荐生产环境）
 sudo systemctl enable evoclaw
 sudo systemctl start evoclaw
 ```
@@ -1420,10 +1480,10 @@ WantedBy=multi-user.target
 | 模块 | 状态 | 备注 |
 |------|------|------|
 | `exchange_client.py` | ✅ 完成 | 符号解析、精度计算、下单（含-4164重试）、持仓查询、自动选币 |
-| `trader.py` | ✅ 完成 | 动态选币缓存、开仓追踪、单平、全平、补仓、交易记录、加仓 |
+| `trader.py` | ✅ 完成 | 动态选币缓存、开仓追踪、单平、全平、补仓（v1.4 停补阈值）、交易记录、加仓（v1.4 多空分离） |
 | `database.py` | ✅ 完成 | 双表设计（含fee/open_fee）、线程安全、WAL模式、自动迁移、多空统计 |
 | `web_server.py` | ✅ 完成 | 7个API端点、静态文件服务、trader缓存读取、持仓多空分布 |
-| `web/index.html` | ✅ 完成 | 深色主题、移动端适配、配置分组、持仓状态、多空平仓统计 |
+| `web/index.html` | ✅ 完成 | 深色主题、移动端适配、配置分组、持仓状态、多空平仓统计、**v1.4 补仓/加仓配置** |
 | `main.py` | ✅ 完成 | 启动流程、信号处理、日志系统、动态选币初始化 |
-| `config.json` | ✅ 完成 | 热加载支持（volume_threshold, price_threshold, symbol_refresh_interval） |
-| `DESIGN.md` | ✅ 完成 | 本文档（包含完整实现细节，v1.3 更新） |
+| `config.json` | ✅ 完成 | 热加载支持（含 v1.4 新增字段） |
+| `DESIGN.md` | ✅ 完成 | 本文档（包含完整实现细节，**v1.4** 更新） |

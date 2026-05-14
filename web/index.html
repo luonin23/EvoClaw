@@ -381,7 +381,22 @@ body{
     </div>
   </div>
 
-  <!-- 组3: 全平功能 -->
+  <!-- 组3: 补仓设置 -->
+  <div class="config-group">
+    <div class="config-group-title">补仓设置</div>
+    <div class="form-grid">
+      <div class="field">
+        <label>停补阈值 (%)</label>
+        <input type="number" id="cfgReplenishStop" step="0.1" min="0" value="10">
+      </div>
+      <div class="field">
+        <label>说明</label>
+        <span style="font-size:var(--text-xs);color:var(--text-secondary);display:block;padding-top:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 组4: 全平功能 -->
   <div class="config-group">
     <div class="config-group-title">账户级全平</div>
     <div class="form-grid">
@@ -399,7 +414,7 @@ body{
     </div>
   </div>
 
-  <!-- 组4: 亏损加仓 -->
+  <!-- 组5: 亏损加仓 -->
   <div class="config-group">
     <div class="config-group-title">亏损加仓</div>
     <div class="form-grid">
@@ -411,8 +426,12 @@ body{
         </div>
       </div>
       <div class="field">
-        <label>亏损加仓阈值 (%)</label>
-        <input type="number" id="cfgMarginCallThreshold" step="0.1" min="0" value="1.0">
+        <label>多单亏损加仓阈值 (%)</label>
+        <input type="number" id="cfgMarginCallThresholdLong" step="0.1" min="0" value="25">
+      </div>
+      <div class="field">
+        <label>空单亏损加仓阈值 (%)</label>
+        <input type="number" id="cfgMarginCallThresholdShort" step="0.1" min="0" value="25">
       </div>
       <div class="field">
         <label>加仓倍数</label>
@@ -421,7 +440,7 @@ body{
     </div>
   </div>
 
-  <!-- 组5: 多空对平 -->
+  <!-- 组6: 多空对平 -->
   <div class="config-group">
     <div class="config-group-title">多空对平</div>
     <div class="form-grid">
@@ -469,6 +488,10 @@ body{
     <div class="stat-card">
       <div class="stat-value" id="accBalance">-</div>
       <div class="stat-label">账户余额 (USDT)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="accAvailable">-</div>
+      <div class="stat-label">可转出余额 (USDT)</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" id="accUnrealized">-</div>
@@ -613,10 +636,12 @@ async function loadConfig() {
   document.getElementById('cfgPriceThreshold').value = d.price_threshold || 0;
   document.getElementById('cfgSymbolRefreshInterval').value = d.symbol_refresh_interval || 86400;
   document.getElementById('cfgProfit').value = (d.profit_threshold || 0) * 100;
+  document.getElementById('cfgReplenishStop').value = (d.replenish_stop_threshold || 0) * 100;
   document.getElementById('cfgEnableAllClose').checked = d.enable_all_close !== false;
   document.getElementById('cfgAllClose').value = (d.all_close_threshold || 0) * 100;
   document.getElementById('cfgEnableMarginCall').checked = d.enable_margin_call !== false;
-  document.getElementById('cfgMarginCallThreshold').value = (d.margin_call_threshold || 0) * 100;
+  document.getElementById('cfgMarginCallThresholdLong').value = (d.margin_call_threshold_long || d.margin_call_threshold || 0) * 100;
+  document.getElementById('cfgMarginCallThresholdShort').value = (d.margin_call_threshold_short || d.margin_call_threshold || 0) * 100;
   document.getElementById('cfgMarginCallMultiplier').value = d.margin_call_multiplier || 2;
   document.getElementById('cfgEnableSinglePairClose').checked = d.enable_single_pair_close !== false;
   document.getElementById('cfgPairClose').value = (d.pair_close_threshold || d.profit_threshold || 0) * 100;
@@ -636,10 +661,12 @@ async function saveConfig() {
       symbol_refresh_interval: parseInt(document.getElementById('cfgSymbolRefreshInterval').value) || 86400,
       side: document.getElementById('cfgSide').value,
       profit_threshold: parseFloat(document.getElementById('cfgProfit').value) / 100,
+      replenish_stop_threshold: parseFloat(document.getElementById('cfgReplenishStop').value) / 100,
       enable_all_close: document.getElementById('cfgEnableAllClose').checked,
       all_close_threshold: parseFloat(document.getElementById('cfgAllClose').value) / 100,
       enable_margin_call: document.getElementById('cfgEnableMarginCall').checked,
-      margin_call_threshold: parseFloat(document.getElementById('cfgMarginCallThreshold').value) / 100,
+      margin_call_threshold_long: parseFloat(document.getElementById('cfgMarginCallThresholdLong').value) / 100,
+      margin_call_threshold_short: parseFloat(document.getElementById('cfgMarginCallThresholdShort').value) / 100,
       margin_call_multiplier: parseFloat(document.getElementById('cfgMarginCallMultiplier').value),
       enable_single_pair_close: document.getElementById('cfgEnableSinglePairClose').checked,
       pair_close_threshold: parseFloat(document.getElementById('cfgPairClose').value) / 100,
@@ -693,6 +720,9 @@ async function loadAccount() {
   const d = await api('/api/account');
   if (!d) return;
   document.getElementById('accBalance').textContent = d.balance.toFixed(2);
+  const avEl = document.getElementById('accAvailable');
+  avEl.textContent = (d.available_balance || 0).toFixed(2);
+  avEl.className = 'stat-value ' + clr(d.available_balance || 0);
   const uEl = document.getElementById('accUnrealized');
   uEl.textContent = fmtP(d.unrealized_pnl);
   uEl.className = 'stat-value ' + clr(d.unrealized_pnl);

@@ -147,6 +147,7 @@ class WebServer:
 
             return web.json_response({
                 "balance": balance.get("balance", 0),
+                "available_balance": round(balance.get("available_balance", 0), 2),
                 "unrealized_pnl": round(unrealized, 4),
                 "position_count": len(all_positions),
                 "long_position_count": long_pos_count,

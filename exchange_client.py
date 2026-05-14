@@ -86,8 +86,13 @@ class ExchangeClient:
 
     async def get_balance(self) -> dict:
         balance = await self.exchange.fetch_balance()
-        usdt = balance.get("total", {}).get("USDT", 0)
-        return {"balance": float(usdt) if usdt else 0}
+        usdt_total = balance.get("total", {}).get("USDT", 0)
+        # For swap accounts, availableBalance is mapped to "free" by ccxt parse_balance_custom
+        usdt_free = balance.get("free", {}).get("USDT", 0)
+        return {
+            "balance": float(usdt_total) if usdt_total else 0,
+            "available_balance": float(usdt_free) if usdt_free else 0,
+        }
 
     async def get_positions(self, symbols: list = None) -> list[dict]:
         resolved = [self.resolve_symbol(s) for s in symbols] if symbols else None
