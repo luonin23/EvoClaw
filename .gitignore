@@ -1,0 +1,17 @@
+# Sensitive config with API keys
+config.json
+
+# Data files
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/

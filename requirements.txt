@@ -1,0 +1,2 @@
+ccxt>=4.5
+aiohttp>=3.9
