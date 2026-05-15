@@ -1,6 +1,6 @@
 # EvoClaw - 高速微盈利交易系统 设计文档
 
-> 最后更新: 2026-05-14 | 版本: v1.4 (补仓停补阈值 + 加仓多空分离)
+> 最后更新: 2026-05-15 | 版本: v1.4-fix (补仓停补阈值加固 — 全路径统一检查 + 价格未知默认停止)
 
 ## 一、系统设计目标
 
@@ -209,6 +209,43 @@ async def get_candidate_symbols(self, volume_threshold: float, price_threshold: 
 > - `price_threshold` 是 **<=**（小于等于），目的是筛选低价币，降低每仓保证金占用
 > - `volume_threshold` 是 **>=**（大于等于），目的是筛选高流动性币，确保能顺利开仓平仓
 > - 调用一次 `fetch_tickers()` 即可获取所有币种的成交量和价格，比逐个 `fetch_ticker` 高效
+
+**补仓停补检查**（v1.4-fix 新增统一方法）：
+
+```python
+def should_stop_replenish(self, sym: str, side: str, stop_threshold: float, position_map: dict) -> bool:
+    """判断是否应该停止补仓。安全默认：价格无法获取时返回 True（停止）。"""
+    if stop_threshold <= 0:
+        return False
+    opposite_side = "short" if side == "long" else "long"
+    opposite_pos = position_map.get(f"{sym}:{opposite_side}")
+    if not opposite_pos:
+        return False
+    entry_price = float(opposite_pos.get("entryPrice", 0) or 0)
+    if entry_price <= 0:
+        return False
+    resolved = self.resolve_symbol(sym)
+    price = self._prices.get(resolved)
+    if not price or price <= 0:
+        market = self.get_market_info(sym)
+        price_str = market.get("info", {}).get("lastPrice")
+        if price_str:
+            price = float(price_str)
+    if not price or price <= 0:
+        # 安全默认：价格无法获取 → 停止补仓
+        log.warning(f"REPLENISH STOP {sym} {side}: price unavailable, defaulting to STOP")
+        return True
+    deviation = abs(entry_price - price) / entry_price
+    if deviation >= stop_threshold:
+        log.info(f"REPLENISH STOP {sym} {side}: deviation={deviation:.4%}")
+        return True
+    return False
+```
+
+> **v1.4-fix 设计决策**：
+> - 统一封装到 `ExchangeClient`，所有开仓路径共用同一套判断逻辑
+> - **价格无法获取时默认 STOP**（旧逻辑会跳过检查直接开仓，构成安全漏洞）
+> - `replenish_missing`、`replenish_all`、`main.py 启动开仓` 三处全部调用此方法
 
 **价格刷新**（v1.2 优化）：
 
@@ -500,14 +537,14 @@ async def _do_open(self, symbol: str, open_side: str, side: str):
 
 > **手续费计算**：买入 0.05%，即 `entry_price * contracts * contract_size * 0.0005`
 
-**补仓逻辑**（v1.4 增加停补阈值检查）：
+**补仓逻辑**（v1.4-fix 统一停补检查）：
 
 ```python
 async def replenish_missing(self, positions, symbols, sides):
     cfg = self._get_config()
     stop_threshold = cfg.get("replenish_stop_threshold", 0)
 
-    # v1.4: 获取所有持仓以检查对方方向的 entry_price
+    # v1.4-fix: 获取所有持仓以检查对方方向的 entry_price
     all_positions = await self.client.get_positions()
     position_map = {}
     for p in all_positions:
@@ -526,32 +563,43 @@ async def replenish_missing(self, positions, symbols, sides):
         for side in sides:
             key = f"{sym}:{side}"
             if key not in current and not self.db.has_open(sym, side):
-                # v1.4: 停补检查 — 若对方持仓开仓价与市价偏离≥阈值，则跳过
-                if stop_threshold > 0:
-                    opposite_side = "short" if side == "long" else "long"
-                    opposite_pos = position_map.get(f"{sym}:{opposite_side}")
-                    if opposite_pos:
-                        entry_price = float(opposite_pos.get("entryPrice", 0) or 0)
-                        if entry_price > 0:
-                            resolved = self.client.resolve_symbol(sym)
-                            price = self.client._prices.get(resolved)
-                            if not price or price <= 0:
-                                market = self.client.get_market_info(sym)
-                                price_str = market.get("info", {}).get("lastPrice")
-                                if price_str:
-                                    price = float(price_str)
-                            if price and price > 0:
-                                deviation = abs(entry_price - price) / entry_price
-                                if deviation >= stop_threshold:
-                                    log.info(f"REPLENISH STOP {sym} {side}: ...")
-                                    continue
+                # v1.4-fix: 统一停补检查（价格未知默认 STOP）
+                if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                    continue
                 open_side = "buy" if side == "long" else "sell"
                 tasks.append(self._do_open(sym, open_side, side))
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 ```
 
-> **v1.4 新增设计**：补仓前检查同一币种**相反方向**的持仓。若对方持仓的开仓价与当前市价偏离比例 ≥ `replenish_stop_threshold`，则**暂停补仓**。这避免了在对方持仓已大幅偏离时继续叠加风险。
+```python
+async def replenish_all(self, symbols, sides):
+    # v1.4-fix: 全平后补仓也需要执行停补检查
+    all_positions = await self.client.get_positions()
+    position_map = {}
+    for p in all_positions:
+        sym = self.client.user_symbol(p["symbol"])
+        side = p.get("side")
+        position_map[f"{sym}:{side}"] = p
+
+    cfg = self._get_config()
+    stop_threshold = cfg.get("replenish_stop_threshold", 0)
+
+    tasks = []
+    for sym in symbols:
+        for side in sides:
+            if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                continue
+            open_side = "buy" if side == "long" else "sell"
+            tasks.append(self._do_open(sym, open_side, side))
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+```
+
+> **v1.4-fix 加固**：
+> - 提取 `should_stop_replenish()` 到 `ExchangeClient`，所有开仓路径共用同一逻辑
+> - **价格获取失败时默认 STOP**（修复旧逻辑中 price 为 None 导致检查被跳过的漏洞）
+> - `replenish_all`（全平后补仓）和 `main.py` 启动开仓 也纳入停补检查，覆盖全部开仓路径
 
 **单币种盈利平仓**（v1.2 含 open_fee 传递）：
 
@@ -1033,10 +1081,12 @@ main.py
 10. 启动时开仓（不干涉现有持仓，只补缺）：
    a. 获取交易所当前持仓 → 构建 current 集合
    b. 获取 DB 中跟踪的持仓 → 合并到 current 集合
-   c. 对每个 candidate_symbol × side，如果不在 current 中：
-      - client.safe_open(symbol, open_side)
-      - db.record_open(symbol, side, order_id, entry_price, amount, open_fee)  ← v1.2
-   d. 如果所有持仓已存在 → 跳过，不重复开仓
+   c. 构建 position_map（用于停补检查）
+   d. 对每个 candidate_symbol × side，如果不在 current 中：
+      - v1.4-fix: 调用 client.should_stop_replenish() 检查停补阈值
+      - 若通过检查 → client.safe_open(symbol, open_side)
+      - db.record_open(symbol, side, order_id, entry_price, amount, open_fee)
+   e. 如果所有持仓已存在 → 跳过，不重复开仓
 
 11. 启动 WebServer（0.0.0.0:8080）
 12. 注册信号处理（SIGINT/SIGTERM → trader.stop()）
@@ -1089,8 +1139,8 @@ T0+0:  replenish_missing()
        ├─ 对每个 candidate_symbol × side（只在候选列表中补）：
        │   ├─ 交易所已有 → 跳过
        │   ├─ DB有跟踪 → 跳过
-       │   ├─ v1.4: 对方持仓偏离 >= replenish_stop_threshold → 跳过（停补）
-       │   └─ 都没有 → _do_open() → open + record_open（含open_fee）
+       │   ├─ v1.4-fix: should_stop_replenish() → 价格未知默认 STOP
+       │   └─ 通过检查 → _do_open() → open + record_open（含open_fee）
        └─ asyncio.gather 并发执行
 ```
 
@@ -1138,7 +1188,7 @@ tick() → enable_all_close == true ?
            │     db.remove_open(sp.symbol, sp.side)
            │     db.insert_trade(..., fee=open_fee+close_fee)
            │     ↓
-           │   replenish_all() ← 全平后立即补仓（只在候选列表中补）
+           │   replenish_all() ← 全平后立即补仓（含停补检查）
            └─ NO → 继续单币种检查
 ```
 
@@ -1462,6 +1512,12 @@ WantedBy=multi-user.target
 | 现象 | 根因 | 解决方案 |
 |------|------|----------|
 | `Cannot read properties of undefined (reading 'toFixed')` | `api()` 函数不检查 `response.ok`，500 错误返回的 JSON 被直接解析 | `api()` 增加 `if (!r.ok) return null;`，前端各 load 函数会安全退出 |
+
+### 10.12 补仓停补阈值被绕过（v1.4-fix）
+
+| 现象 | 根因 | 解决方案 |
+|------|------|----------|
+| 调整成交量阈值并刷新币种后，停补阈值失效，继续开仓 | 原 `replenish_missing` 内联检查：若 `_prices` 和 `market.info.lastPrice` 均无法获取，则 `price` 为 falsy，`if price and price > 0:` 直接跳过停补检查，代码fallthrough到开仓 | 提取 `should_stop_replenish()` 统一方法，**价格无法获取时默认返回 True（STOP）**，并应用到 `replenish_missing`、`replenish_all`、`main.py 启动` 全部三条开仓路径 |
 
 ## 十一、风险与注意事项
 
