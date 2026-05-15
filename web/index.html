@@ -279,6 +279,7 @@ body{
 /* Helpers */
 .text-green{color:var(--color-success)}
 .text-red{color:var(--color-error)}
+.text-warning{color:var(--color-warning)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 
 /* Responsive */
@@ -311,6 +312,19 @@ body{
 
 <!-- Tab 1: Dashboard -->
 <div id="panel-dashboard" class="tab-panel active">
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(14,165,233,.1);color:var(--color-primary)">🖥</div>
+      <h2>系统监控</h2>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" id="sysCpu">-</div><div class="stat-label">CPU 使用率</div></div>
+      <div class="stat-card"><div class="stat-value" id="sysMem">-</div><div class="stat-label">内存使用</div></div>
+      <div class="stat-card"><div class="stat-value" id="sysDisk">-</div><div class="stat-label">硬盘使用</div></div>
+      <div class="stat-card"><div class="stat-value" id="sysNet">-</div><div class="stat-label">网络吞吐</div></div>
+    </div>
+  </section>
 
   <section class="card">
     <div class="card-head">
@@ -598,6 +612,19 @@ function clr(v) { return (v || 0) >= 0 ? 'text-green' : 'text-red'; }
 function fmtP(p) { return (p >= 0 ? '+' : '') + p.toFixed(4); }
 function fmtR(r) { return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
 
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + ' MB';
+  return (b / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+}
+
+function fmtSpeed(bps) {
+  if (bps < 1024) return bps.toFixed(0) + ' B/s';
+  if (bps < 1024 * 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+  return (bps / (1024 * 1024)).toFixed(1) + ' MB/s';
+}
+
 function showToast(msg) {
   const bar = document.getElementById('statusText');
   bar.textContent = msg;
@@ -689,6 +716,17 @@ async function loadStats() {
   srEl.className = 'stat-value ' + clr(d.short_pnl_rate);
 }
 
+async function loadSystem() {
+  const d = await api('/api/system');
+  if (!d || d.status === 'error') return;
+  const cpuEl = document.getElementById('sysCpu');
+  cpuEl.textContent = d.cpu_percent.toFixed(1) + '%';
+  cpuEl.className = 'stat-value ' + (d.cpu_percent > 80 ? 'text-red' : d.cpu_percent > 50 ? 'text-warning' : 'text-green');
+  document.getElementById('sysMem').textContent = fmtBytes(d.mem_used) + ' / ' + d.mem_percent.toFixed(0) + '%';
+  document.getElementById('sysDisk').textContent = fmtBytes(d.disk_used) + ' / ' + d.disk_percent.toFixed(0) + '%';
+  document.getElementById('sysNet').textContent = '↓' + fmtSpeed(d.net_rx_speed) + ' ↑' + fmtSpeed(d.net_tx_speed);
+}
+
 async function refresh() {
   await Promise.all([loadAccount(), loadStats()]);
   document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
@@ -696,7 +734,9 @@ async function refresh() {
 
 loadConfig();
 refresh();
+loadSystem();
 setInterval(refresh, 3000);
+setInterval(loadSystem, 5000);
 </script>
 </body>
 </html>

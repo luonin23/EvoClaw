@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import shutil
+import time
 from aiohttp import web
 
 log = logging.getLogger(__name__)
@@ -20,7 +22,12 @@ class WebServer:
         self.app.router.add_get("/api/positions", self.api_positions)
         self.app.router.add_get("/api/stats", self.api_stats)
         self.app.router.add_get("/api/trades", self.api_trades)
+        self.app.router.add_get("/api/system", self.api_system)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
+        # System metrics cache for rate calculations
+        self._last_cpu = None
+        self._last_net = None
+        self._last_system_time = None
 
     def _load_config(self):
         try:
@@ -197,6 +204,71 @@ class WebServer:
             balance = balance_data.get("balance", 0)
             stats = self.db.get_stats(balance)
             return web.json_response(stats)
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_system(self, request):
+        try:
+            now = time.time()
+
+            # CPU usage from /proc/stat
+            cpu_percent = 0.0
+            with open("/proc/stat") as f:
+                line = f.readline()
+            fields = list(map(int, line.split()[1:]))
+            idle = fields[3]
+            total = sum(fields)
+            if self._last_cpu and self._last_system_time:
+                dt_total = total - self._last_cpu[0]
+                dt_idle = idle - self._last_cpu[1]
+                if dt_total > 0:
+                    cpu_percent = (dt_total - dt_idle) / dt_total * 100
+            self._last_cpu = (total, idle)
+
+            # Memory from /proc/meminfo
+            mem_total = mem_free = 0
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        mem_total = int(line.split()[1]) * 1024
+                    elif line.startswith("MemAvailable:"):
+                        mem_free = int(line.split()[1]) * 1024
+            mem_used = mem_total - mem_free if mem_total else 0
+
+            # Disk usage
+            du = shutil.disk_usage("/")
+
+            # Network from /proc/net/dev
+            rx_bytes = tx_bytes = 0
+            with open("/proc/net/dev") as f:
+                for line in f.readlines()[2:]:
+                    parts = line.split()
+                    if parts[0].endswith(":"):
+                        iface = parts[0][:-1]
+                        if iface != "lo":
+                            rx_bytes += int(parts[1])
+                            tx_bytes += int(parts[9])
+
+            rx_speed = tx_speed = 0
+            if self._last_net and self._last_system_time:
+                dt = now - self._last_system_time
+                if dt > 0:
+                    rx_speed = (rx_bytes - self._last_net[0]) / dt
+                    tx_speed = (tx_bytes - self._last_net[1]) / dt
+            self._last_net = (rx_bytes, tx_bytes)
+            self._last_system_time = now
+
+            return web.json_response({
+                "cpu_percent": round(cpu_percent, 1),
+                "mem_total": mem_total,
+                "mem_used": mem_used,
+                "mem_percent": round(mem_used / mem_total * 100, 1) if mem_total else 0,
+                "disk_total": du.total,
+                "disk_used": du.used,
+                "disk_percent": round(du.used / du.total * 100, 1) if du.total else 0,
+                "net_rx_speed": round(rx_speed, 0),
+                "net_tx_speed": round(tx_speed, 0),
+            })
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
