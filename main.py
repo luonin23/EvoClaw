@@ -97,12 +97,23 @@ async def main():
         for sp in db.get_open_positions():
             tracked.add(f"{sp['symbol']}:{sp['side']}")
 
+        # Build position map for replenish stop-check
+        position_map = {}
+        for p in positions:
+            sym = client.user_symbol(p["symbol"])
+            side = p.get("side")
+            position_map[f"{sym}:{side}"] = p
+
+        stop_threshold = cfg.get("replenish_stop_threshold", 0)
+
         # Open only missing positions and record them
         open_tasks = []
         for sym in symbols:
             for side in sides:
                 key = f"{sym}:{side}"
                 if key not in tracked:
+                    if client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                        continue
                     open_side = "buy" if side == "long" else "sell"
                     open_tasks.append((sym, open_side, side))
 

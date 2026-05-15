@@ -393,42 +393,35 @@ class Trader:
                 key = f"{sym}:{side}"
                 # Only open if NOT already on exchange AND NOT already tracked by system
                 if key not in current and not self.db.has_open(sym, side):
-                    # Check replenish stop threshold against opposite position
-                    if stop_threshold > 0:
-                        opposite_side = "short" if side == "long" else "long"
-                        opposite_pos = position_map.get(f"{sym}:{opposite_side}")
-                        if opposite_pos:
-                            entry_price = float(opposite_pos.get("entryPrice", 0) or 0)
-                            if entry_price > 0:
-                                resolved = self.client.resolve_symbol(sym)
-                                price = self.client._prices.get(resolved)
-                                if not price or price <= 0:
-                                    market = self.client.get_market_info(sym)
-                                    price_str = market.get("info", {}).get("lastPrice")
-                                    if price_str:
-                                        price = float(price_str)
-                                if price and price > 0:
-                                    deviation = abs(entry_price - price) / entry_price
-                                    if deviation >= stop_threshold:
-                                        log.info(
-                                            f"REPLENISH STOP {sym} {side}: opposite {opposite_side} "
-                                            f"entry={entry_price:.6f} price={price:.6f} deviation={deviation:.4%}"
-                                        )
-                                        continue
+                    if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                        continue
                     open_side = "buy" if side == "long" else "sell"
                     tasks.append(self._do_open(sym, open_side, side))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def replenish_all(self, symbols, sides):
+        # Fetch all positions for stop-check
+        all_positions = await self.client.get_positions()
+        position_map = {}
+        for p in all_positions:
+            sym = self.client.user_symbol(p["symbol"])
+            side = p.get("side")
+            position_map[f"{sym}:{side}"] = p
+
+        cfg = self._get_config()
+        stop_threshold = cfg.get("replenish_stop_threshold", 0)
+
         tasks = []
         for sym in symbols:
             for side in sides:
+                if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                    continue
                 open_side = "buy" if side == "long" else "sell"
                 tasks.append(self._do_open(sym, open_side, side))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-            log.info(f"Replenished {len(symbols)} symbols x {len(sides)} sides")
+            log.info(f"Replenished {len(tasks)} positions")
 
     async def _do_open(self, symbol: str, open_side: str, side: str):
         """Open position and track it in database."""

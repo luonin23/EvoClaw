@@ -84,6 +84,39 @@ class ExchangeClient:
         resolved = self.resolve_symbol(symbol)
         return self.market_info.get(resolved, {})
 
+    def should_stop_replenish(self, sym: str, side: str, stop_threshold: float, position_map: dict) -> bool:
+        """Return True if opening `side` for `sym` should be stopped because the opposite
+        position's entry price deviates from current market price by >= stop_threshold.
+        Safe default: returns True (stop) if price cannot be determined.
+        """
+        if stop_threshold <= 0:
+            return False
+        opposite_side = "short" if side == "long" else "long"
+        opposite_pos = position_map.get(f"{sym}:{opposite_side}")
+        if not opposite_pos:
+            return False
+        entry_price = float(opposite_pos.get("entryPrice", 0) or 0)
+        if entry_price <= 0:
+            return False
+        resolved = self.resolve_symbol(sym)
+        price = self._prices.get(resolved)
+        if not price or price <= 0:
+            market = self.get_market_info(sym)
+            price_str = market.get("info", {}).get("lastPrice")
+            if price_str:
+                price = float(price_str)
+        if not price or price <= 0:
+            log.warning(f"REPLENISH STOP {sym} {side}: price unavailable, defaulting to STOP")
+            return True
+        deviation = abs(entry_price - price) / entry_price
+        if deviation >= stop_threshold:
+            log.info(
+                f"REPLENISH STOP {sym} {side}: opposite {opposite_side} "
+                f"entry={entry_price:.6f} price={price:.6f} deviation={deviation:.4%}"
+            )
+            return True
+        return False
+
     async def get_balance(self) -> dict:
         balance = await self.exchange.fetch_balance()
         usdt_total = balance.get("total", {}).get("USDT", 0)
