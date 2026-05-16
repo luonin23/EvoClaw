@@ -201,85 +201,39 @@ class WebServer:
 
     async def api_positions_map(self, request):
         try:
-            # Fetch all exchange positions and system-tracked positions
             all_positions = await self.client.get_positions()
-            system_positions = self.db.get_open_positions()
-            system_map = {}
-            for sp in system_positions:
-                key = f"{sp['symbol']}:{sp['side']}"
-                system_map[key] = sp
 
-            # Build slot array (100 slots)
-            slots = []
-            used_slots = set()
-
-            # First pass: system-managed positions with assigned slots
+            # Compute pnl_rate for each position
+            position_items = []
             for p in all_positions:
                 sym = self.client.user_symbol(p["symbol"])
                 side = p.get("side")
-                key = f"{sym}:{side}"
-                sp = system_map.get(key)
-                if sp and sp.get("slot_index", -1) >= 0:
-                    slot_idx = sp["slot_index"]
-                    used_slots.add(slot_idx)
-                    entry = float(p.get("entryPrice", 0) or 0)
-                    contracts = float(p.get("contracts", 0) or 0)
-                    pnl = float(p.get("unrealizedPnl", 0) or 0)
-                    market = self.client.get_market_info(p["symbol"])
-                    cs = market.get("contractSize", 1) or 1
-                    val = entry * contracts * cs
-                    rate = pnl / val if val > 0 else 0
-                    slots.append({
-                        "index": slot_idx,
-                        "symbol": sym,
-                        "side": side,
-                        "contracts": contracts,
-                        "entry_price": entry,
-                        "pnl": round(pnl, 4),
-                        "pnl_rate": round(rate, 6),
-                        "managed": True,
-                    })
+                entry = float(p.get("entryPrice", 0) or 0)
+                contracts = float(p.get("contracts", 0) or 0)
+                pnl = float(p.get("unrealizedPnl", 0) or 0)
+                market = self.client.get_market_info(p["symbol"])
+                cs = market.get("contractSize", 1) or 1
+                val = entry * contracts * cs
+                rate = pnl / val if val > 0 else 0
+                position_items.append({
+                    "symbol": sym,
+                    "side": side,
+                    "contracts": contracts,
+                    "entry_price": entry,
+                    "pnl": round(pnl, 4),
+                    "pnl_rate": round(rate, 6),
+                })
 
-            # Second pass: manual positions (not in system tracking) fill remaining slots
-            manual = []
-            for p in all_positions:
-                sym = self.client.user_symbol(p["symbol"])
-                side = p.get("side")
-                key = f"{sym}:{side}"
-                if key not in system_map:
-                    entry = float(p.get("entryPrice", 0) or 0)
-                    contracts = float(p.get("contracts", 0) or 0)
-                    pnl = float(p.get("unrealizedPnl", 0) or 0)
-                    market = self.client.get_market_info(p["symbol"])
-                    cs = market.get("contractSize", 1) or 1
-                    val = entry * contracts * cs
-                    rate = pnl / val if val > 0 else 0
-                    manual.append({
-                        "symbol": sym,
-                        "side": side,
-                        "contracts": contracts,
-                        "entry_price": entry,
-                        "pnl": round(pnl, 4),
-                        "pnl_rate": round(rate, 6),
-                    })
+            # Sort by pnl_rate ascending (worst loss first, profit last)
+            position_items.sort(key=lambda x: x["pnl_rate"])
 
-            # Sort manual positions and assign to free slots
-            manual.sort(key=lambda x: (x["symbol"], x["side"]))
-            free_slots = [i for i in range(100) if i not in used_slots]
-            for i, m in enumerate(manual):
-                if i >= len(free_slots):
-                    break
-                slot_idx = free_slots[i]
-                slots.append({"index": slot_idx, **m, "managed": False})
-
-            # Build full 100-slot response (fill empty slots)
-            slot_dict = {s["index"]: s for s in slots}
+            # Build 100 slots: first N filled with positions sorted by loss
             result = []
             for i in range(100):
-                if i in slot_dict:
-                    result.append(slot_dict[i])
+                if i < len(position_items):
+                    result.append({"index": i, **position_items[i], "occupied": True})
                 else:
-                    result.append({"index": i, "symbol": None, "side": None, "contracts": 0, "entry_price": 0, "pnl": 0, "pnl_rate": 0, "managed": False})
+                    result.append({"index": i, "symbol": None, "side": None, "contracts": 0, "entry_price": 0, "pnl": 0, "pnl_rate": 0, "occupied": False})
 
             return web.json_response({"slots": result, "total_positions": len(all_positions)})
         except Exception as e:

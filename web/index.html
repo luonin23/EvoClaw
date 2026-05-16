@@ -286,47 +286,58 @@ body{
 .pos-matrix{
   display:grid;
   grid-template-columns:repeat(10,1fr);
-  gap:3px;
-  max-width:340px;
+  gap:2px;
+  max-width:300px;
   margin:0 auto;
+  position:relative;
 }
 .pos-cell{
   aspect-ratio:1;
-  border-radius:4px;
+  border-radius:3px;
   display:flex;
   align-items:center;
   justify-content:center;
-  font-size:9px;
+  font-size:8px;
   font-weight:700;
   font-family:var(--font-mono);
   color:#fff;
   cursor:pointer;
-  transition:transform .1s;
+  transition:all .15s;
   position:relative;
-  border:1px solid var(--surface-border);
-  overflow:hidden;
+  border:1px solid transparent;
 }
-.pos-cell:hover{transform:scale(1.15);z-index:2}
-.pos-cell.long{background:var(--color-success)}
-.pos-cell.short{background:var(--color-error)}
-.pos-cell.vacant{background:var(--surface-input);border-color:var(--surface-border);color:var(--text-tertiary)}
-.pos-cell .sym{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;padding:0 2px}
-.pos-tooltip{
+.pos-cell:hover{transform:scale(1.2);z-index:2;border-color:#fff}
+/* Profit/Loss coloring: green=profit, red=loss */
+.pos-cell.profit{background:var(--color-success)}
+.pos-cell.loss{background:var(--color-error)}
+.pos-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border)}
+.pos-cell.occupied{animation:cellPulse 2s ease-in-out infinite}
+@keyframes cellPulse{0%,100%{opacity:1}50%{opacity:.7}}
+/* Cross connector lines between cells */
+.pos-cell::after,
+.pos-cell::before{
+  content:'';
   position:absolute;
-  background:rgba(0,0,0,.9);
-  border:1px solid var(--surface-border);
-  border-radius:6px;
-  padding:6px 10px;
-  font-size:11px;
-  color:var(--text-primary);
-  z-index:100;
-  pointer-events:none;
-  white-space:nowrap;
-  display:none;
-  line-height:1.6;
+  background:var(--surface-border);
+  z-index:-1;
 }
-.pos-tooltip .tt-sym{font-weight:700;color:var(--color-primary)}
-.pos-tooltip .tt-side{color:var(--text-secondary)}
+/* Horizontal line (right side) */
+.pos-cell::after{
+  width:4px;
+  height:1px;
+  right:-3px;
+  top:50%;
+}
+/* Vertical line (bottom side) */
+.pos-cell::before{
+  width:1px;
+  height:4px;
+  bottom:-3px;
+  left:50%;
+}
+/* Remove lines at right edge and bottom edge */
+.pos-cell:nth-child(10n)::after{display:none}
+.pos-cell:nth-child(n+91)::before{display:none}
 
 /* Responsive */
 @media(max-width:640px){
@@ -488,6 +499,10 @@ body{
         <label>停补阈值 (%)</label>
         <input type="number" id="cfgReplenishStop" step="0.1" min="0" value="10">
       </div>
+      <div class="field">
+        <label>最高持仓数</label>
+        <input type="number" id="cfgMaxPositionCount" step="1" min="0" value="100">
+      </div>
       <div class="field" style="justify-content:flex-end">
         <span style="font-size:11px;color:var(--text-secondary);padding-bottom:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span>
       </div>
@@ -598,6 +613,7 @@ async function loadConfig() {
   document.getElementById('cfgSymbolRefreshInterval').value = d.symbol_refresh_interval || 86400;
   document.getElementById('cfgProfit').value = (d.profit_threshold || 0) * 100;
   document.getElementById('cfgReplenishStop').value = (d.replenish_stop_threshold || 0) * 100;
+  document.getElementById('cfgMaxPositionCount').value = d.max_position_count || 100;
   document.getElementById('cfgEnableAllClose').checked = d.enable_all_close !== false;
   document.getElementById('cfgAllClose').value = (d.all_close_threshold || 0) * 100;
   document.getElementById('cfgEnableMarginCall').checked = d.enable_margin_call !== false;
@@ -622,6 +638,7 @@ async function saveConfig() {
       side: document.getElementById('cfgSide').value,
       profit_threshold: parseFloat(document.getElementById('cfgProfit').value) / 100,
       replenish_stop_threshold: parseFloat(document.getElementById('cfgReplenishStop').value) / 100,
+      max_position_count: parseInt(document.getElementById('cfgMaxPositionCount').value) || 100,
       enable_all_close: document.getElementById('cfgEnableAllClose').checked,
       all_close_threshold: parseFloat(document.getElementById('cfgAllClose').value) / 100,
       enable_margin_call: document.getElementById('cfgEnableMarginCall').checked,
@@ -776,45 +793,26 @@ async function loadPositionsMap() {
   const d = await api('/api/positions-map');
   if (!d || !d.slots) return;
   const container = document.getElementById('posMatrix');
-  const tooltip = document.getElementById('posMatrixTooltip');
   if (!container) return;
   // Build grid if empty
   if (!container.children.length) {
     for (let i = 0; i < 100; i++) {
       const cell = document.createElement('div');
       cell.className = 'pos-cell vacant';
-      cell.dataset.index = i;
-      cell.innerHTML = '<span class="sym">-</span>';
-      cell.addEventListener('mouseenter', (e) => {
-        const idx = parseInt(cell.dataset.index);
-        const slot = window._posMapSlots ? window._posMapSlots[idx] : null;
-        if (slot && slot.symbol) {
-          tooltip.innerHTML = `<span class="tt-sym">${slot.symbol}</span> <span class="tt-side">${slot.side === 'long' ? '多' : '空'}</span><br>合约: ${slot.contracts}<br>盈亏: ${fmtP(slot.pnl)}<br>盈亏率: ${fmtR(slot.pnl_rate)}`;
-          tooltip.style.display = 'block';
-          const rect = cell.getBoundingClientRect();
-          tooltip.style.left = (rect.left + window.scrollX + 30) + 'px';
-          tooltip.style.top = (rect.top + window.scrollY - 10) + 'px';
-        }
-      });
-      cell.addEventListener('mouseleave', () => {
-        tooltip.style.display = 'none';
-      });
       container.appendChild(cell);
     }
   }
-  // Update cells
-  window._posMapSlots = d.slots;
+  // Update cells: green=profit, red=loss, ordered by loss severity
   for (let i = 0; i < 100; i++) {
     const slot = d.slots[i];
     const cell = container.children[i];
-    if (slot.symbol) {
-      cell.className = 'pos-cell ' + (slot.side === 'long' ? 'long' : 'short');
-      let symText = slot.symbol.replace('USDT', '').replace('USDC', '');
-      if (symText.length > 4) symText = symText.slice(0, 4);
-      cell.querySelector('.sym').textContent = symText;
+    if (slot.occupied) {
+      const isProfit = (slot.pnl_rate || 0) >= 0;
+      cell.className = 'pos-cell occupied ' + (isProfit ? 'profit' : 'loss');
+      cell.title = slot.symbol + ' ' + (slot.side === 'long' ? '多' : '空') + '\n盈亏率: ' + fmtR(slot.pnl_rate);
     } else {
       cell.className = 'pos-cell vacant';
-      cell.querySelector('.sym').textContent = (i + 1).toString().padStart(2, '0');
+      cell.title = '';
     }
   }
 }
