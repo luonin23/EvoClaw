@@ -201,6 +201,11 @@ class WebServer:
 
     async def api_positions_map(self, request):
         try:
+            cfg = self._load_config()
+            max_slots = cfg.get("max_position_count", 100)
+            if max_slots <= 0:
+                max_slots = 100
+
             all_positions = await self.client.get_positions()
 
             # Compute pnl_rate for each position
@@ -227,15 +232,15 @@ class WebServer:
             # Sort by pnl_rate ascending (worst loss first, profit last)
             position_items.sort(key=lambda x: x["pnl_rate"])
 
-            # Build 100 slots: first N filled with positions sorted by loss
+            # Build slots: first N filled with positions sorted by loss
             result = []
-            for i in range(100):
+            for i in range(max_slots):
                 if i < len(position_items):
                     result.append({"index": i, **position_items[i], "occupied": True})
                 else:
                     result.append({"index": i, "symbol": None, "side": None, "contracts": 0, "entry_price": 0, "pnl": 0, "pnl_rate": 0, "occupied": False})
 
-            return web.json_response({"slots": result, "total_positions": len(all_positions)})
+            return web.json_response({"slots": result, "total_positions": len(all_positions), "max_slots": max_slots})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 

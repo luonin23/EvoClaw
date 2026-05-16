@@ -338,8 +338,8 @@ body{
   transform:translateX(-50%);
 }
 /* Remove lines at right edge and bottom edge */
-.pos-cell:nth-child(10n)::after{display:none}
-.pos-cell:nth-child(n+91)::before{display:none}
+.pos-cell.no-right::after{display:none}
+.pos-cell.no-bottom::before{display:none}
 
 /* Tooltip */
 .pos-tooltip{
@@ -813,11 +813,20 @@ async function loadPositionsMap() {
   const container = document.getElementById('posMatrix');
   const tooltip = document.getElementById('posMatrixTooltip');
   if (!container) return;
-  // Build grid if empty
-  if (!container.children.length) {
-    for (let i = 0; i < 100; i++) {
+  const maxSlots = d.max_slots || 100;
+  const cols = 10;
+
+  // Build or rebuild grid to match maxSlots
+  if (container.children.length !== maxSlots) {
+    container.innerHTML = '';
+    for (let i = 0; i < maxSlots; i++) {
       const cell = document.createElement('div');
-      cell.className = 'pos-cell vacant';
+      const isRightEdge = (i + 1) % cols === 0;
+      const isBottomEdge = i >= maxSlots - cols;
+      let cls = 'pos-cell vacant';
+      if (isRightEdge) cls += ' no-right';
+      if (isBottomEdge) cls += ' no-bottom';
+      cell.className = cls;
       cell.dataset.index = i;
       cell.addEventListener('mouseenter', (e) => {
         const idx = parseInt(cell.dataset.index);
@@ -827,7 +836,6 @@ async function loadPositionsMap() {
           tooltip.style.display = 'block';
           const rect = cell.getBoundingClientRect();
           const ttRect = tooltip.getBoundingClientRect();
-          // Smart positioning: avoid overflow
           let left = rect.right + 8;
           let top = rect.top - 4;
           if (left + ttRect.width > window.innerWidth - 10) {
@@ -849,14 +857,23 @@ async function loadPositionsMap() {
   }
   // Update cells: green=profit, red=loss, ordered by loss severity
   window._posMapSlots = d.slots;
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < maxSlots; i++) {
     const slot = d.slots[i];
     const cell = container.children[i];
+    if (!cell) continue;
+    const isRightEdge = (i + 1) % cols === 0;
+    const isBottomEdge = i >= maxSlots - cols;
     if (slot.occupied) {
       const isProfit = (slot.pnl_rate || 0) >= 0;
-      cell.className = 'pos-cell occupied ' + (isProfit ? 'profit' : 'loss');
+      let cls = 'pos-cell occupied ' + (isProfit ? 'profit' : 'loss');
+      if (isRightEdge) cls += ' no-right';
+      if (isBottomEdge) cls += ' no-bottom';
+      cell.className = cls;
     } else {
-      cell.className = 'pos-cell vacant';
+      let cls = 'pos-cell vacant';
+      if (isRightEdge) cls += ' no-right';
+      if (isBottomEdge) cls += ' no-bottom';
+      cell.className = cls;
     }
   }
 }
