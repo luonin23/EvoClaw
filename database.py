@@ -259,6 +259,16 @@ class Database:
             row = self.conn.execute("SELECT COUNT(*) FROM trades").fetchone()
         return row[0] if row else 0
 
+    def get_historical_worst_trade(self) -> dict | None:
+        """Return the worst (most negative) single trade from history."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT symbol, side, pnl, pnl_rate FROM trades WHERE pnl < 0 ORDER BY pnl ASC LIMIT 1"
+            ).fetchone()
+        if row:
+            return {"symbol": row[0], "side": row[1], "pnl": round(row[2], 4), "pnl_rate": round(row[3], 6)}
+        return None
+
     def increment_margin_call_count(self, increment: int = 1):
         with self.lock:
             self.conn.execute(

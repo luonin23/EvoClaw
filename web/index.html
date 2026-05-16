@@ -431,9 +431,22 @@ body{
       <div class="stat-card"><div class="stat-value" id="posCount">-</div><div class="stat-label">持仓数</div></div>
       <div class="stat-card"><div class="stat-value" id="posLongCount">-</div><div class="stat-label">多单</div></div>
       <div class="stat-card"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">最大亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">持仓最高亏损率</div></div>
-      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">单币最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(239,68,68,.1);color:var(--color-error)">⚠</div>
+      <h2>亏损统计</h2>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" id="lossHistTradePnl">-</div><div class="stat-label">历史单币最高亏损额</div></div>
+      <div class="stat-card"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="lossHistTotalPnl">-</div><div class="stat-label">历史持仓最高亏损额</div></div>
+      <div class="stat-card"><div class="stat-value" id="lossHistTotalRate">-</div><div class="stat-label">历史持仓最高亏损率</div></div>
     </div>
   </section>
 
@@ -758,6 +771,24 @@ async function loadAccount() {
   const mlr = d.max_position_loss_rate || 0;
   maxLossRateEl.textContent = fmtR(mlr);
   maxLossRateEl.className = 'stat-value ' + clr(mlr);
+
+  // 历史单币最高亏损额/率
+  const htpEl = document.getElementById('lossHistTradePnl');
+  htpEl.textContent = fmtP(d.hist_worst_trade_pnl || 0);
+  htpEl.className = 'stat-value ' + clr(d.hist_worst_trade_pnl || 0);
+  const htrEl = document.getElementById('lossHistTradeRate');
+  const htr = d.hist_worst_trade_rate || 0;
+  htrEl.textContent = fmtR(htr);
+  htrEl.className = 'stat-value ' + clr(htr);
+
+  // 历史持仓最高亏损额/率
+  const hlpEl = document.getElementById('lossHistTotalPnl');
+  hlpEl.textContent = fmtP(d.hist_total_loss_pnl || 0);
+  hlpEl.className = 'stat-value ' + clr(d.hist_total_loss_pnl || 0);
+  const hlrEl = document.getElementById('lossHistTotalRate');
+  const hlr = d.hist_total_loss_rate || 0;
+  hlrEl.textContent = fmtR(hlr);
+  hlrEl.className = 'stat-value ' + clr(hlr);
 
   document.getElementById('accMarginCall').textContent = d.margin_call_count || 0;
 }

@@ -121,6 +121,19 @@ class WebServer:
                 hist_max_loss_rate = current_max_loss_rate
                 self.db.set_runtime_stat("max_position_loss_rate", hist_max_loss_rate)
 
+            # Track historical total position loss peak
+            hist_total_loss_pnl = self.db.get_runtime_stat("hist_total_loss_pnl", 0)
+            hist_total_loss_rate = self.db.get_runtime_stat("hist_total_loss_rate", 0)
+            if total_pnl < hist_total_loss_pnl:
+                hist_total_loss_pnl = total_pnl
+                self.db.set_runtime_stat("hist_total_loss_pnl", hist_total_loss_pnl)
+            if total_pnl_rate < hist_total_loss_rate:
+                hist_total_loss_rate = total_pnl_rate
+                self.db.set_runtime_stat("hist_total_loss_rate", hist_total_loss_rate)
+
+            # Historical worst single trade (from closed trades)
+            hist_worst = self.db.get_historical_worst_trade()
+
             # Use trader cached symbols; fallback to config if trader not available
             if self.trader and self.trader._candidate_symbols:
                 symbols = self.trader._candidate_symbols
@@ -165,6 +178,10 @@ class WebServer:
                 "worst_position_pnl": round(worst_pnl, 4),
                 "worst_position_rate": round(worst_rate, 6),
                 "max_position_loss_rate": round(hist_max_loss_rate, 6),
+                "hist_worst_trade_pnl": round(hist_worst["pnl"], 4) if hist_worst else 0,
+                "hist_worst_trade_rate": round(hist_worst["pnl_rate"], 6) if hist_worst else 0,
+                "hist_total_loss_pnl": round(hist_total_loss_pnl, 4),
+                "hist_total_loss_rate": round(hist_total_loss_rate, 6),
                 "margin_call_count": margin_call_count,
                 "realtime_profit_rate": round(realtime_rate, 6),
                 "active_symbols": symbols,
