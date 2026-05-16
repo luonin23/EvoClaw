@@ -183,7 +183,6 @@ class WebServer:
                 "total_position_pnl_rate": round(total_pnl_rate, 6),
                 "worst_position_pnl": round(worst_pnl, 4),
                 "worst_position_rate": round(worst_rate, 6),
-                "max_position_loss_rate": round(hist_max_loss_rate, 6),
                 "hist_worst_trade_pnl": round(hist_worst_trade_pnl if hist_worst_trade_pnl is not None else 0, 4),
                 "hist_worst_trade_rate": round(hist_max_loss_rate, 6),
                 "hist_total_loss_pnl": round(hist_total_loss_pnl, 4),

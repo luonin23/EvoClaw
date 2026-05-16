@@ -352,6 +352,17 @@ body{
   padding:12px;
   max-width:none;
 }
+.matrix-toolbar{
+  display:flex;
+  justify-content:center;
+  gap:8px;
+  margin-bottom:12px;
+}
+.matrix-toolbar .btn{
+  height:32px;
+  padding:0 14px;
+  font-size:12px;
+}
 .full-matrix{
   display:grid;
   grid-template-columns:repeat(10,1fr);
@@ -372,15 +383,20 @@ body{
   cursor:pointer;
   transition:all .15s;
   position:relative;
-  border:1px solid transparent;
+  border:2px solid transparent;
   overflow:hidden;
   text-align:center;
   line-height:1.2;
+  background:transparent;
 }
 .full-cell:hover{transform:scale(1.05);z-index:2;border-color:#fff}
-.full-cell.profit{background:var(--color-success)}
-.full-cell.loss{background:var(--color-error)}
-.full-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border);color:var(--text-tertiary)}
+.full-cell.vacant{background:transparent;border:1px solid var(--surface-border);color:var(--text-tertiary)}
+/* Side mode: text color by side */
+.full-cell.side-long .fc-sym,.full-cell.side-long .fc-dir{color:var(--color-success)}
+.full-cell.side-short .fc-sym,.full-cell.side-short .fc-dir{color:var(--color-error)}
+/* PnL mode: border color by profit/loss */
+.full-cell.pnl-profit{border-color:var(--color-success)}
+.full-cell.pnl-loss{border-color:var(--color-error)}
 .full-cell .fc-sym{font-size:10px;font-weight:700;word-break:break-all;line-height:1.1;width:100%}
 .full-cell .fc-dir{font-size:9px;opacity:.9}
 .full-cell .fc-price{font-size:9px;opacity:.85}
@@ -500,7 +516,6 @@ body{
       <div class="stat-card"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
       <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
       <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
-      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史持仓最低率(过程中)</div></div>
     </div>
   </section>
 
@@ -528,6 +543,10 @@ body{
 
 <!-- Tab 2: Full Matrix -->
 <div id="panel-matrix" class="tab-panel active">
+  <div class="matrix-toolbar">
+    <button class="btn btn-secondary" id="mode-side" onclick="setMatrixMode('side')">多空显示</button>
+    <button class="btn btn-secondary active" id="mode-pnl" onclick="setMatrixMode('pnl')">盈亏显示</button>
+  </div>
   <div id="fullMatrix" class="full-matrix"></div>
 </div>
 
@@ -836,12 +855,6 @@ async function loadAccount() {
   worstRateEl.textContent = fmtR(wr);
   worstRateEl.className = 'stat-value ' + clr(wr);
 
-  // 历史持仓最低率(过程中) (10)
-  const maxLossRateEl = document.getElementById('posMaxLossRate');
-  const mlr = d.max_position_loss_rate || 0;
-  maxLossRateEl.textContent = fmtR(mlr);
-  maxLossRateEl.className = 'stat-value ' + clr(mlr);
-
   document.getElementById('accMarginCall').textContent = d.margin_call_count || 0;
 }
 
@@ -961,6 +974,16 @@ async function loadPositionsMap() {
   }
 }
 
+let matrixDisplayMode = 'pnl'; // 'side' | 'pnl'
+
+function setMatrixMode(mode) {
+  matrixDisplayMode = mode;
+  document.querySelectorAll('.matrix-toolbar .btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.getElementById('mode-' + mode);
+  if (activeBtn) activeBtn.classList.add('active');
+  loadFullMatrix();
+}
+
 async function loadFullMatrix() {
   const d = await api('/api/positions-map');
   if (!d || !d.slots) return;
@@ -985,11 +1008,18 @@ async function loadFullMatrix() {
     if (!cell) continue;
     if (slot.occupied) {
       const isProfit = (slot.pnl_rate || 0) >= 0;
-      cell.className = 'full-cell ' + (isProfit ? 'profit' : 'loss');
-      cell.title = slot.symbol + ' ' + (slot.side === 'long' ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
+      const isLong = slot.side === 'long';
+      let cls = 'full-cell';
+      if (matrixDisplayMode === 'side') {
+        cls += isLong ? ' side-long' : ' side-short';
+      } else {
+        cls += isProfit ? ' pnl-profit' : ' pnl-loss';
+      }
+      cell.className = cls;
+      cell.title = slot.symbol + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
       cell.innerHTML =
         '<div class="fc-sym">' + slot.symbol + '</div>' +
-        '<div class="fc-dir">' + (slot.side === 'long' ? '多' : '空') + '</div>' +
+        '<div class="fc-dir">' + (isLong ? '多' : '空') + '</div>' +
         '<div class="fc-price">' + (slot.entry_price || 0).toFixed(4) + '</div>' +
         '<div class="fc-amt">' + (slot.contracts || 0).toFixed(2) + '</div>' +
         '<div class="fc-pnl">' + fmtP(slot.pnl) + '</div>' +
