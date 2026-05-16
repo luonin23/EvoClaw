@@ -286,8 +286,8 @@ body{
 .pos-matrix{
   display:grid;
   grid-template-columns:repeat(10,1fr);
-  gap:2px;
-  max-width:300px;
+  gap:6px;
+  max-width:220px;
   margin:0 auto;
   position:relative;
 }
@@ -297,7 +297,7 @@ body{
   display:flex;
   align-items:center;
   justify-content:center;
-  font-size:8px;
+  font-size:6px;
   font-weight:700;
   font-family:var(--font-mono);
   color:#fff;
@@ -306,34 +306,36 @@ body{
   position:relative;
   border:1px solid transparent;
 }
-.pos-cell:hover{transform:scale(1.2);z-index:2;border-color:#fff}
+.pos-cell:hover{transform:scale(1.3);z-index:2;border-color:#fff}
 /* Profit/Loss coloring: green=profit, red=loss */
 .pos-cell.profit{background:var(--color-success)}
 .pos-cell.loss{background:var(--color-error)}
 .pos-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border)}
 .pos-cell.occupied{animation:cellPulse 1.5s ease-in-out infinite}
-@keyframes cellPulse{0%,100%{opacity:1;box-shadow:0 0 4px currentColor}50%{opacity:.5;box-shadow:none}}
+@keyframes cellPulse{0%,100%{opacity:1;box-shadow:0 0 3px currentColor}50%{opacity:.5;box-shadow:none}}
 /* Cross connector lines between cells */
 .pos-cell::after,
 .pos-cell::before{
   content:'';
   position:absolute;
-  background:#374151;
+  background:#6b7280;
   z-index:0;
 }
 /* Horizontal line (right side) */
 .pos-cell::after{
-  width:4px;
-  height:1.5px;
-  right:-3px;
+  width:8px;
+  height:2px;
+  right:-7px;
   top:50%;
+  transform:translateY(-50%);
 }
 /* Vertical line (bottom side) */
 .pos-cell::before{
-  width:1.5px;
-  height:4px;
-  bottom:-3px;
+  width:2px;
+  height:8px;
+  bottom:-7px;
   left:50%;
+  transform:translateX(-50%);
 }
 /* Remove lines at right edge and bottom edge */
 .pos-cell:nth-child(10n)::after{display:none}
