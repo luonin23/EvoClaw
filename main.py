@@ -105,17 +105,23 @@ async def main():
             position_map[f"{sym}:{side}"] = p
 
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
+        max_count = cfg.get("max_position_count", 0)
 
-        # Open only missing positions and record them
-        open_tasks = []
-        for sym in symbols:
-            for side in sides:
-                key = f"{sym}:{side}"
-                if key not in tracked:
-                    if client.should_stop_replenish(sym, side, stop_threshold, position_map):
-                        continue
-                    open_side = "buy" if side == "long" else "sell"
-                    open_tasks.append((sym, open_side, side))
+        # Check position count limit before any open
+        if max_count > 0 and len(positions) >= max_count:
+            log.info(f"STARTUP OPEN SKIP: total positions {len(positions)} >= limit {max_count}")
+            open_tasks = []
+        else:
+            # Open only missing positions and record them
+            open_tasks = []
+            for sym in symbols:
+                for side in sides:
+                    key = f"{sym}:{side}"
+                    if key not in tracked:
+                        if client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                            continue
+                        open_side = "buy" if side == "long" else "sell"
+                        open_tasks.append((sym, open_side, side))
 
         if open_tasks:
             log.info(f"Opening {len(open_tasks)} missing positions")

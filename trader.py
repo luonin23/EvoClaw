@@ -369,9 +369,27 @@ class Trader:
 
     # ========== Replenish ==========
 
+    async def _is_position_limit_reached(self) -> bool:
+        cfg = self._get_config()
+        max_count = cfg.get("max_position_count", 0)
+        if max_count <= 0:
+            return False
+        all_positions = await self.client.get_positions()
+        if len(all_positions) >= max_count:
+            return True
+        return False
+
     async def replenish_missing(self, positions, symbols, sides):
         cfg = self._get_config()
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
+        max_count = cfg.get("max_position_count", 0)
+
+        # Check position count limit before any open
+        if max_count > 0:
+            all_positions = await self.client.get_positions()
+            if len(all_positions) >= max_count:
+                log.info(f"REPLENISH SKIP: total positions {len(all_positions)} >= limit {max_count}")
+                return
 
         # Fetch ALL positions to inspect opposite-side entry prices
         all_positions = await self.client.get_positions()
@@ -401,6 +419,14 @@ class Trader:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def replenish_all(self, symbols, sides):
+        cfg = self._get_config()
+        max_count = cfg.get("max_position_count", 0)
+        if max_count > 0:
+            all_positions = await self.client.get_positions()
+            if len(all_positions) >= max_count:
+                log.info(f"REPLENISH ALL SKIP: total positions {len(all_positions)} >= limit {max_count}")
+                return
+
         # Fetch all positions for stop-check
         all_positions = await self.client.get_positions()
         position_map = {}
@@ -409,7 +435,6 @@ class Trader:
             side = p.get("side")
             position_map[f"{sym}:{side}"] = p
 
-        cfg = self._get_config()
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
 
         tasks = []

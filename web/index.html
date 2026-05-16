@@ -282,6 +282,52 @@ body{
 .text-warning{color:var(--color-warning)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 
+/* Position Matrix */
+.pos-matrix{
+  display:grid;
+  grid-template-columns:repeat(10,1fr);
+  gap:3px;
+  max-width:340px;
+  margin:0 auto;
+}
+.pos-cell{
+  aspect-ratio:1;
+  border-radius:4px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:9px;
+  font-weight:700;
+  font-family:var(--font-mono);
+  color:#fff;
+  cursor:pointer;
+  transition:transform .1s;
+  position:relative;
+  border:1px solid var(--surface-border);
+  overflow:hidden;
+}
+.pos-cell:hover{transform:scale(1.15);z-index:2}
+.pos-cell.long{background:var(--color-success)}
+.pos-cell.short{background:var(--color-error)}
+.pos-cell.vacant{background:var(--surface-input);border-color:var(--surface-border);color:var(--text-tertiary)}
+.pos-cell .sym{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;padding:0 2px}
+.pos-tooltip{
+  position:absolute;
+  background:rgba(0,0,0,.9);
+  border:1px solid var(--surface-border);
+  border-radius:6px;
+  padding:6px 10px;
+  font-size:11px;
+  color:var(--text-primary);
+  z-index:100;
+  pointer-events:none;
+  white-space:nowrap;
+  display:none;
+  line-height:1.6;
+}
+.pos-tooltip .tt-sym{font-weight:700;color:var(--color-primary)}
+.pos-tooltip .tt-side{color:var(--text-secondary)}
+
 /* Responsive */
 @media(max-width:640px){
   body{padding:8px}
@@ -359,6 +405,15 @@ body{
       <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">持仓最高亏损率</div></div>
       <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">单币最高亏损率</div></div>
     </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(99,102,241,.1);color:#6366f1">⊞</div>
+      <h2>持仓矩阵 (100)</h2>
+    </div>
+    <div id="posMatrix" class="pos-matrix"></div>
+    <div id="posMatrixTooltip" class="pos-tooltip"></div>
   </section>
 
   <section class="card">
@@ -717,8 +772,55 @@ async function loadSystem() {
   document.getElementById('sysNet').textContent = '↓' + fmtSpeed(d.net_rx_speed) + ' ↑' + fmtSpeed(d.net_tx_speed);
 }
 
+async function loadPositionsMap() {
+  const d = await api('/api/positions-map');
+  if (!d || !d.slots) return;
+  const container = document.getElementById('posMatrix');
+  const tooltip = document.getElementById('posMatrixTooltip');
+  if (!container) return;
+  // Build grid if empty
+  if (!container.children.length) {
+    for (let i = 0; i < 100; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'pos-cell vacant';
+      cell.dataset.index = i;
+      cell.innerHTML = '<span class="sym">-</span>';
+      cell.addEventListener('mouseenter', (e) => {
+        const idx = parseInt(cell.dataset.index);
+        const slot = window._posMapSlots ? window._posMapSlots[idx] : null;
+        if (slot && slot.symbol) {
+          tooltip.innerHTML = `<span class="tt-sym">${slot.symbol}</span> <span class="tt-side">${slot.side === 'long' ? '多' : '空'}</span><br>合约: ${slot.contracts}<br>盈亏: ${fmtP(slot.pnl)}<br>盈亏率: ${fmtR(slot.pnl_rate)}`;
+          tooltip.style.display = 'block';
+          const rect = cell.getBoundingClientRect();
+          tooltip.style.left = (rect.left + window.scrollX + 30) + 'px';
+          tooltip.style.top = (rect.top + window.scrollY - 10) + 'px';
+        }
+      });
+      cell.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
+      container.appendChild(cell);
+    }
+  }
+  // Update cells
+  window._posMapSlots = d.slots;
+  for (let i = 0; i < 100; i++) {
+    const slot = d.slots[i];
+    const cell = container.children[i];
+    if (slot.symbol) {
+      cell.className = 'pos-cell ' + (slot.side === 'long' ? 'long' : 'short');
+      let symText = slot.symbol.replace('USDT', '').replace('USDC', '');
+      if (symText.length > 4) symText = symText.slice(0, 4);
+      cell.querySelector('.sym').textContent = symText;
+    } else {
+      cell.className = 'pos-cell vacant';
+      cell.querySelector('.sym').textContent = (i + 1).toString().padStart(2, '0');
+    }
+  }
+}
+
 async function refresh() {
-  await Promise.all([loadAccount(), loadStats()]);
+  await Promise.all([loadAccount(), loadStats(), loadPositionsMap()]);
   document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
 }
 

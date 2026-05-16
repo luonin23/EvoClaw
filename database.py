@@ -51,6 +51,7 @@ class Database:
         for table, col, ctype in [
             ("open_positions", "margin_called", "INTEGER DEFAULT 0"),
             ("open_positions", "open_fee", "REAL DEFAULT 0"),
+            ("open_positions", "slot_index", "INTEGER DEFAULT -1"),
             ("trades", "fee", "REAL DEFAULT 0"),
         ]:
             try:
@@ -94,23 +95,73 @@ class Database:
 
     # ===== Open positions tracking =====
 
+    def get_slot(self, symbol: str, side: str) -> int | None:
+        """Get assigned slot index for a symbol+side. Returns None if not assigned."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT slot_index FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
+            ).fetchone()
+        return row[0] if row and row[0] >= 0 else None
+
+    def get_used_slots(self) -> set[int]:
+        """Get all currently assigned slot indices."""
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT slot_index FROM open_positions WHERE slot_index >= 0"
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def _allocate_slot(self, symbol: str, side: str) -> int | None:
+        """Allocate a slot index (0-99) for symbol+side.
+        Same-symbol long/short are placed adjacent when possible.
+        Returns None if no slot available.
+        """
+        # Check if already allocated
+        existing = self.get_slot(symbol, side)
+        if existing is not None:
+            return existing
+
+        used = self.get_used_slots()
+
+        # Try to place adjacent to opposite side of same symbol
+        opposite = "short" if side == "long" else "long"
+        opp_slot = self.get_slot(symbol, opposite)
+        if opp_slot is not None:
+            neighbor = opp_slot + 1 if opp_slot % 2 == 0 else opp_slot - 1
+            if 0 <= neighbor < 100 and neighbor not in used:
+                return neighbor
+
+        # Find smallest slot of preferred parity (even for long, odd for short)
+        start = 0 if side == "long" else 1
+        for i in range(start, 100, 2):
+            if i not in used:
+                return i
+
+        # Fallback: any available slot
+        for i in range(100):
+            if i not in used:
+                return i
+
+        return None
+
     def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None):
-        """Record a system-opened position."""
+        """Record a system-opened position. Auto-allocates slot_index."""
         now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
         if open_fee is None:
             open_fee = entry_price * amount * 0.0005
+        slot = self._allocate_slot(symbol, side)
         with self.lock:
             # Remove any stale entry for this symbol+side
             self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
             self.conn.execute(
-                """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (symbol, side, order_id, now, entry_price, amount, open_fee),
+                """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee, slot_index)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (symbol, side, order_id, now, entry_price, amount, open_fee, slot if slot is not None else -1),
             )
             self.conn.commit()
 
     def remove_open(self, symbol: str, side: str):
-        """Remove a closed position from tracking."""
+        """Remove a closed position from tracking. Slot is implicitly released by DELETE."""
         with self.lock:
             self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
             self.conn.commit()
@@ -119,9 +170,9 @@ class Database:
         """Get all system-tracked open positions."""
         with self.lock:
             rows = self.conn.execute(
-                "SELECT symbol, side, order_id, entry_time, entry_price, amount, margin_called, open_fee FROM open_positions"
+                "SELECT symbol, side, order_id, entry_time, entry_price, amount, margin_called, open_fee, slot_index FROM open_positions"
             ).fetchall()
-        columns = ["symbol", "side", "order_id", "entry_time", "entry_price", "amount", "margin_called", "open_fee"]
+        columns = ["symbol", "side", "order_id", "entry_time", "entry_price", "amount", "margin_called", "open_fee", "slot_index"]
         return [dict(zip(columns, r)) for r in rows]
 
     def mark_margin_called(self, symbol: str, side: str, new_amount: float, added_fee: float = 0):
