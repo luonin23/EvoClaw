@@ -795,26 +795,41 @@ async function loadPositionsMap() {
   const d = await api('/api/positions-map');
   if (!d || !d.slots) return;
   const container = document.getElementById('posMatrix');
+  const tooltip = document.getElementById('posMatrixTooltip');
   if (!container) return;
   // Build grid if empty
   if (!container.children.length) {
     for (let i = 0; i < 100; i++) {
       const cell = document.createElement('div');
       cell.className = 'pos-cell vacant';
+      cell.dataset.index = i;
+      cell.addEventListener('mouseenter', (e) => {
+        const idx = parseInt(cell.dataset.index);
+        const slot = window._posMapSlots ? window._posMapSlots[idx] : null;
+        if (slot && slot.occupied) {
+          tooltip.innerHTML = '<span style="color:var(--color-primary);font-weight:700">' + slot.symbol + '</span> ' + (slot.side === 'long' ? '多' : '空') + '<br>合约: ' + slot.contracts + '<br>盈亏: ' + fmtP(slot.pnl) + '<br>盈亏率: ' + fmtR(slot.pnl_rate);
+          tooltip.style.display = 'block';
+          const rect = cell.getBoundingClientRect();
+          tooltip.style.left = (rect.left + window.scrollX + 22) + 'px';
+          tooltip.style.top = (rect.top + window.scrollY - 8) + 'px';
+        }
+      });
+      cell.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
       container.appendChild(cell);
     }
   }
   // Update cells: green=profit, red=loss, ordered by loss severity
+  window._posMapSlots = d.slots;
   for (let i = 0; i < 100; i++) {
     const slot = d.slots[i];
     const cell = container.children[i];
     if (slot.occupied) {
       const isProfit = (slot.pnl_rate || 0) >= 0;
       cell.className = 'pos-cell occupied ' + (isProfit ? 'profit' : 'loss');
-      cell.title = slot.symbol + ' ' + (slot.side === 'long' ? '多' : '空') + '\n盈亏率: ' + fmtR(slot.pnl_rate);
     } else {
       cell.className = 'pos-cell vacant';
-      cell.title = '';
     }
   }
 }
