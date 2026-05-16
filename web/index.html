@@ -341,6 +341,23 @@ body{
 .pos-cell:nth-child(10n)::after{display:none}
 .pos-cell:nth-child(n+91)::before{display:none}
 
+/* Tooltip */
+.pos-tooltip{
+  position:fixed;
+  background:rgba(11,15,25,.95);
+  border:1px solid var(--surface-border);
+  border-radius:6px;
+  padding:6px 10px;
+  font-size:11px;
+  color:var(--text-primary);
+  z-index:9999;
+  pointer-events:none;
+  white-space:nowrap;
+  display:none;
+  line-height:1.6;
+  box-shadow:0 4px 12px rgba(0,0,0,.5);
+}
+
 /* Responsive */
 @media(max-width:640px){
   body{padding:8px}
@@ -426,7 +443,6 @@ body{
       <h2>持仓矩阵 (100)</h2>
     </div>
     <div id="posMatrix" class="pos-matrix"></div>
-    <div id="posMatrixTooltip" class="pos-tooltip"></div>
   </section>
 
   <section class="card">
@@ -810,8 +826,19 @@ async function loadPositionsMap() {
           tooltip.innerHTML = '<span style="color:var(--color-primary);font-weight:700">' + slot.symbol + '</span> ' + (slot.side === 'long' ? '多' : '空') + '<br>合约: ' + slot.contracts + '<br>盈亏: ' + fmtP(slot.pnl) + '<br>盈亏率: ' + fmtR(slot.pnl_rate);
           tooltip.style.display = 'block';
           const rect = cell.getBoundingClientRect();
-          tooltip.style.left = (rect.left + window.scrollX + 22) + 'px';
-          tooltip.style.top = (rect.top + window.scrollY - 8) + 'px';
+          const ttRect = tooltip.getBoundingClientRect();
+          // Smart positioning: avoid overflow
+          let left = rect.right + 8;
+          let top = rect.top - 4;
+          if (left + ttRect.width > window.innerWidth - 10) {
+            left = rect.left - ttRect.width - 8;
+          }
+          if (top + ttRect.height > window.innerHeight - 10) {
+            top = rect.bottom - ttRect.height + 4;
+          }
+          if (top < 10) top = 10;
+          tooltip.style.left = left + 'px';
+          tooltip.style.top = top + 'px';
         }
       });
       cell.addEventListener('mouseleave', () => {
@@ -845,5 +872,6 @@ loadSystem();
 setInterval(refresh, 3000);
 setInterval(loadSystem, 5000);
 </script>
+<div id="posMatrixTooltip" class="pos-tooltip"></div>
 </body>
 </html>
