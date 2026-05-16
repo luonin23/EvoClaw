@@ -341,6 +341,58 @@ body{
 .pos-cell.no-right::after{display:none}
 .pos-cell.no-bottom::before{display:none}
 
+/* Full-screen Matrix */
+.full-matrix{
+  display:grid;
+  grid-template-columns:repeat(10,1fr);
+  gap:8px;
+  width:100%;
+  max-width:100%;
+}
+.full-cell{
+  aspect-ratio:1;
+  border-radius:6px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding:4px;
+  font-family:var(--font-mono);
+  color:#fff;
+  cursor:pointer;
+  transition:all .15s;
+  position:relative;
+  border:1px solid transparent;
+  overflow:hidden;
+  text-align:center;
+  line-height:1.3;
+}
+.full-cell:hover{transform:scale(1.05);z-index:2;border-color:#fff}
+.full-cell.profit{background:var(--color-success)}
+.full-cell.loss{background:var(--color-error)}
+.full-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border);color:var(--text-tertiary)}
+.full-cell .fc-sym{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
+.full-cell .fc-dir{font-size:11px;opacity:.9}
+.full-cell .fc-price{font-size:10px;opacity:.85}
+.full-cell .fc-amt{font-size:10px;opacity:.85}
+.full-cell .fc-pnl{font-size:11px;font-weight:700}
+.full-cell .fc-rate{font-size:10px;opacity:.9}
+@media(max-width:900px){
+  .full-cell .fc-price,.full-cell .fc-amt{display:none}
+  .full-cell .fc-sym{font-size:12px}
+  .full-cell .fc-pnl{font-size:10px}
+}
+@media(max-width:640px){
+  .full-cell .fc-dir,.full-cell .fc-rate{display:none}
+  .full-cell .fc-sym{font-size:10px}
+  .full-cell .fc-pnl{font-size:9px}
+}
+@media(max-width:400px){
+  .full-cell{padding:2px}
+  .full-cell .fc-sym{font-size:9px}
+  .full-cell .fc-pnl{font-size:8px}
+}
+
 /* Tooltip */
 .pos-tooltip{
   position:fixed;
@@ -383,6 +435,7 @@ body{
 
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
+  <button class="tab-btn" onclick="switchTab('matrix')" id="tab-matrix">持仓矩阵</button>
   <button class="tab-btn" onclick="switchTab('config')" id="tab-config">交易配置</button>
 </div>
 
@@ -433,20 +486,11 @@ body{
       <div class="stat-card"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
       <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
       <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
-      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(239,68,68,.1);color:var(--color-error)">⚠</div>
-      <h2>亏损统计</h2>
-    </div>
-    <div class="stat-grid">
       <div class="stat-card"><div class="stat-value" id="lossHistTradePnl">-</div><div class="stat-label">历史单币最高亏损额</div></div>
       <div class="stat-card"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
       <div class="stat-card"><div class="stat-value" id="lossHistTotalPnl">-</div><div class="stat-label">历史持仓最高亏损额</div></div>
       <div class="stat-card"><div class="stat-value" id="lossHistTotalRate">-</div><div class="stat-label">历史持仓最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史持仓最低率(过程中)</div></div>
     </div>
   </section>
 
@@ -480,7 +524,12 @@ body{
 
 </div>
 
-<!-- Tab 2: Config -->
+<!-- Tab 2: Full Matrix -->
+<div id="panel-matrix" class="tab-panel">
+  <div id="fullMatrix" class="full-matrix"></div>
+</div>
+
+<!-- Tab 3: Config -->
 <div id="panel-config" class="tab-panel">
 
   <div class="config-group">
@@ -909,8 +958,49 @@ async function loadPositionsMap() {
   }
 }
 
+async function loadFullMatrix() {
+  const d = await api('/api/positions-map');
+  if (!d || !d.slots) return;
+  const container = document.getElementById('fullMatrix');
+  if (!container) return;
+  const maxSlots = d.max_slots || 100;
+
+  // Build or rebuild grid
+  if (container.children.length !== maxSlots) {
+    container.innerHTML = '';
+    for (let i = 0; i < maxSlots; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'full-cell vacant';
+      cell.dataset.index = i;
+      container.appendChild(cell);
+    }
+  }
+
+  for (let i = 0; i < maxSlots; i++) {
+    const slot = d.slots[i];
+    const cell = container.children[i];
+    if (!cell) continue;
+    if (slot.occupied) {
+      const isProfit = (slot.pnl_rate || 0) >= 0;
+      cell.className = 'full-cell ' + (isProfit ? 'profit' : 'loss');
+      cell.title = slot.symbol + ' ' + (slot.side === 'long' ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
+      cell.innerHTML =
+        '<div class="fc-sym">' + slot.symbol + '</div>' +
+        '<div class="fc-dir">' + (slot.side === 'long' ? '多' : '空') + '</div>' +
+        '<div class="fc-price">' + (slot.entry_price || 0).toFixed(4) + '</div>' +
+        '<div class="fc-amt">' + (slot.contracts || 0).toFixed(2) + '</div>' +
+        '<div class="fc-pnl">' + fmtP(slot.pnl) + '</div>' +
+        '<div class="fc-rate">' + fmtR(slot.pnl_rate) + '</div>';
+    } else {
+      cell.className = 'full-cell vacant';
+      cell.title = '';
+      cell.innerHTML = '';
+    }
+  }
+}
+
 async function refresh() {
-  await Promise.all([loadAccount(), loadStats(), loadPositionsMap()]);
+  await Promise.all([loadAccount(), loadStats(), loadPositionsMap(), loadFullMatrix()]);
   document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
 }
 
