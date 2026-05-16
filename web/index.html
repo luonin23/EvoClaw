@@ -338,7 +338,7 @@ body{
       <div class="stat-card"><div class="stat-value" id="accBalance">-</div><div class="stat-label">账户余额</div></div>
       <div class="stat-card"><div class="stat-value" id="accAvailable">-</div><div class="stat-label">可转出余额</div></div>
       <div class="stat-card"><div class="stat-value" id="accUnrealized">-</div><div class="stat-label">未实现盈亏</div></div>
-      <div class="stat-card"><div class="stat-value" id="accRealtimeRate">-</div><div class="stat-label">实时盈亏率</div></div>
+      <div class="stat-card"><div class="stat-value" id="accTotalRate">-</div><div class="stat-label">持仓盈亏率</div></div>
       <div class="stat-card"><div class="stat-value" id="accAllClose">-</div><div class="stat-label">全平次数</div></div>
       <div class="stat-card"><div class="stat-value" id="accPairClose">-</div><div class="stat-label">对冲平仓</div></div>
       <div class="stat-card"><div class="stat-value" id="accSingleClose">-</div><div class="stat-label">单项平仓</div></div>
@@ -355,11 +355,9 @@ body{
       <div class="stat-card"><div class="stat-value" id="posCount">-</div><div class="stat-label">持仓数</div></div>
       <div class="stat-card"><div class="stat-value" id="posLongCount">-</div><div class="stat-label">多单</div></div>
       <div class="stat-card"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
-      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史最大亏损</div></div>
-      <div class="stat-card"><div class="stat-value" id="posTotalPnl">-</div><div class="stat-label">持仓总盈亏</div></div>
-      <div class="stat-card"><div class="stat-value" id="posTotalRate">-</div><div class="stat-label">持仓盈亏率</div></div>
       <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">最大亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">最大亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">持仓最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">单币最高亏损率</div></div>
     </div>
   </section>
 
@@ -641,10 +639,10 @@ async function loadAccount() {
   const uEl = document.getElementById('accUnrealized');
   uEl.textContent = fmtP(d.unrealized_pnl);
   uEl.className = 'stat-value ' + clr(d.unrealized_pnl);
-  const rtEl = document.getElementById('accRealtimeRate');
-  const rt = d.realtime_profit_rate || 0;
-  rtEl.textContent = (rt >= 0 ? '+' : '') + (rt * 100).toFixed(2) + '%';
-  rtEl.className = 'stat-value ' + clr(rt);
+  const trEl = document.getElementById('accTotalRate');
+  const tr = d.total_position_pnl_rate || 0;
+  trEl.textContent = (tr >= 0 ? '+' : '') + (tr * 100).toFixed(2) + '%';
+  trEl.className = 'stat-value ' + clr(tr);
   const symEl = document.getElementById('accActiveSymbols');
   if (d.active_symbols && d.active_symbols.length) {
     symEl.innerHTML = '<span style="color:var(--text-tertiary);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
@@ -657,19 +655,6 @@ async function loadAccount() {
   document.getElementById('posLongCount').textContent = d.long_position_count || 0;
   document.getElementById('posShortCount').textContent = d.short_position_count || 0;
 
-  const maxLossRateEl = document.getElementById('posMaxLossRate');
-  const mlr = d.max_position_loss_rate || 0;
-  maxLossRateEl.textContent = fmtR(mlr);
-  maxLossRateEl.className = 'stat-value ' + clr(mlr);
-
-  const pnlEl = document.getElementById('posTotalPnl');
-  pnlEl.textContent = fmtP(d.total_position_pnl || 0);
-  pnlEl.className = 'stat-value ' + clr(d.total_position_pnl);
-  const rateEl = document.getElementById('posTotalRate');
-  const pr = d.total_position_pnl_rate || 0;
-  rateEl.textContent = fmtR(pr);
-  rateEl.className = 'stat-value ' + clr(pr);
-
   const worstPnlEl = document.getElementById('posWorstPnl');
   worstPnlEl.textContent = fmtP(d.worst_position_pnl || 0);
   worstPnlEl.className = 'stat-value ' + clr(d.worst_position_pnl);
@@ -678,6 +663,11 @@ async function loadAccount() {
   const wr = d.worst_position_rate || 0;
   worstRateEl.textContent = fmtR(wr);
   worstRateEl.className = 'stat-value ' + clr(wr);
+
+  const maxLossRateEl = document.getElementById('posMaxLossRate');
+  const mlr = d.max_position_loss_rate || 0;
+  maxLossRateEl.textContent = fmtR(mlr);
+  maxLossRateEl.className = 'stat-value ' + clr(mlr);
 
   document.getElementById('accMarginCall').textContent = d.margin_call_count || 0;
 }
