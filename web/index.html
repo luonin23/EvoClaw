@@ -286,8 +286,8 @@ body{
 .pos-matrix{
   display:grid;
   grid-template-columns:repeat(10,1fr);
-  gap:10px;
-  max-width:170px;
+  gap:15px;
+  max-width:200px;
   margin:0 auto;
   position:relative;
 }
@@ -323,17 +323,17 @@ body{
 }
 /* Horizontal line (right side) */
 .pos-cell::after{
-  width:12px;
+  width:18px;
   height:2px;
-  right:-11px;
+  right:-17px;
   top:50%;
   transform:translateY(-50%);
 }
 /* Vertical line (bottom side) */
 .pos-cell::before{
   width:2px;
-  height:12px;
-  bottom:-11px;
+  height:18px;
+  bottom:-17px;
   left:50%;
   transform:translateX(-50%);
 }
