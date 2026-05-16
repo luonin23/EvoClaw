@@ -96,7 +96,7 @@ class WebServer:
                 total_value += val
             total_pnl_rate = total_pnl / total_value if total_value > 0 else 0
 
-            # Worst position tracking
+            # Worst position tracking (real-time)
             worst_pnl = 0.0          # most negative pnl amount (real-time)
             worst_rate = 0.0         # most negative rate (real-time)
             current_max_loss_rate = 0.0
@@ -111,6 +111,7 @@ class WebServer:
                 rate = pnl / val if val > 0 else 0
                 if rate < current_max_loss_rate:
                     current_max_loss_rate = rate
+                if pnl < current_max_loss_pnl:
                     current_max_loss_pnl = pnl
                 if pnl < worst_pnl:
                     worst_pnl = pnl
@@ -122,13 +123,12 @@ class WebServer:
             if current_max_loss_rate < hist_max_loss_rate:
                 hist_max_loss_rate = current_max_loss_rate
                 self.db.set_runtime_stat("max_position_loss_rate", hist_max_loss_rate)
-                self.db.set_runtime_stat("hist_worst_trade_pnl", current_max_loss_pnl)
 
-            # Ensure hist_worst_trade_pnl exists (initialize from current worst if missing)
-            hist_worst_trade_pnl = self.db.get_runtime_stat("hist_worst_trade_pnl", None)
-            if hist_worst_trade_pnl is None:
-                hist_worst_trade_pnl = current_max_loss_pnl
-                self.db.set_runtime_stat("hist_worst_trade_pnl", hist_worst_trade_pnl)
+            # Update historical max loss pnl independently
+            hist_max_loss_pnl = self.db.get_runtime_stat("max_position_loss_pnl", 0)
+            if current_max_loss_pnl < hist_max_loss_pnl:
+                hist_max_loss_pnl = current_max_loss_pnl
+                self.db.set_runtime_stat("max_position_loss_pnl", hist_max_loss_pnl)
 
             # Track historical total position loss peak (account-level)
             hist_total_loss_pnl = self.db.get_runtime_stat("hist_total_loss_pnl", 0)
@@ -183,7 +183,7 @@ class WebServer:
                 "total_position_pnl_rate": round(total_pnl_rate, 6),
                 "worst_position_pnl": round(worst_pnl, 4),
                 "worst_position_rate": round(worst_rate, 6),
-                "hist_worst_trade_pnl": round(hist_worst_trade_pnl if hist_worst_trade_pnl is not None else 0, 4),
+                "hist_worst_trade_pnl": round(hist_max_loss_pnl, 4),
                 "hist_worst_trade_rate": round(hist_max_loss_rate, 6),
                 "hist_total_loss_pnl": round(hist_total_loss_pnl, 4),
                 "hist_total_loss_rate": round(hist_total_loss_rate, 6),

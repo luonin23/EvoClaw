@@ -543,10 +543,6 @@ body{
 
 <!-- Tab 2: Full Matrix -->
 <div id="panel-matrix" class="tab-panel active">
-  <div class="matrix-toolbar">
-    <button class="btn btn-secondary" id="mode-side" onclick="setMatrixMode('side')">多空显示</button>
-    <button class="btn btn-secondary active" id="mode-pnl" onclick="setMatrixMode('pnl')">盈亏显示</button>
-  </div>
   <div id="fullMatrix" class="full-matrix"></div>
 </div>
 
@@ -974,16 +970,6 @@ async function loadPositionsMap() {
   }
 }
 
-let matrixDisplayMode = 'pnl'; // 'side' | 'pnl'
-
-function setMatrixMode(mode) {
-  matrixDisplayMode = mode;
-  document.querySelectorAll('.matrix-toolbar .btn').forEach(b => b.classList.remove('active'));
-  const activeBtn = document.getElementById('mode-' + mode);
-  if (activeBtn) activeBtn.classList.add('active');
-  loadFullMatrix();
-}
-
 async function loadFullMatrix() {
   const d = await api('/api/positions-map');
   if (!d || !d.slots) return;
@@ -1010,11 +996,8 @@ async function loadFullMatrix() {
       const isProfit = (slot.pnl_rate || 0) >= 0;
       const isLong = slot.side === 'long';
       let cls = 'full-cell';
-      if (matrixDisplayMode === 'side') {
-        cls += isLong ? ' side-long' : ' side-short';
-      } else {
-        cls += isProfit ? ' pnl-profit' : ' pnl-loss';
-      }
+      cls += isLong ? ' side-long' : ' side-short';
+      cls += isProfit ? ' pnl-profit' : ' pnl-loss';
       cell.className = cls;
       cell.title = slot.symbol + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
       cell.innerHTML =
