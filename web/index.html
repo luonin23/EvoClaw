@@ -311,26 +311,26 @@ body{
 .pos-cell.profit{background:var(--color-success)}
 .pos-cell.loss{background:var(--color-error)}
 .pos-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border)}
-.pos-cell.occupied{animation:cellPulse 2s ease-in-out infinite}
-@keyframes cellPulse{0%,100%{opacity:1}50%{opacity:.7}}
+.pos-cell.occupied{animation:cellPulse 1.5s ease-in-out infinite}
+@keyframes cellPulse{0%,100%{opacity:1;box-shadow:0 0 4px currentColor}50%{opacity:.5;box-shadow:none}}
 /* Cross connector lines between cells */
 .pos-cell::after,
 .pos-cell::before{
   content:'';
   position:absolute;
-  background:var(--surface-border);
-  z-index:-1;
+  background:#374151;
+  z-index:0;
 }
 /* Horizontal line (right side) */
 .pos-cell::after{
   width:4px;
-  height:1px;
+  height:1.5px;
   right:-3px;
   top:50%;
 }
 /* Vertical line (bottom side) */
 .pos-cell::before{
-  width:1px;
+  width:1.5px;
   height:4px;
   bottom:-3px;
   left:50%;
