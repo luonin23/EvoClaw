@@ -342,10 +342,20 @@ body{
 .pos-cell.no-bottom::before{display:none}
 
 /* Full-screen Matrix */
+#panel-matrix{
+  position:relative;
+  left:50%;
+  right:50%;
+  margin-left:-50vw;
+  margin-right:-50vw;
+  width:100vw;
+  padding:12px;
+  max-width:none;
+}
 .full-matrix{
   display:grid;
   grid-template-columns:repeat(10,1fr);
-  gap:8px;
+  gap:6px;
   width:100%;
   max-width:100%;
 }
@@ -356,7 +366,7 @@ body{
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  padding:4px;
+  padding:3px;
   font-family:var(--font-mono);
   color:#fff;
   cursor:pointer;
@@ -365,32 +375,32 @@ body{
   border:1px solid transparent;
   overflow:hidden;
   text-align:center;
-  line-height:1.3;
+  line-height:1.2;
 }
 .full-cell:hover{transform:scale(1.05);z-index:2;border-color:#fff}
 .full-cell.profit{background:var(--color-success)}
 .full-cell.loss{background:var(--color-error)}
 .full-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border);color:var(--text-tertiary)}
-.full-cell .fc-sym{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
-.full-cell .fc-dir{font-size:11px;opacity:.9}
-.full-cell .fc-price{font-size:10px;opacity:.85}
-.full-cell .fc-amt{font-size:10px;opacity:.85}
-.full-cell .fc-pnl{font-size:11px;font-weight:700}
-.full-cell .fc-rate{font-size:10px;opacity:.9}
+.full-cell .fc-sym{font-size:10px;font-weight:700;word-break:break-all;line-height:1.1;width:100%}
+.full-cell .fc-dir{font-size:9px;opacity:.9}
+.full-cell .fc-price{font-size:9px;opacity:.85}
+.full-cell .fc-amt{font-size:9px;opacity:.85}
+.full-cell .fc-pnl{font-size:10px;font-weight:700}
+.full-cell .fc-rate{font-size:9px;opacity:.9}
 @media(max-width:900px){
   .full-cell .fc-price,.full-cell .fc-amt{display:none}
-  .full-cell .fc-sym{font-size:12px}
-  .full-cell .fc-pnl{font-size:10px}
-}
-@media(max-width:640px){
-  .full-cell .fc-dir,.full-cell .fc-rate{display:none}
   .full-cell .fc-sym{font-size:10px}
   .full-cell .fc-pnl{font-size:9px}
 }
-@media(max-width:400px){
-  .full-cell{padding:2px}
+@media(max-width:640px){
+  .full-cell .fc-dir,.full-cell .fc-rate{display:none}
   .full-cell .fc-sym{font-size:9px}
   .full-cell .fc-pnl{font-size:8px}
+}
+@media(max-width:400px){
+  .full-cell{padding:2px}
+  .full-cell .fc-sym{font-size:8px}
+  .full-cell .fc-pnl{font-size:7px}
 }
 
 /* Tooltip */
@@ -434,13 +444,13 @@ body{
 </header>
 
 <div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
-  <button class="tab-btn" onclick="switchTab('matrix')" id="tab-matrix">持仓矩阵</button>
+  <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
+  <button class="tab-btn active" onclick="switchTab('matrix')" id="tab-matrix">持仓矩阵</button>
   <button class="tab-btn" onclick="switchTab('config')" id="tab-config">交易配置</button>
 </div>
 
 <!-- Tab 1: Dashboard -->
-<div id="panel-dashboard" class="tab-panel active">
+<div id="panel-dashboard" class="tab-panel">
 
   <section class="card">
     <div class="card-head">
@@ -484,22 +494,14 @@ body{
       <div class="stat-card"><div class="stat-value" id="posCount">-</div><div class="stat-label">持仓数</div></div>
       <div class="stat-card"><div class="stat-value" id="posLongCount">-</div><div class="stat-label">多单</div></div>
       <div class="stat-card"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
-      <div class="stat-card"><div class="stat-value" id="lossHistTradePnl">-</div><div class="stat-label">历史单币最高亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
       <div class="stat-card"><div class="stat-value" id="lossHistTotalPnl">-</div><div class="stat-label">历史持仓最高亏损额</div></div>
       <div class="stat-card"><div class="stat-value" id="lossHistTotalRate">-</div><div class="stat-label">历史持仓最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="lossHistTradePnl">-</div><div class="stat-label">历史单币最高亏损额</div></div>
+      <div class="stat-card"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
+      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
       <div class="stat-card"><div class="stat-value" id="posMaxLossRate">-</div><div class="stat-label">历史持仓最低率(过程中)</div></div>
     </div>
-  </section>
-
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(99,102,241,.1);color:#6366f1">⊞</div>
-      <h2>持仓矩阵 (100)</h2>
-    </div>
-    <div id="posMatrix" class="pos-matrix"></div>
   </section>
 
   <section class="card">
@@ -525,7 +527,7 @@ body{
 </div>
 
 <!-- Tab 2: Full Matrix -->
-<div id="panel-matrix" class="tab-panel">
+<div id="panel-matrix" class="tab-panel active">
   <div id="fullMatrix" class="full-matrix"></div>
 </div>
 
@@ -667,7 +669,7 @@ body{
 
 <script>
 let trading = true;
-let currentTab = 'dashboard';
+let currentTab = 'matrix';
 
 function switchTab(tab) {
   currentTab = tab;
@@ -807,21 +809,16 @@ async function loadAccount() {
   document.getElementById('posLongCount').textContent = d.long_position_count || 0;
   document.getElementById('posShortCount').textContent = d.short_position_count || 0;
 
-  const worstPnlEl = document.getElementById('posWorstPnl');
-  worstPnlEl.textContent = fmtP(d.worst_position_pnl || 0);
-  worstPnlEl.className = 'stat-value ' + clr(d.worst_position_pnl);
+  // 历史持仓最高亏损额/率 (账户级 4,5)
+  const hlpEl = document.getElementById('lossHistTotalPnl');
+  hlpEl.textContent = fmtP(d.hist_total_loss_pnl || 0);
+  hlpEl.className = 'stat-value ' + clr(d.hist_total_loss_pnl || 0);
+  const hlrEl = document.getElementById('lossHistTotalRate');
+  const hlr = d.hist_total_loss_rate || 0;
+  hlrEl.textContent = fmtR(hlr);
+  hlrEl.className = 'stat-value ' + clr(hlr);
 
-  const worstRateEl = document.getElementById('posWorstRate');
-  const wr = d.worst_position_rate || 0;
-  worstRateEl.textContent = fmtR(wr);
-  worstRateEl.className = 'stat-value ' + clr(wr);
-
-  const maxLossRateEl = document.getElementById('posMaxLossRate');
-  const mlr = d.max_position_loss_rate || 0;
-  maxLossRateEl.textContent = fmtR(mlr);
-  maxLossRateEl.className = 'stat-value ' + clr(mlr);
-
-  // 历史单币最高亏损额/率
+  // 历史单币最高亏损额/率 (单币 6,7)
   const htpEl = document.getElementById('lossHistTradePnl');
   htpEl.textContent = fmtP(d.hist_worst_trade_pnl || 0);
   htpEl.className = 'stat-value ' + clr(d.hist_worst_trade_pnl || 0);
@@ -830,14 +827,20 @@ async function loadAccount() {
   htrEl.textContent = fmtR(htr);
   htrEl.className = 'stat-value ' + clr(htr);
 
-  // 历史持仓最高亏损额/率
-  const hlpEl = document.getElementById('lossHistTotalPnl');
-  hlpEl.textContent = fmtP(d.hist_total_loss_pnl || 0);
-  hlpEl.className = 'stat-value ' + clr(d.hist_total_loss_pnl || 0);
-  const hlrEl = document.getElementById('lossHistTotalRate');
-  const hlr = d.hist_total_loss_rate || 0;
-  hlrEl.textContent = fmtR(hlr);
-  hlrEl.className = 'stat-value ' + clr(hlr);
+  // 实时单币最高亏损额/率 (实时 8,9)
+  const worstPnlEl = document.getElementById('posWorstPnl');
+  worstPnlEl.textContent = fmtP(d.worst_position_pnl || 0);
+  worstPnlEl.className = 'stat-value ' + clr(d.worst_position_pnl);
+  const worstRateEl = document.getElementById('posWorstRate');
+  const wr = d.worst_position_rate || 0;
+  worstRateEl.textContent = fmtR(wr);
+  worstRateEl.className = 'stat-value ' + clr(wr);
+
+  // 历史持仓最低率(过程中) (10)
+  const maxLossRateEl = document.getElementById('posMaxLossRate');
+  const mlr = d.max_position_loss_rate || 0;
+  maxLossRateEl.textContent = fmtR(mlr);
+  maxLossRateEl.className = 'stat-value ' + clr(mlr);
 
   document.getElementById('accMarginCall').textContent = d.margin_call_count || 0;
 }

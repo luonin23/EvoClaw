@@ -96,11 +96,11 @@ class WebServer:
                 total_value += val
             total_pnl_rate = total_pnl / total_value if total_value > 0 else 0
 
-            # Worst position (most negative unrealized PnL)
-            worst_pnl = 0.0
-            worst_rate = 0.0
-            # Also compute the worst rate among ALL positions for historical tracking
+            # Worst position tracking
+            worst_pnl = 0.0          # most negative pnl amount (real-time)
+            worst_rate = 0.0         # most negative rate (real-time)
             current_max_loss_rate = 0.0
+            current_max_loss_pnl = 0.0
             for p in all_positions:
                 pnl = float(p.get("unrealizedPnl", 0) or 0)
                 entry = float(p.get("entryPrice", 0) or 0)
@@ -111,8 +111,10 @@ class WebServer:
                 rate = pnl / val if val > 0 else 0
                 if rate < current_max_loss_rate:
                     current_max_loss_rate = rate
+                    current_max_loss_pnl = pnl
                 if pnl < worst_pnl:
                     worst_pnl = pnl
+                if rate < worst_rate:
                     worst_rate = rate
 
             # Update historical max loss rate if current is worse
@@ -120,8 +122,15 @@ class WebServer:
             if current_max_loss_rate < hist_max_loss_rate:
                 hist_max_loss_rate = current_max_loss_rate
                 self.db.set_runtime_stat("max_position_loss_rate", hist_max_loss_rate)
+                self.db.set_runtime_stat("hist_worst_trade_pnl", current_max_loss_pnl)
 
-            # Track historical total position loss peak
+            # Ensure hist_worst_trade_pnl exists (initialize from current worst if missing)
+            hist_worst_trade_pnl = self.db.get_runtime_stat("hist_worst_trade_pnl", None)
+            if hist_worst_trade_pnl is None:
+                hist_worst_trade_pnl = current_max_loss_pnl
+                self.db.set_runtime_stat("hist_worst_trade_pnl", hist_worst_trade_pnl)
+
+            # Track historical total position loss peak (account-level)
             hist_total_loss_pnl = self.db.get_runtime_stat("hist_total_loss_pnl", 0)
             hist_total_loss_rate = self.db.get_runtime_stat("hist_total_loss_rate", 0)
             if total_pnl < hist_total_loss_pnl:
@@ -130,9 +139,6 @@ class WebServer:
             if total_pnl_rate < hist_total_loss_rate:
                 hist_total_loss_rate = total_pnl_rate
                 self.db.set_runtime_stat("hist_total_loss_rate", hist_total_loss_rate)
-
-            # Historical worst single trade (from closed trades)
-            hist_worst = self.db.get_historical_worst_trade()
 
             # Use trader cached symbols; fallback to config if trader not available
             if self.trader and self.trader._candidate_symbols:
@@ -178,8 +184,8 @@ class WebServer:
                 "worst_position_pnl": round(worst_pnl, 4),
                 "worst_position_rate": round(worst_rate, 6),
                 "max_position_loss_rate": round(hist_max_loss_rate, 6),
-                "hist_worst_trade_pnl": round(hist_worst["pnl"], 4) if hist_worst else 0,
-                "hist_worst_trade_rate": round(hist_worst["pnl_rate"], 6) if hist_worst else 0,
+                "hist_worst_trade_pnl": round(hist_worst_trade_pnl if hist_worst_trade_pnl is not None else 0, 4),
+                "hist_worst_trade_rate": round(hist_max_loss_rate, 6),
                 "hist_total_loss_pnl": round(hist_total_loss_pnl, 4),
                 "hist_total_loss_rate": round(hist_total_loss_rate, 6),
                 "margin_call_count": margin_call_count,

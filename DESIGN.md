@@ -1,6 +1,6 @@
 # EvoClaw - 高速微盈利交易系统 设计文档
 
-> 最后更新: 2026-05-15 | 版本: v1.4-fix (补仓停补阈值加固 — 全路径统一检查 + 价格未知默认停止)
+> 最后更新: 2026-05-16 | 版本: v1.5 (持仓矩阵全屏首页 + 亏损统计重构 + 实时/历史数据一致性修复)
 
 ## 一、系统设计目标
 
@@ -1541,4 +1541,98 @@ WantedBy=multi-user.target
 | `web/index.html` | ✅ 完成 | 深色主题、移动端适配、配置分组、持仓状态、多空平仓统计、**v1.4 补仓/加仓配置** |
 | `main.py` | ✅ 完成 | 启动流程、信号处理、日志系统、动态选币初始化 |
 | `config.json` | ✅ 完成 | 热加载支持（含 v1.4 新增字段） |
-| `DESIGN.md` | ✅ 完成 | 本文档（包含完整实现细节，**v1.4** 更新） |
+| `DESIGN.md` | ✅ 完成 | 本文档（包含完整实现细节，**v1.5** 更新） |
+
+---
+
+## 十三、v1.5 更新记录
+
+### 13.1 持仓矩阵全屏首页
+
+**改动**：
+- 新增「持仓矩阵」独立标签页，作为**默认首页**
+- 数据仪表盘中的小型紧凑矩阵已移除
+- 矩阵使用 10×10 大网格，每个格子显示：币种名、方向、开仓价、合约数、盈亏值、盈亏率
+- 突破 body 的 `max-width:960px` 限制，真正占满视口宽度
+- 响应式适配：小屏幕自动隐藏次要字段（价格/数量 → 方向/盈亏率），字体逐级缩小
+
+**CSS 关键设计**：
+```css
+#panel-matrix {
+  position:relative; left:50%; right:50%;
+  margin-left:-50vw; margin-right:-50vw;
+  width:100vw; padding:12px; max-width:none;
+}
+.full-cell .fc-sym { font-size:10px; word-break:break-all; }
+```
+
+### 13.2 亏损统计重构与排序
+
+**持仓状态卡片重新排序**（10格）：
+
+| 位置 | 字段 | 说明 |
+|------|------|------|
+| 1-3 | 持仓数 / 多单 / 空单 | 基础分布 |
+| 4-5 | 历史持仓最高亏损额/率 | 账户级（所有持仓合计的历史最差） |
+| 6-7 | 历史单币最高亏损额/率 | 单币种历史最差 |
+| 8-9 | 实时单币最高亏损额/率 | 当前持仓中的最差 |
+| 10 | 历史持仓最低率(过程中) | 持仓过程中见过的最低 rate |
+
+**不再单独建立「亏损统计」板块**，所有亏损相关数据合并到「持仓状态」中。
+
+### 13.3 历史单币最高亏损数据来源修正
+
+**问题**：`hist_worst_trade_rate` 原从 `trades` 表查询，返回的是**已平仓交易**的亏损率（如 -2.37%），但用户关注的是**持仓过程中**出现过的最低 rate（如 -52.12%，存在 `runtime_stats` 中）。
+
+**修复**：
+- `hist_worst_trade_rate` 改为从 `runtime_stats.max_position_loss_rate` 读取
+- 新增 `runtime_stats.hist_worst_trade_pnl` 字段，记录对应的历史最差单币亏损金额
+- 每次 tick 检测到更差的 `current_max_loss_rate` 时，**同步更新**对应的 `hist_worst_trade_pnl`
+- 若 `hist_worst_trade_pnl` 缺失（旧数据），用当前最差持仓的 pnl 自动初始化
+
+```python
+# api_account 中的更新逻辑
+if current_max_loss_rate < hist_max_loss_rate:
+    self.db.set_runtime_stat("max_position_loss_rate", current_max_loss_rate)
+    self.db.set_runtime_stat("hist_worst_trade_pnl", current_max_loss_pnl)
+```
+
+### 13.4 实时单币最高亏损率一致性修复
+
+**问题**：dashboard 显示的「实时单币最高亏损率」与矩阵图中第一格（最差持仓）的盈亏率不一致。
+
+**根因**：原代码中 `worst_position_rate` 取的是**pnl金额最小**的那个持仓的 rate，而不是**rate最小**的持仓。
+
+**修复**：在 `api_account` 中分别跟踪：
+- `worst_pnl` = pnl 最负的金额（实时单币最高亏损额）
+- `worst_rate` = rate 最负的值（实时单币最高亏损率）
+
+两者可能来自不同持仓，各自代表不同维度的「最差」。
+
+```python
+worst_pnl = 0.0
+worst_rate = 0.0
+for p in all_positions:
+    ...
+    if pnl < worst_pnl:
+        worst_pnl = pnl
+    if rate < worst_rate:
+        worst_rate = rate
+```
+
+### 13.5 系统监控面板
+
+**v1.5 新增**：数据仪表盘顶部增加「系统监控」区块，显示：
+- CPU 使用率（读取 `/proc/stat`）
+- 内存使用（读取 `/proc/meminfo`）
+- 硬盘使用（`shutil.disk_usage`）
+- 网络吞吐（读取 `/proc/net/dev`）
+
+用于诊断服务器性能瓶颈（如海外服务器高延迟、内存压力等）。
+
+### 13.6 动态持仓数量与矩阵大小
+
+**v1.5 新增**：`max_position_count` 配置项（默认 100）：
+- 控制最高持仓上限，所有开仓路径（replenish_missing / replenish_all / 启动开仓）均检查此限制
+- 矩阵网格数量同步此配置（`api/positions-map` 返回 `max_slots`）
+- 前端根据 `max_slots` 动态重建网格
