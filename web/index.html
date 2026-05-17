@@ -908,8 +908,8 @@ async function loadSystem() {
   const cpuEl = document.getElementById('sysCpu');
   cpuEl.textContent = d.cpu_percent.toFixed(1) + '%';
   cpuEl.className = 'stat-value ' + (d.cpu_percent > 80 ? 'text-red' : d.cpu_percent > 50 ? 'text-warning' : 'text-green');
-  document.getElementById('sysMem').textContent = fmtBytes(d.mem_used) + ' / ' + d.mem_percent.toFixed(0) + '%';
-  document.getElementById('sysDisk').textContent = fmtBytes(d.disk_used) + ' / ' + d.disk_percent.toFixed(0) + '%';
+  document.getElementById('sysMem').textContent = d.mem_percent.toFixed(0) + '%';
+  document.getElementById('sysDisk').textContent = d.disk_percent.toFixed(0) + '%';
   document.getElementById('sysNet').textContent = '↓' + fmtSpeed(d.net_rx_speed) + ' ↑' + fmtSpeed(d.net_tx_speed);
 }
 
