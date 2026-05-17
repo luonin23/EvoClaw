@@ -153,7 +153,7 @@ body{
   border-color:#2a3a4e;
 }
 .stat-value{
-  font-size:15px;
+  font-size:clamp(11px, 2.5vw, 15px);
   font-weight:700;
   font-family:var(--font-mono);
   margin-bottom:2px;
@@ -162,12 +162,14 @@ body{
   text-overflow:ellipsis;
 }
 .stat-label{
-  font-size:10px;
+  font-size:clamp(8px, 1.8vw, 10px);
   color:var(--text-tertiary);
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
 }
+#profitChart{width:100%;height:180px;display:block}
+#btnHour.active,#btnDay.active{background:var(--color-primary);color:#fff;border-color:var(--color-primary)}
 
 /* Config Form */
 .form-grid{
@@ -479,6 +481,18 @@ body{
       <div class="stat-card"><div class="stat-value" id="sysDisk">-</div><div class="stat-label">硬盘使用</div></div>
       <div class="stat-card"><div class="stat-value" id="sysNet">-</div><div class="stat-label">网络吞吐</div></div>
     </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="icon" style="background:rgba(16,185,129,.1);color:var(--color-success)">📈</div>
+      <h2>盈利趋势</h2>
+      <div style="margin-left:auto;display:flex;gap:4px;">
+        <button class="btn btn-secondary active" id="btnHour" onclick="setTrendPeriod('hour')" style="height:28px;padding:0 10px;font-size:11px;">小时</button>
+        <button class="btn btn-secondary" id="btnDay" onclick="setTrendPeriod('day')" style="height:28px;padding:0 10px;font-size:11px;">日</button>
+      </div>
+    </div>
+    <canvas id="profitChart" style="width:100%;height:180px;display:block;"></canvas>
   </section>
 
   <section class="card">
@@ -999,9 +1013,10 @@ async function loadFullMatrix() {
       cls += isLong ? ' side-long' : ' side-short';
       cls += isProfit ? ' pnl-profit' : ' pnl-loss';
       cell.className = cls;
-      cell.title = slot.symbol + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
+      const displaySym = slot.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
+      cell.title = displaySym + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
       cell.innerHTML =
-        '<div class="fc-sym">' + slot.symbol + '</div>' +
+        '<div class="fc-sym">' + displaySym + '</div>' +
         '<div class="fc-dir">' + (isLong ? '多' : '空') + '</div>' +
         '<div class="fc-price">' + (slot.entry_price || 0).toFixed(4) + '</div>' +
         '<div class="fc-amt">' + (slot.contracts || 0).toFixed(2) + '</div>' +
@@ -1015,10 +1030,133 @@ async function loadFullMatrix() {
   }
 }
 
+let trendPeriod = 'hour';
+
+function setTrendPeriod(period) {
+  trendPeriod = period;
+  document.getElementById('btnHour').classList.toggle('active', period === 'hour');
+  document.getElementById('btnDay').classList.toggle('active', period === 'day');
+  loadProfitTrend();
+}
+
+function drawChart(data) {
+  const canvas = document.getElementById('profitChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const width = rect.width;
+  const height = rect.height;
+  const pad = { top: 16, right: 10, bottom: 28, left: 44 };
+  const chartW = Math.max(1, width - pad.left - pad.right);
+  const chartH = Math.max(1, height - pad.top - pad.bottom);
+
+  const rates = data.map(p => p.rate);
+  let minRate = Math.min(...rates, 0);
+  let maxRate = Math.max(...rates, 0);
+  if (minRate === maxRate) { maxRate += 0.001; minRate -= 0.001; }
+  const range = maxRate - minRate;
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + chartH * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + chartW, y);
+    ctx.stroke();
+  }
+
+  // Zero line
+  if (minRate < 0 && maxRate > 0) {
+    const zeroY = pad.top + chartH - ((0 - minRate) / range) * chartH;
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.beginPath();
+    ctx.moveTo(pad.left, zeroY);
+    ctx.lineTo(pad.left + chartW, zeroY);
+    ctx.stroke();
+  }
+
+  // Area
+  const isProfit = rates[rates.length - 1] >= 0;
+  ctx.beginPath();
+  data.forEach((point, i) => {
+    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(pad.left + chartW, pad.top + chartH);
+  ctx.lineTo(pad.left, pad.top + chartH);
+  ctx.closePath();
+  ctx.fillStyle = isProfit ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  data.forEach((point, i) => {
+    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Dots
+  ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
+  data.forEach((point, i) => {
+    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // X labels
+  ctx.fillStyle = 'var(--text-tertiary)';
+  ctx.font = '10px var(--font-mono)';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(data.length / 6));
+  data.forEach((point, i) => {
+    if (i % step === 0 || i === data.length - 1) {
+      const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+      ctx.fillText(point.label, x, height - 8);
+    }
+  });
+
+  // Y labels
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const rate = minRate + range * (1 - i / 4);
+    const y = pad.top + chartH * i / 4;
+    ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - 6, y);
+  }
+}
+
+async function loadProfitTrend() {
+  const d = await api('/api/profit-trend?period=' + trendPeriod);
+  if (!d || !d.data) return;
+  drawChart(d.data);
+}
+
 async function refresh() {
-  await Promise.all([loadAccount(), loadStats(), loadPositionsMap(), loadFullMatrix()]);
+  await Promise.all([loadAccount(), loadStats(), loadPositionsMap(), loadFullMatrix(), loadProfitTrend()]);
   document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
 }
+
+window.addEventListener('resize', () => {
+  if (currentTab === 'dashboard') loadProfitTrend();
+});
 
 loadConfig();
 refresh();

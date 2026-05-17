@@ -24,6 +24,7 @@ class WebServer:
         self.app.router.add_get("/api/stats", self.api_stats)
         self.app.router.add_get("/api/trades", self.api_trades)
         self.app.router.add_get("/api/system", self.api_system)
+        self.app.router.add_get("/api/profit-trend", self.api_profit_trend)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
         # System metrics cache for rate calculations
         self._last_cpu = None
@@ -344,6 +345,63 @@ class WebServer:
         try:
             symbols = await self.trader.refresh_symbols_now()
             return web.json_response({"status": "ok", "count": len(symbols), "symbols": symbols})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_profit_trend(self, request):
+        try:
+            from datetime import datetime, timezone, timedelta
+            period = request.query.get("period", "hour")  # 'hour' or 'day'
+            balance_data = await self.client.get_balance()
+            balance = balance_data.get("balance", 0)
+            if balance <= 0:
+                balance = 1  # avoid division by zero
+
+            now = datetime.now(timezone.utc)
+
+            # Build bucket list and query recent trades
+            if period == "hour":
+                buckets = []
+                for i in range(24):
+                    t = now - timedelta(hours=23 - i)
+                    buckets.append((t.strftime("%Y-%m-%dT%H"), t.strftime("%H:00")))
+                start_iso = (now - timedelta(hours=24)).isoformat()
+            else:
+                buckets = []
+                for i in range(30):
+                    t = now - timedelta(days=29 - i)
+                    buckets.append((t.strftime("%Y-%m-%d"), t.strftime("%m-%d")))
+                start_iso = (now - timedelta(days=30)).isoformat()
+
+            with self.db.lock:
+                rows = self.db.conn.execute(
+                    "SELECT close_time, pnl FROM trades WHERE close_time >= ? ORDER BY close_time",
+                    (start_iso,),
+                ).fetchall()
+
+            # Aggregate pnl by bucket
+            from collections import defaultdict
+            bucket_pnls = defaultdict(float)
+            for close_time, pnl in rows:
+                if period == "hour":
+                    bucket_key = close_time[:13]  # '2026-05-16T22'
+                else:
+                    bucket_key = close_time[:10]  # '2026-05-16'
+                bucket_pnls[bucket_key] += float(pnl)
+
+            # Build cumulative series
+            cumulative = 0.0
+            result = []
+            for bucket_key, label in buckets:
+                cumulative += bucket_pnls.get(bucket_key, 0.0)
+                rate = cumulative / balance
+                result.append({
+                    "label": label,
+                    "rate": round(rate, 6),
+                    "cumulative_pnl": round(cumulative, 4),
+                })
+
+            return web.json_response({"period": period, "data": result})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
