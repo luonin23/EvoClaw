@@ -202,7 +202,10 @@ class ExchangeClient:
                     log.warning(f"Notional too small for {resolved} {side}, retry {old} -> {amount}")
                     await asyncio.sleep(0.2)
                     continue
-                log.error(f"Open position failed {resolved} {side}: {e}")
+                if "-2027" in err or "exceeded" in err.lower():
+                    log.warning(f"Open position blocked (max position) {resolved} {side}: {e}")
+                else:
+                    log.error(f"Open position failed {resolved} {side}: {e}")
                 return None
 
     async def safe_open(self, symbol: str, side: str, retries: int = 1) -> dict | None:
@@ -239,22 +242,27 @@ class ExchangeClient:
                 "amount": amount,
             }
         except Exception as e:
-            log.error(f"Add position failed {resolved} {side}: {e}")
+            err = str(e)
+            if "-2027" in err or "exceeded" in err.lower():
+                log.warning(f"Add position blocked (max position) {resolved} {side}: {e}")
+            else:
+                log.error(f"Add position failed {resolved} {side}: {e}")
             return None
 
-    async def close_position(self, symbol: str, side: str) -> dict | None:
+    async def close_position(self, symbol: str, side: str, contracts: float | None = None) -> dict | None:
         """Close position for symbol+side. Returns order info or None."""
         resolved = self.resolve_symbol(symbol)
-        positions = await self.get_positions([resolved])
-        target = None
-        for p in positions:
-            pos_side = p.get("side")
-            if (side == "long" and pos_side == "long") or (side == "short" and pos_side == "short"):
-                target = p
-                break
-        if not target:
-            return None
-        contracts = float(target.get("contracts", 0) or 0)
+        if contracts is None:
+            positions = await self.get_positions([resolved])
+            target = None
+            for p in positions:
+                pos_side = p.get("side")
+                if (side == "long" and pos_side == "long") or (side == "short" and pos_side == "short"):
+                    target = p
+                    break
+            if not target:
+                return None
+            contracts = float(target.get("contracts", 0) or 0)
         try:
             close_side = "sell" if side == "long" else "buy"
             order = await self.exchange.create_order(

@@ -16,6 +16,9 @@ class Trader:
         self._candidate_symbols = []
         self._last_symbol_refresh = 0
         self._refresh_lock = asyncio.Lock()
+        # Circuit breaker: skip symbols that fail with -2027 (max position)
+        self._fail2027_counts: dict[str, int] = {}
+        self._fail2027_max = 5  # Skip after 5 consecutive failures
 
     def _load_config(self):
         try:
@@ -53,6 +56,21 @@ class Trader:
 
     def stop(self):
         self.running = False
+
+    def _is_skipped_2027(self, symbol: str) -> bool:
+        """Check if symbol is circuit-broken due to consecutive -2027 errors."""
+        return self._fail2027_counts.get(symbol, 0) >= self._fail2027_max
+
+    def _record_2027_failure(self, symbol: str):
+        """Record a -2027 failure for circuit breaker."""
+        self._fail2027_counts[symbol] = self._fail2027_counts.get(symbol, 0) + 1
+        if self._fail2027_counts[symbol] >= self._fail2027_max:
+            log.warning(f"CIRCUIT BREAKER: skipping {symbol} after {self._fail2027_max} consecutive -2027 failures")
+
+    def _clear_2027_failure(self, symbol: str):
+        """Clear -2027 failure counter on success."""
+        if symbol in self._fail2027_counts:
+            del self._fail2027_counts[symbol]
 
     async def _ensure_symbols(self):
         """Refresh candidate symbols if interval has passed."""
@@ -92,56 +110,52 @@ class Trader:
         # Refresh prices every tick so calc_min_contracts uses latest price
         await self.client.refresh_prices(candidate_symbols)
 
-        # STEP 1: Get exchange positions for candidate symbols
-        exchange_positions = await self.client.get_positions(candidate_symbols)
-
-        # STEP 2: All-close check — only on system-tracked positions
-        if cfg.get("enable_all_close", False):
-            await self.check_all_close(candidate_symbols, sides)
-
-        # Re-fetch after potential all-close
-        exchange_positions = await self.client.get_positions(candidate_symbols)
-
-        # STEP 3: Single-symbol profit close — ALL positions (not limited to candidates)
+        # STEP 1: Fetch all positions ONCE at start of tick
         all_positions = await self.client.get_positions()
+        exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
+
+        # STEP 2: All-close check — passes positions directly, no re-fetch
+        if cfg.get("enable_all_close", False):
+            await self.check_all_close(candidate_symbols, sides, all_positions)
+            # Re-fetch after all-close (positions changed)
+            all_positions = await self.client.get_positions()
+            exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
+
+        # STEP 3: Single-symbol profit close — pass positions directly
         for p in list(all_positions):
             symbol = self.client.user_symbol(p["symbol"])
-            pos_side = p.get("side")
-            if symbol in skip:
+            if symbol in skip or self._is_skipped_2027(symbol):
                 continue
-            await self.check_single_close(p, symbol, pos_side)
+            await self.check_single_close(p, symbol, p.get("side"))
 
         # Re-fetch after single closes
-        exchange_positions = await self.client.get_positions(candidate_symbols)
         all_positions = await self.client.get_positions()
+        exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
 
-        # STEP 3.5: Single pair close — all positions with both long+short
+        # STEP 3.5: Single pair close — pass positions directly
         if cfg.get("enable_single_pair_close", False):
             await self.check_single_pair_close(all_positions, skip)
+            # Re-fetch after pair closes
+            all_positions = await self.client.get_positions()
+            exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
 
-        # Re-fetch after pair closes
-        exchange_positions = await self.client.get_positions(candidate_symbols)
-
-        # STEP 4: Margin call — add position if loss exceeds threshold (all positions, skip whitelist)
+        # STEP 4: Margin call — pass positions directly
         if cfg.get("enable_margin_call", False):
-            all_positions_for_margin = await self.client.get_positions()
-            await self.check_margin_call(all_positions_for_margin, skip)
+            await self.check_margin_call(all_positions, skip)
+            # Re-fetch after margin calls
+            all_positions = await self.client.get_positions()
+            exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
 
-        # Re-fetch after margin calls
-        exchange_positions = await self.client.get_positions(candidate_symbols)
-
-        # STEP 5: Replenish only if system has no tracked open for that side
-        await self.replenish_missing(exchange_positions, candidate_symbols, sides)
+        # STEP 5: Replenish — pass positions directly, no internal re-fetch
+        await self.replenish_missing(exchange_positions, candidate_symbols, sides, all_positions)
 
     # ========== All-close: all positions excluding skip whitelist ==========
 
-    async def check_all_close(self, symbols, sides):
+    async def check_all_close(self, symbols, sides, all_positions):
         cfg = self.config
         threshold = cfg.get("all_close_threshold", 0.002)
         skip = set(cfg.get("skip_symbols", []))
 
-        # Get ALL exchange positions (not limited to system-tracked)
-        all_positions = await self.client.get_positions()
         if not all_positions:
             return
 
@@ -186,7 +200,7 @@ class Trader:
             for t in targets:
                 sym = t["symbol"]
                 pos_side = t["side"]
-                result = await self.client.close_position(sym, pos_side)
+                result = await self.client.close_position(sym, pos_side, t["contracts"])
                 if result:
                     # Get open_fee from system tracking if available
                     open_fee = 0
@@ -210,7 +224,7 @@ class Trader:
                         open_fee=open_fee,
                     )
             # Replenish all
-            await self.replenish_all(symbols, sides)
+            await self.replenish_all(symbols, sides, all_positions)
 
     # ========== Single close ==========
 
@@ -232,7 +246,7 @@ class Trader:
         profit_rate = unrealized_pnl / position_value
         if profit_rate >= threshold:
             log.info(f"SINGLE CLOSE {symbol} {pos_side}: pnl={unrealized_pnl:.4f} rate={profit_rate:.4%}")
-            result = await self.client.close_position(symbol, pos_side)
+            result = await self.client.close_position(symbol, pos_side, contracts)
             if result:
                 # Get open_fee before removing
                 open_fee = 0
@@ -298,7 +312,7 @@ class Trader:
             if avg_rate >= threshold:
                 log.info(f"SINGLE PAIR CLOSE {sym}: avg_rate={avg_rate:.4%} rates={[f'{r:.4%}' for r in rates]}")
                 for side in ("long", "short"):
-                    result = await self.client.close_position(sym, side)
+                    result = await self.client.close_position(sym, side, contracts_map[side])
                     if result:
                         open_fee = 0
                         if self.db.has_open(sym, side):
@@ -369,30 +383,18 @@ class Trader:
 
     # ========== Replenish ==========
 
-    async def _is_position_limit_reached(self) -> bool:
-        cfg = self._get_config()
-        max_count = cfg.get("max_position_count", 0)
-        if max_count <= 0:
-            return False
-        all_positions = await self.client.get_positions()
-        if len(all_positions) >= max_count:
-            return True
-        return False
-
-    async def replenish_missing(self, positions, symbols, sides):
+    async def replenish_missing(self, positions, symbols, sides, all_positions):
         cfg = self._get_config()
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
         max_count = cfg.get("max_position_count", 0)
 
         # Check position count limit before any open
         if max_count > 0:
-            all_positions = await self.client.get_positions()
             if len(all_positions) >= max_count:
                 log.info(f"REPLENISH SKIP: total positions {len(all_positions)} >= limit {max_count}")
                 return
 
-        # Fetch ALL positions to inspect opposite-side entry prices
-        all_positions = await self.client.get_positions()
+        # Use passed positions to inspect opposite-side entry prices
         position_map = {}
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])
@@ -409,8 +411,8 @@ class Trader:
         for sym in symbols:
             for side in sides:
                 key = f"{sym}:{side}"
-                # Only open if NOT already on exchange AND NOT already tracked by system
-                if key not in current and not self.db.has_open(sym, side):
+                # Only open if NOT already on exchange AND NOT already tracked by system AND not circuit-broken
+                if key not in current and not self.db.has_open(sym, side) and not self._is_skipped_2027(sym):
                     if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
                         continue
                     open_side = "buy" if side == "long" else "sell"
@@ -418,17 +420,15 @@ class Trader:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def replenish_all(self, symbols, sides):
+    async def replenish_all(self, symbols, sides, all_positions):
         cfg = self._get_config()
         max_count = cfg.get("max_position_count", 0)
         if max_count > 0:
-            all_positions = await self.client.get_positions()
             if len(all_positions) >= max_count:
                 log.info(f"REPLENISH ALL SKIP: total positions {len(all_positions)} >= limit {max_count}")
                 return
 
-        # Fetch all positions for stop-check
-        all_positions = await self.client.get_positions()
+        # Use passed positions for stop-check
         position_map = {}
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])
@@ -440,6 +440,8 @@ class Trader:
         tasks = []
         for sym in symbols:
             for side in sides:
+                if self._is_skipped_2027(sym):
+                    continue
                 if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
                     continue
                 open_side = "buy" if side == "long" else "sell"
@@ -450,8 +452,12 @@ class Trader:
 
     async def _do_open(self, symbol: str, open_side: str, side: str):
         """Open position and track it in database."""
+        # Circuit breaker: skip if already at max consecutive failures
+        if self._is_skipped_2027(symbol):
+            return
         result = await self.client.safe_open(symbol, open_side)
         if result:
+            self._clear_2027_failure(symbol)
             market = self.client.get_market_info(symbol)
             contract_size = market.get("contractSize", 1) or 1
             open_fee = result["average"] * result["amount"] * contract_size * 0.0005
@@ -464,6 +470,7 @@ class Trader:
                 open_fee=open_fee,
             )
         else:
+            self._record_2027_failure(symbol)
             log.warning(f"_do_open failed: {symbol} {side} ({open_side})")
 
     # ========== Record trade ==========
