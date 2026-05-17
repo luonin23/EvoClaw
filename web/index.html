@@ -1123,24 +1123,17 @@ function drawChart(data) {
     ctx.fill();
   });
 
-  // X labels — skip overlapping
+  // X labels — show every label
   ctx.fillStyle = 'var(--text-tertiary)';
-  ctx.font = '10px var(--font-mono)';
+  ctx.font = '9px var(--font-mono)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  const maxLabels = Math.max(4, Math.floor(chartW / 50));
-  const xStep = Math.max(1, Math.floor(data.length / maxLabels));
-  let lastX = -999;
   data.forEach((point, i) => {
-    if (i % xStep !== 0 && i !== data.length - 1) return;
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    if (x - lastX < 40) return;
-    lastX = x;
-    // Shorten label: "2026-05-17" -> "05-17", "04:00" stays
+    // Shorten: day → just day number, hour → HH:MM
     let lbl = point.label;
-    if (lbl && lbl.length > 5 && lbl.includes('-') && !lbl.includes(':')) {
-      const parts = lbl.split('-');
-      if (parts.length >= 2) lbl = parts.slice(-2).join('-');
+    if (lbl && lbl.includes('-')) {
+      lbl = lbl.split('-').pop(); // "2026-05-17" → "17"
     }
     ctx.fillText(lbl, x, height - 32);
   });
