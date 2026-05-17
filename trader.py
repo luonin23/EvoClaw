@@ -19,6 +19,8 @@ class Trader:
         # Circuit breaker: skip symbols that fail with -2027 (max position)
         self._fail2027_counts: dict[str, int] = {}
         self._fail2027_max = 5  # Skip after 5 consecutive failures
+        # System position lookup cache: built once per tick, O(1) lookup for open_fee
+        self._system_pos_map: dict[str, dict] = {}  # "symbol:side" -> open_position row
 
     def _load_config(self):
         try:
@@ -114,6 +116,11 @@ class Trader:
         all_positions = await self.client.get_positions()
         exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
 
+        # Build system position lookup cache (O(1) instead of O(n) per lookup)
+        self._system_pos_map = {}
+        for sp in self.db.get_open_positions():
+            self._system_pos_map[f"{sp['symbol']}:{sp['side']}"] = sp
+
         # STEP 2: All-close check — passes positions directly, no re-fetch
         if cfg.get("enable_all_close", False):
             await self.check_all_close(candidate_symbols, sides, all_positions)
@@ -159,12 +166,6 @@ class Trader:
         if not all_positions:
             return
 
-        # Build system position map for open_fee lookup
-        system_positions = self.db.get_open_positions()
-        system_map = {}
-        for sp in system_positions:
-            system_map[f"{sp['symbol']}:{sp['side']}"] = sp
-
         total_pnl = 0.0
         total_value = 0.0
         targets = []  # positions to close
@@ -204,10 +205,11 @@ class Trader:
                 if result:
                     # Get open_fee from system tracking if available
                     open_fee = 0
-                    sp = system_map.get(f"{sym}:{pos_side}")
+                    sp = self._system_pos_map.get(f"{sym}:{pos_side}")
                     if sp:
                         open_fee = sp.get("open_fee", 0)
                         self.db.remove_open(sym, pos_side)
+                        self._system_pos_map.pop(f"{sym}:{pos_side}", None)
                     if open_fee <= 0:
                         # Estimate for manual positions
                         market = self.client.get_market_info(sym)
@@ -248,15 +250,14 @@ class Trader:
             log.info(f"SINGLE CLOSE {symbol} {pos_side}: pnl={unrealized_pnl:.4f} rate={profit_rate:.4%}")
             result = await self.client.close_position(symbol, pos_side, contracts)
             if result:
-                # Get open_fee before removing
+                # O(1) lookup for open_fee from cached map
                 open_fee = 0
-                if self.db.has_open(symbol, pos_side):
-                    for sp in self.db.get_open_positions():
-                        if sp["symbol"] == symbol and sp["side"] == pos_side:
-                            open_fee = sp.get("open_fee", 0)
-                            break
+                sp = self._system_pos_map.get(f"{symbol}:{pos_side}")
+                if sp:
+                    open_fee = sp.get("open_fee", 0)
                 # Remove from tracking if tracked
                 self.db.remove_open(symbol, pos_side)
+                self._system_pos_map.pop(f"{symbol}:{pos_side}", None)
                 # Record trade
                 await self._record_trade(
                     symbol=symbol,
@@ -315,12 +316,11 @@ class Trader:
                     result = await self.client.close_position(sym, side, contracts_map[side])
                     if result:
                         open_fee = 0
-                        if self.db.has_open(sym, side):
-                            for sp in self.db.get_open_positions():
-                                if sp["symbol"] == sym and sp["side"] == side:
-                                    open_fee = sp.get("open_fee", 0)
-                                    break
+                        sp = self._system_pos_map.get(f"{sym}:{side}")
+                        if sp:
+                            open_fee = sp.get("open_fee", 0)
                         self.db.remove_open(sym, side)
+                        self._system_pos_map.pop(f"{sym}:{side}", None)
                         await self._record_trade(
                             symbol=sym, side=side,
                             entry_price=entry_map[side],

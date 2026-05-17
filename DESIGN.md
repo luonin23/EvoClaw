@@ -1,6 +1,6 @@
 # EvoClaw - 高速微盈利交易系统 设计文档
 
-> 最后更新: 2026-05-17 | 版本: v1.7 (get_positions 减少冗余调用 + -2027 circuit breaker + close_position 传入 contracts)
+> 最后更新: 2026-05-17 | 版本: v1.8 (tick 循环内 DB 查找优化 + _system_pos_map 缓存)
 
 ## 一、系统设计目标
 
