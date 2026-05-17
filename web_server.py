@@ -18,18 +18,21 @@ class WebServer:
         self.app.router.add_get("/", self.handle_index)
         self.app.router.add_get("/api/config", self.api_config_get)
         self.app.router.add_post("/api/config", self.api_config_set)
-        self.app.router.add_get("/api/account", self.api_account)
-        self.app.router.add_get("/api/positions", self.api_positions)
-        self.app.router.add_get("/api/positions-map", self.api_positions_map)
-        self.app.router.add_get("/api/stats", self.api_stats)
+        self.app.router.add_get("/api/account", self.api_account_cached)
+        self.app.router.add_get("/api/positions", self.api_positions_cached)
+        self.app.router.add_get("/api/positions-map", self.api_positions_map_cached)
+        self.app.router.add_get("/api/stats", self.api_stats_cached)
         self.app.router.add_get("/api/trades", self.api_trades)
         self.app.router.add_get("/api/system", self.api_system)
-        self.app.router.add_get("/api/profit-trend", self.api_profit_trend)
+        self.app.router.add_get("/api/profit-trend", self.api_profit_trend_cached)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
         # System metrics cache for rate calculations
         self._last_cpu = None
         self._last_net = None
         self._last_system_time = None
+        # Response cache to reduce Binance API calls
+        self._api_cache = {}
+        self._api_cache_ttl = 2  # seconds
 
     def _load_config(self):
         try:
@@ -37,6 +40,31 @@ class WebServer:
                 return json.load(f)
         except Exception:
             return {}
+
+    async def _cached_response(self, key, handler, request):
+        """Return cached response if within TTL, otherwise call handler and cache."""
+        now = time.monotonic()
+        cached = self._api_cache.get(key)
+        if cached and now - cached[0] < self._api_cache_ttl:
+            return cached[1]
+        resp = await handler(request)
+        self._api_cache[key] = (now, resp)
+        return resp
+
+    async def api_account_cached(self, request):
+        return await self._cached_response("account", self.api_account, request)
+
+    async def api_positions_cached(self, request):
+        return await self._cached_response("positions", self.api_positions, request)
+
+    async def api_positions_map_cached(self, request):
+        return await self._cached_response("positions_map", self.api_positions_map, request)
+
+    async def api_stats_cached(self, request):
+        return await self._cached_response("stats", self.api_stats, request)
+
+    async def api_profit_trend_cached(self, request):
+        return await self._cached_response("profit_trend", self.api_profit_trend, request)
 
     async def handle_index(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
