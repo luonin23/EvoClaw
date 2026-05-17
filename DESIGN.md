@@ -1,6 +1,6 @@
 # EvoClaw - 高速微盈利交易系统 设计文档
 
-> 最后更新: 2026-05-16 | 版本: v1.5 (持仓矩阵全屏首页 + 亏损统计重构 + 实时/历史数据一致性修复)
+> 最后更新: 2026-05-17 | 版本: v1.6 (矩阵去 USDT 后缀 + 自适应文字 + 盈利趋势图表 + API 缓存 + USDC 过滤)
 
 ## 一、系统设计目标
 
@@ -1541,7 +1541,7 @@ WantedBy=multi-user.target
 | `web/index.html` | ✅ 完成 | 深色主题、移动端适配、配置分组、持仓状态、多空平仓统计、**v1.4 补仓/加仓配置** |
 | `main.py` | ✅ 完成 | 启动流程、信号处理、日志系统、动态选币初始化 |
 | `config.json` | ✅ 完成 | 热加载支持（含 v1.4 新增字段） |
-| `DESIGN.md` | ✅ 完成 | 本文档（包含完整实现细节，**v1.5** 更新） |
+| `DESIGN.md` | ✅ 完成 | 本文档（包含完整实现细节，**v1.6** 更新） |
 
 ---
 
@@ -1636,3 +1636,88 @@ for p in all_positions:
 - 控制最高持仓上限，所有开仓路径（replenish_missing / replenish_all / 启动开仓）均检查此限制
 - 矩阵网格数量同步此配置（`api/positions-map` 返回 `max_slots`）
 - 前端根据 `max_slots` 动态重建网格
+
+## 十四、v1.6 更新记录
+
+### 14.1 持仓矩阵去掉 USDT/USDC 后缀
+
+**v1.6 新增**：矩阵单元格中的币种名称不再显示 USDT/USDC 后缀，提升可读性。
+
+- `web/index.html`：`displaySymbol = symbol.replace(/USDT$/, '').replace(/USDC$/, '')`
+- 不影响内部逻辑，仅前端展示层处理
+
+### 14.2 数据仪表盘文字自适应
+
+**v1.6 新增**：所有统计卡片中的数值和标签使用 `clamp()` 实现响应式字体大小，随窗口宽度自动缩放。
+
+- 数值：`font-size: clamp(11px, 2.5vw, 15px)`
+- 标签：`font-size: clamp(8px, 1.8vw, 10px)`
+- 保证在小屏手机和大屏桌面都有合适的可读性
+
+### 14.3 盈利趋势图表
+
+**v1.6 新增**：账户概览上方增加「盈利趋势」独立区块，使用 Canvas 绘制柱状图。
+
+**功能**：
+- 按小时或按天聚合盈亏数据（切换按钮）
+- 数据来源：`/api/profit-trend?period=hour|day`，查询 `trades` 表按时间聚合
+- 绿色柱 = 盈利，红色柱 = 亏损
+- 自动计算最大/最小值做 Y 轴归一化
+
+**后端实现**（`web_server.py`）：
+```python
+async def api_profit_trend(self, request):
+    period = request.query.get("period", "hour")  # hour | day
+    now = datetime.now(timezone.utc)
+    if period == "day":
+        since = now - timedelta(days=30)
+        fmt = "%Y-%m-%d"
+    else:
+        since = now - timedelta(days=7)
+        fmt = "%Y-%m-%d %H:00"
+    # 按 fmt 分组聚合 SUM(pnl)
+```
+
+**前端实现**：
+- `loadProfitTrend()` 异步加载数据
+- `drawChart()` Canvas 渲染，支持高 DPI 屏幕
+- `setTrendPeriod()` 切换周期并重新加载
+
+### 14.4 API 响应缓存（防 Binance IP 封禁）
+
+**v1.6-fix1**：前端每 3 秒同时请求 4-5 个 API + 交易主循环每秒调用 REST API，触发 Binance `418 I'm a teapot` IP 封禁，导致全部 API 返回 500。
+
+**修复方案**：
+
+| 措施 | 实现 |
+|------|------|
+| 后端 2s 缓存 | `WebServer._api_cache` 对 `/api/account`、`/api/stats`、`/api/positions-map`、`/api/profit-trend` 做 2 秒 TTL 缓存 |
+| 前端延长轮询 | `refresh` 3s → 5s；`loadSystem` 5s → 10s |
+
+```python
+async def _cached_response(self, key, handler, request):
+    now = time.monotonic()
+    cached = self._api_cache.get(key)
+    if cached and now - cached[0] < self._api_cache_ttl:
+        return cached[1]
+    resp = await handler(request)
+    self._api_cache[key] = (now, resp)
+    return resp
+```
+
+> **踩坑记录**：Binance 对 IP 级别的 REST API 调用有严格限流，超过阈值会封禁 IP（返回 418），封禁时长从几秒到数分钟不等。使用 WebSocket 可避免此问题，但当前系统基于 ccxt REST，只能通过减少调用频率缓解。
+
+### 14.5 排除 USDC 市场，只交易 USDT
+
+**v1.6-fix2**：系统意外选择了 USDC 计价的合约（如 XRP/USDC:USDC），但只应交易 USDT-M 合约。
+
+**修复**：`ExchangeClient.load_markets()` 增加 `quote == "USDT"` 过滤。
+
+```python
+if m and m.get("swap") and m.get("quote") == "USDT":
+    self.market_info[symbol] = m
+```
+
+- 加载市场数从 727 减少到 687（排除 40 个 USDC 市场）
+- `get_candidate_symbols` 自动过滤（USDC 不在 `market_info` 中）
+- 现有 USDC 持仓不受影响（只是不再补仓/新开）
