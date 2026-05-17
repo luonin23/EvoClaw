@@ -19,6 +19,8 @@ class Trader:
         # Circuit breaker: skip symbols that fail with -2027 (max position)
         self._fail2027_counts: dict[str, int] = {}
         self._fail2027_max = 5  # Skip after 5 consecutive failures
+        self._fail2027_skipped_at: dict[str, float] = {}  # timestamp when circuit broke
+        self._fail2027_retry_after = 300  # retry after 5 minutes
         # System position lookup cache: built once per tick, O(1) lookup for open_fee
         self._system_pos_map: dict[str, dict] = {}  # "symbol:side" -> open_position row
 
@@ -60,13 +62,28 @@ class Trader:
         self.running = False
 
     def _is_skipped_2027(self, symbol: str) -> bool:
-        """Check if symbol is circuit-broken due to consecutive -2027 errors."""
-        return self._fail2027_counts.get(symbol, 0) >= self._fail2027_max
+        """Check if symbol is circuit-broken due to consecutive -2027 errors.
+        Auto-resets after _fail2027_retry_after seconds."""
+        count = self._fail2027_counts.get(symbol, 0)
+        if count >= self._fail2027_max:
+            # Check if retry window has passed
+            skipped_at = self._fail2027_skipped_at.get(symbol)
+            if skipped_at:
+                now = datetime.now(timezone.utc).timestamp()
+                if now - skipped_at >= self._fail2027_retry_after:
+                    log.info(f"CIRCUIT BREAKER: retrying {symbol} after {self._fail2027_retry_after}s")
+                    del self._fail2027_counts[symbol]
+                    del self._fail2027_skipped_at[symbol]
+                    return False
+            return True
+        return False
 
     def _record_2027_failure(self, symbol: str):
         """Record a -2027 failure for circuit breaker."""
         self._fail2027_counts[symbol] = self._fail2027_counts.get(symbol, 0) + 1
         if self._fail2027_counts[symbol] >= self._fail2027_max:
+            if symbol not in self._fail2027_skipped_at:
+                self._fail2027_skipped_at[symbol] = datetime.now(timezone.utc).timestamp()
             log.warning(f"CIRCUIT BREAKER: skipping {symbol} after {self._fail2027_max} consecutive -2027 failures")
 
     def _clear_2027_failure(self, symbol: str):
