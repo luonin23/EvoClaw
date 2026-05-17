@@ -1656,32 +1656,29 @@ for p in all_positions:
 
 ### 14.3 盈利趋势图表
 
-**v1.6 新增**：账户概览上方增加「盈利趋势」独立区块，使用 Canvas 绘制柱状图。
+**v1.6 新增**：账户概览上方增加「盈利趋势」独立区块，使用 Canvas 绘制折线图。
 
 **功能**：
 - 按小时或按天聚合盈亏数据（切换按钮）
 - 数据来源：`/api/profit-trend?period=hour|day`，查询 `trades` 表按时间聚合
-- 绿色柱 = 盈利，红色柱 = 亏损
+- 绿色线 = 累计已平仓盈利率（盈利），红色线 = 累计已平仓盈利率（亏损）
 - 自动计算最大/最小值做 Y 轴归一化
+- **v1.6-fix3**：X 轴标签防截断 + 防重叠，日期标签自动缩短（`MM-DD`）
 
 **后端实现**（`web_server.py`）：
 ```python
 async def api_profit_trend(self, request):
     period = request.query.get("period", "hour")  # hour | day
-    now = datetime.now(timezone.utc)
-    if period == "day":
-        since = now - timedelta(days=30)
-        fmt = "%Y-%m-%d"
-    else:
-        since = now - timedelta(days=7)
-        fmt = "%Y-%m-%d %H:00"
-    # 按 fmt 分组聚合 SUM(pnl)
+    balance_data = await self.client.get_balance()
+    balance = balance_data.get("balance", 0)
+    # 按时间段聚合 pnl，计算累计盈利率 = cumulative_pnl / balance
 ```
 
 **前端实现**：
 - `loadProfitTrend()` 异步加载数据
 - `drawChart()` Canvas 渲染，支持高 DPI 屏幕
 - `setTrendPeriod()` 切换周期并重新加载
+- 单 Y 轴显示盈利率（%），底部标签防重叠
 
 ### 14.4 API 响应缓存（防 Binance IP 封禁）
 
