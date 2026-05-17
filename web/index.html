@@ -1041,7 +1041,7 @@ function setTrendPeriod(period) {
 
 function drawChart(data) {
   const canvas = document.getElementById('profitChart');
-  if (!canvas) return;
+  if (!canvas || !data || data.length === 0) return;
   const ctx = canvas.getContext('2d');
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -1050,16 +1050,23 @@ function drawChart(data) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const width = rect.width;
   const height = rect.height;
-  const pad = { top: 16, right: 10, bottom: 28, left: 44 };
+  const pad = { top: 18, right: 56, bottom: 40, left: 48 };
   const chartW = Math.max(1, width - pad.left - pad.right);
   const chartH = Math.max(1, height - pad.top - pad.bottom);
 
   const rates = data.map(p => p.rate);
+  const pnls = data.map(p => p.cumulative_pnl || 0);
   let minRate = Math.min(...rates, 0);
   let maxRate = Math.max(...rates, 0);
   if (minRate === maxRate) { maxRate += 0.001; minRate -= 0.001; }
-  const range = maxRate - minRate;
+  const rateRange = maxRate - minRate;
 
+  let minPnl = Math.min(...pnls, 0);
+  let maxPnl = Math.max(...pnls, 0);
+  if (minPnl === maxPnl) { maxPnl += 0.01; minPnl -= 0.01; }
+  const pnlRange = maxPnl - minPnl;
+
+  const isProfit = rates[rates.length - 1] >= 0;
   ctx.clearRect(0, 0, width, height);
 
   // Grid
@@ -1073,74 +1080,142 @@ function drawChart(data) {
     ctx.stroke();
   }
 
-  // Zero line
+  // Zero line (rate)
   if (minRate < 0 && maxRate > 0) {
-    const zeroY = pad.top + chartH - ((0 - minRate) / range) * chartH;
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    const zeroY = pad.top + chartH - ((0 - minRate) / rateRange) * chartH;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(pad.left, zeroY);
     ctx.lineTo(pad.left + chartW, zeroY);
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
-  // Area
-  const isProfit = rates[rates.length - 1] >= 0;
-  ctx.beginPath();
-  data.forEach((point, i) => {
+  // Helper: get x/y for rate line
+  function getRateXY(i) {
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
+    const y = pad.top + chartH - ((data[i].rate - minRate) / rateRange) * chartH;
+    return [x, y];
+  }
+  function getPnlXY(i) {
+    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+    const y = pad.top + chartH - ((pnls[i] - minPnl) / pnlRange) * chartH;
+    return [x, y];
+  }
+
+  // Rate area
+  ctx.beginPath();
+  data.forEach((_, i) => {
+    const [x, y] = getRateXY(i);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
   ctx.lineTo(pad.left + chartW, pad.top + chartH);
   ctx.lineTo(pad.left, pad.top + chartH);
   ctx.closePath();
-  ctx.fillStyle = isProfit ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
+  ctx.fillStyle = isProfit ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)';
   ctx.fill();
 
-  // Line
+  // PnL line (amount) — yellow/amber
   ctx.beginPath();
-  ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
+  ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
-  data.forEach((point, i) => {
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
+  data.forEach((_, i) => {
+    const [x, y] = getPnlXY(i);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
 
-  // Dots
+  // Rate line (percentage) — green/red
+  ctx.beginPath();
+  ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
+  data.forEach((_, i) => {
+    const [x, y] = getRateXY(i);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Dots for rate line
   ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
-  data.forEach((point, i) => {
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
+  data.forEach((_, i) => {
+    const [x, y] = getRateXY(i);
     ctx.beginPath();
     ctx.arc(x, y, 2.5, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  // X labels
+  // Dots for pnl line
+  ctx.fillStyle = '#f59e0b';
+  data.forEach((_, i) => {
+    const [x, y] = getPnlXY(i);
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // X labels — skip overlapping
   ctx.fillStyle = 'var(--text-tertiary)';
   ctx.font = '10px var(--font-mono)';
   ctx.textAlign = 'center';
-  const step = Math.max(1, Math.floor(data.length / 6));
+  ctx.textBaseline = 'top';
+  const maxLabels = Math.max(4, Math.floor(chartW / 50));
+  const xStep = Math.max(1, Math.floor(data.length / maxLabels));
+  let lastX = -999;
   data.forEach((point, i) => {
-    if (i % step === 0 || i === data.length - 1) {
-      const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-      ctx.fillText(point.label, x, height - 8);
+    if (i % xStep !== 0 && i !== data.length - 1) return;
+    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+    if (x - lastX < 40) return;
+    lastX = x;
+    // Shorten label: "2026-05-17" -> "05-17", "04:00" stays
+    let lbl = point.label;
+    if (lbl && lbl.length > 5 && lbl.includes('-') && !lbl.includes(':')) {
+      const parts = lbl.split('-');
+      if (parts.length >= 2) lbl = parts.slice(-2).join('-');
     }
+    ctx.fillText(lbl, x, height - 32);
   });
 
-  // Y labels
+  // Left Y labels (rate %)
+  ctx.fillStyle = 'var(--text-tertiary)';
+  ctx.font = '10px var(--font-mono)';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   for (let i = 0; i <= 4; i++) {
-    const rate = minRate + range * (1 - i / 4);
+    const rate = minRate + rateRange * (1 - i / 4);
     const y = pad.top + chartH * i / 4;
     ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - 6, y);
   }
+
+  // Right Y labels (pnl amount)
+  ctx.textAlign = 'left';
+  for (let i = 0; i <= 4; i++) {
+    const pnl = minPnl + pnlRange * (1 - i / 4);
+    const y = pad.top + chartH * i / 4;
+    ctx.fillText(pnl.toFixed(2), pad.left + chartW + 6, y);
+  }
+
+  // Legend
+  const legendY = 8;
+  const legendH = 14;
+  // Rate legend
+  ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
+  ctx.fillRect(pad.left, legendY, 12, 3);
+  ctx.fillStyle = 'var(--text-secondary)';
+  ctx.font = '10px var(--font-mono)';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('盈利率', pad.left + 16, legendY - 3);
+  // PnL legend
+  ctx.fillStyle = '#f59e0b';
+  ctx.fillRect(pad.left + 60, legendY, 12, 3);
+  ctx.fillStyle = 'var(--text-secondary)';
+  ctx.fillText('盈利额', pad.left + 76, legendY - 3);
 }
 
 async function loadProfitTrend() {
