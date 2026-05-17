@@ -105,39 +105,53 @@ class WebServer:
         try:
             balance = await self.client.get_balance()
             all_positions = await self.client.get_positions()
-            unrealized = sum(float(p.get("unrealizedPnl", 0) or 0) for p in all_positions)
 
-            # Position breakdown for all positions
-            long_pos_count = sum(1 for p in all_positions if p.get("side") == "long")
-            short_pos_count = sum(1 for p in all_positions if p.get("side") == "short")
-
-            # Total unrealized PnL rate for ALL positions
+            # Single pass: compute all metrics together
+            unrealized = 0.0
+            long_pos_count = 0
+            short_pos_count = 0
             total_pnl = 0.0
             total_value = 0.0
-            for p in all_positions:
-                pnl = float(p.get("unrealizedPnl", 0) or 0)
-                entry = float(p.get("entryPrice", 0) or 0)
-                contracts = float(p.get("contracts", 0) or 0)
-                market = self.client.get_market_info(p["symbol"])
-                cs = market.get("contractSize", 1) or 1
-                val = entry * contracts * cs
-                total_pnl += pnl
-                total_value += val
-            total_pnl_rate = total_pnl / total_value if total_value > 0 else 0
-
-            # Worst position tracking (real-time)
-            worst_pnl = 0.0          # most negative pnl amount (real-time)
-            worst_rate = 0.0         # most negative rate (real-time)
+            worst_pnl = 0.0
+            worst_rate = 0.0
             current_max_loss_rate = 0.0
             current_max_loss_pnl = 0.0
+            sym_set = set()
+            sym_total_pnl = 0.0
+            sym_total_value = 0.0
+
+            # Use trader cached symbols; fallback to config
+            if self.trader and self.trader._candidate_symbols:
+                symbols = self.trader._candidate_symbols
+                sym_set = set(symbols)
+            else:
+                cfg = self._load_config()
+                volume_threshold = cfg.get("volume_threshold", 0)
+                price_threshold = cfg.get("price_threshold", 0)
+                if volume_threshold == 0 and price_threshold == 0:
+                    symbols = cfg.get("symbols", [])
+                    sym_set = set(symbols)
+                else:
+                    symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
+                    sym_set = set(symbols)
+
             for p in all_positions:
                 pnl = float(p.get("unrealizedPnl", 0) or 0)
                 entry = float(p.get("entryPrice", 0) or 0)
                 contracts = float(p.get("contracts", 0) or 0)
+                side = p.get("side")
                 market = self.client.get_market_info(p["symbol"])
                 cs = market.get("contractSize", 1) or 1
                 val = entry * contracts * cs
                 rate = pnl / val if val > 0 else 0
+
+                unrealized += pnl
+                if side == "long":
+                    long_pos_count += 1
+                elif side == "short":
+                    short_pos_count += 1
+                total_pnl += pnl
+                total_value += val
                 if rate < current_max_loss_rate:
                     current_max_loss_rate = rate
                 if pnl < current_max_loss_pnl:
@@ -147,19 +161,25 @@ class WebServer:
                 if rate < worst_rate:
                     worst_rate = rate
 
-            # Update historical max loss rate if current is worse
+                # Filter for active symbol subset (reuse same loop, no extra API call)
+                if sym_set:
+                    user_sym = self.client.user_symbol(p["symbol"])
+                    if user_sym in sym_set:
+                        sym_total_pnl += pnl
+                        sym_total_value += val
+
+            total_pnl_rate = total_pnl / total_value if total_value > 0 else 0
+            realtime_rate = sym_total_pnl / sym_total_value if sym_total_value > 0 else 0
+
+            # Update historical stats
             hist_max_loss_rate = self.db.get_runtime_stat("max_position_loss_rate", 0)
             if current_max_loss_rate < hist_max_loss_rate:
                 hist_max_loss_rate = current_max_loss_rate
                 self.db.set_runtime_stat("max_position_loss_rate", hist_max_loss_rate)
-
-            # Update historical max loss pnl independently
             hist_max_loss_pnl = self.db.get_runtime_stat("max_position_loss_pnl", 0)
             if current_max_loss_pnl < hist_max_loss_pnl:
                 hist_max_loss_pnl = current_max_loss_pnl
                 self.db.set_runtime_stat("max_position_loss_pnl", hist_max_loss_pnl)
-
-            # Track historical total position loss peak (account-level)
             hist_total_loss_pnl = self.db.get_runtime_stat("hist_total_loss_pnl", 0)
             hist_total_loss_rate = self.db.get_runtime_stat("hist_total_loss_rate", 0)
             if total_pnl < hist_total_loss_pnl:
@@ -168,36 +188,6 @@ class WebServer:
             if total_pnl_rate < hist_total_loss_rate:
                 hist_total_loss_rate = total_pnl_rate
                 self.db.set_runtime_stat("hist_total_loss_rate", hist_total_loss_rate)
-
-            # Use trader cached symbols; fallback to config if trader not available
-            if self.trader and self.trader._candidate_symbols:
-                symbols = self.trader._candidate_symbols
-            else:
-                cfg = self._load_config()
-                volume_threshold = cfg.get("volume_threshold", 0)
-                price_threshold = cfg.get("price_threshold", 0)
-                if volume_threshold == 0 and price_threshold == 0:
-                    symbols = cfg.get("symbols", [])
-                else:
-                    symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
-
-            # Calculate real-time profit rate for active symbols only
-            if symbols:
-                sym_positions = await self.client.get_positions(symbols)
-                sym_total_pnl = 0.0
-                sym_total_value = 0.0
-                for p in sym_positions:
-                    pnl = float(p.get("unrealizedPnl", 0) or 0)
-                    entry = float(p.get("entryPrice", 0) or 0)
-                    contracts = float(p.get("contracts", 0) or 0)
-                    market = self.client.get_market_info(p["symbol"])
-                    cs = market.get("contractSize", 1) or 1
-                    val = entry * contracts * cs
-                    sym_total_pnl += pnl
-                    sym_total_value += val
-                realtime_rate = sym_total_pnl / sym_total_value if sym_total_value > 0 else 0
-            else:
-                realtime_rate = 0
 
             margin_call_count = int(self.db.get_runtime_stat("margin_call_count", 0))
 
