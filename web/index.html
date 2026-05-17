@@ -1130,10 +1130,12 @@ function drawChart(data) {
   ctx.textBaseline = 'top';
   data.forEach((point, i) => {
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    // Shorten: day → just day number, hour → HH:MM
     let lbl = point.label;
+    // Shorten: day → just day number, hour → HH
     if (lbl && lbl.includes('-')) {
       lbl = lbl.split('-').pop(); // "2026-05-17" → "17"
+    } else if (lbl && lbl.includes(':')) {
+      lbl = lbl.split(':')[0]; // "14:00" → "14"
     }
     ctx.fillText(lbl, x, height - 32);
   });
