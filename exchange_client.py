@@ -21,7 +21,7 @@ class ExchangeClient:
         markets = await self.exchange.load_markets()
         for symbol in self.exchange.symbols:
             m = markets.get(symbol)
-            if m and m.get("swap"):
+            if m and m.get("swap") and m.get("quote") == "USDT":
                 self.market_info[symbol] = m
                 exchange_id = m.get("id", "")
                 if exchange_id and exchange_id not in self.market_info:
@@ -32,7 +32,7 @@ class ExchangeClient:
                 # Reverse map: ccxt symbol -> user symbol (prefer exchange_id form)
                 eid = m.get("id", "")
                 self._reverse_map[symbol] = eid if eid else base
-        log.info(f"Loaded {len(self.market_info)} swap markets, {len(self.symbol_map)} aliases")
+        log.info(f"Loaded {len(self.market_info)} USDT swap markets, {len(self.symbol_map)} aliases")
 
     async def refresh_prices(self, symbols: list):
         resolved = [self.resolve_symbol(s) for s in symbols]
