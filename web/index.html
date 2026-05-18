@@ -1054,7 +1054,12 @@ function setTrendPeriod(period) {
   trendPeriod = period;
   document.getElementById('btnHour').classList.toggle('active', period === 'hour');
   document.getElementById('btnDay').classList.toggle('active', period === 'day');
-  loadProfitTrend();
+  document.getElementById('btnHour').disabled = true;
+  document.getElementById('btnDay').disabled = true;
+  loadProfitTrend().then(() => {
+    document.getElementById('btnHour').disabled = false;
+    document.getElementById('btnDay').disabled = false;
+  });
 }
 
 function drawChart(data) {
@@ -1174,6 +1179,11 @@ async function loadMatrixTab() {
   await Promise.all([loadPositionsMap(posData), loadFullMatrix(posData)]);
 }
 async function loadProfitTrend() {
+  const canvas = document.getElementById('profitChart');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
   const d = await api('/api/profit-trend?period=' + trendPeriod);
   if (!d || !d.data) return;
   drawChart(d.data);

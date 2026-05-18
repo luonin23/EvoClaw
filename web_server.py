@@ -32,7 +32,7 @@ class WebServer:
         self._last_system_time = None
         # Response cache to reduce Binance API calls
         self._api_cache = {}
-        self._api_cache_ttl = 2  # seconds
+        self._api_cache_ttl = 5  # seconds (was 2, reduced API pressure)
 
     def _load_config(self):
         try:
@@ -64,7 +64,8 @@ class WebServer:
         return await self._cached_response("stats", self.api_stats, request)
 
     async def api_profit_trend_cached(self, request):
-        return await self._cached_response("profit_trend", self.api_profit_trend, request)
+        period = request.query.get("period", "hour")
+        return await self._cached_response(f"profit_trend_{period}", self.api_profit_trend, request)
 
     async def handle_index(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
