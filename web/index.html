@@ -1262,7 +1262,7 @@ async function generatePoster() {
 
   try {
     // Capture dashboard panel as background
-    const panel = document.getElementById('panel-dashboard');
+    const panel = document.body;
     const screenshot = await html2canvas(panel, {
       backgroundColor: '#0b0f19',
       scale: 2,
