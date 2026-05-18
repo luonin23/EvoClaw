@@ -1068,11 +1068,18 @@ function drawChart(data) {
   const ctx = canvas.getContext('2d');
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const width = rect.width;
-  const height = rect.height;
+  const cssW = Math.max(1, Math.floor(rect.width));
+  const cssH = Math.max(1, Math.floor(rect.height));
+  // Only resize canvas when CSS size changes to avoid reset/clear
+  if (canvas._cssW !== cssW || canvas._cssH !== cssH) {
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    canvas._cssW = cssW;
+    canvas._cssH = cssH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  const width = cssW;
+  const height = cssH;
   const pad = { top: 16, right: 10, bottom: 40, left: 48 };
   const chartW = Math.max(1, width - pad.left - pad.right);
   const chartH = Math.max(1, height - pad.top - pad.bottom);
@@ -1179,11 +1186,6 @@ async function loadMatrixTab() {
   await Promise.all([loadPositionsMap(posData), loadFullMatrix(posData)]);
 }
 async function loadProfitTrend() {
-  const canvas = document.getElementById('profitChart');
-  if (canvas) {
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
   const d = await api('/api/profit-trend?period=' + trendPeriod);
   if (!d || !d.data) return;
   drawChart(d.data);

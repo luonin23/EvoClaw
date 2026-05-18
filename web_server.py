@@ -33,6 +33,7 @@ class WebServer:
         # Response cache to reduce Binance API calls
         self._api_cache = {}
         self._api_cache_ttl = 5  # seconds (was 2, reduced API pressure)
+        self._balance_cache = (0, 0.0)  # (timestamp, balance)
 
     def _load_config(self):
         try:
@@ -192,6 +193,7 @@ class WebServer:
 
             margin_call_count = int(self.db.get_runtime_stat("margin_call_count", 0))
 
+            self._balance_cache = (time.monotonic(), float(balance.get("balance", 0) or 0))
             return web.json_response({
                 "balance": balance.get("balance", 0),
                 "available_balance": round(balance.get("available_balance", 0), 2),
@@ -371,8 +373,14 @@ class WebServer:
         try:
             from datetime import datetime, timezone, timedelta
             period = request.query.get("period", "hour")  # 'hour' or 'day'
-            balance_data = await self.client.get_balance()
-            balance = balance_data.get("balance", 0)
+            # Use cached balance from api_account to avoid extra network request
+            cached_ts, cached_bal = self._balance_cache
+            if cached_bal > 0 and time.monotonic() - cached_ts < 300:
+                balance = cached_bal
+            else:
+                balance_data = await self.client.get_balance()
+                balance = balance_data.get("balance", 0)
+                self._balance_cache = (time.monotonic(), float(balance) if balance else 0.0)
             if balance <= 0:
                 balance = 1  # avoid division by zero
 
