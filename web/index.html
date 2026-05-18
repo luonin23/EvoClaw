@@ -450,11 +450,13 @@ body{
   .stat-grid{grid-template-columns:repeat(2,1fr)}
 }
 </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 
 <header class="page-header">
   <h1>⚡ EvoClaw</h1>
+  <button class="btn btn-primary" onclick="generatePoster()" id="btnPoster" style="margin-left:auto;margin-right:8px;height:28px;padding:0 12px;font-size:11px;">📸 生成海报</button>
   <div class="status-pill" id="statusBar">
     <span class="status-dot"></span>
     <span id="statusText">连接中...</span>
@@ -873,6 +875,7 @@ async function loadAccount() {
   setClass('posWorstRate', 'stat-value ' + clr(wr));
 
   setText('accMarginCall', d.margin_call_count || 0);
+  window._lastAccount = d;
 }
 
 async function loadStats() {
@@ -900,6 +903,7 @@ async function loadStats() {
   setClass('stShortPnl', 'stat-value ' + clr(d.short_pnl));
   setText('stShortRate', fmtR(d.short_pnl_rate || 0));
   setClass('stShortRate', 'stat-value ' + clr(d.short_pnl_rate));
+  window._lastStats = d;
 }
 
 async function loadSystem() {
@@ -1249,6 +1253,158 @@ document.addEventListener('visibilitychange', () => {
     loadSystem();
   }
 });
+
+async function generatePoster() {
+  const btn = document.getElementById('btnPoster');
+  const oldText = btn.textContent;
+  btn.textContent = '生成中...';
+  btn.disabled = true;
+
+  try {
+    // Capture dashboard panel as background
+    const panel = document.getElementById('panel-dashboard');
+    const screenshot = await html2canvas(panel, {
+      backgroundColor: '#0b0f19',
+      scale: 2,
+      useCORS: true,
+      logging: false,
+    });
+
+    // Create poster canvas 1080x1920 (9:16)
+    const W = 1080, H = 1920;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    // Dark base background
+    ctx.fillStyle = '#0b0f19';
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw screenshot as background (cover fit, top-aligned, slight opacity)
+    const scW = screenshot.width, scH = screenshot.height;
+    const coverScale = Math.max(W / scW, H / scH);
+    const drawW = scW * coverScale, drawH = scH * coverScale;
+    const drawX = (W - drawW) / 2, drawY = 0;
+    ctx.globalAlpha = 0.25;
+    ctx.drawImage(screenshot, drawX, drawY, drawW, drawH);
+    ctx.globalAlpha = 1.0;
+
+    // Dark gradient overlay for readability
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(11,15,25,0.45)');
+    grad.addColorStop(0.35, 'rgba(11,15,25,0.75)');
+    grad.addColorStop(0.55, 'rgba(11,15,25,0.88)');
+    grad.addColorStop(1, 'rgba(11,15,25,0.95)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Title
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 52px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('EvoClaw 交易日报', W / 2, 160);
+
+    // Date
+    const now = new Date();
+    const dateStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月' + now.getDate() + '日';
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '28px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(dateStr, W / 2, 215);
+
+    // Decorative line
+    ctx.strokeStyle = 'rgba(14,165,233,0.6)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(W / 2 - 120, 245);
+    ctx.lineTo(W / 2 + 120, 245);
+    ctx.stroke();
+
+    // Fetch today PnL from profit-trend day
+    let todayPnl = 0;
+    try {
+      const pt = await api('/api/profit-trend?period=day');
+      if (pt && pt.data && pt.data.length) {
+        todayPnl = pt.data[pt.data.length - 1].cumulative_pnl || 0;
+      }
+    } catch (e) { /* ignore */ }
+
+    const acc = window._lastAccount || {};
+    const st = window._lastStats || {};
+
+    const cards = [
+      { label: '账户余额', value: (acc.balance || 0).toFixed(2) + ' USDT', color: '#0ea5e9' },
+      { label: '当日盈亏', value: (todayPnl >= 0 ? '+' : '') + todayPnl.toFixed(4) + ' USDT', color: todayPnl >= 0 ? '#10b981' : '#ef4444' },
+      { label: '胜率', value: ((st.win_rate || 0) * 100).toFixed(1) + '%', color: '#a78bfa' },
+      { label: '持仓数', value: (acc.position_count || 0) + ' 个', color: '#f59e0b' },
+    ];
+
+    // Draw cards
+    const cardW = 420, cardH = 220, gapX = 60, gapY = 50;
+    const startX = (W - (cardW * 2 + gapX)) / 2;
+    const startY = 420;
+
+    cards.forEach((card, i) => {
+      const cx = startX + (i % 2) * (cardW + gapX);
+      const cy = startY + Math.floor(i / 2) * (cardH + gapY);
+
+      // Card background
+      ctx.fillStyle = 'rgba(17,24,39,0.85)';
+      ctx.strokeStyle = 'rgba(30,42,58,0.9)';
+      ctx.lineWidth = 2;
+      roundRect(ctx, cx, cy, cardW, cardH, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      // Left accent bar
+      ctx.fillStyle = card.color;
+      ctx.fillRect(cx + 24, cy + 40, 6, cardH - 80);
+
+      // Label
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '24px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(card.label, cx + 48, cy + 75);
+
+      // Value
+      ctx.fillStyle = '#e5e7eb';
+      ctx.font = 'bold 44px "SF Mono", "Fira Code", monospace';
+      ctx.fillText(card.value, cx + 48, cy + 155);
+    });
+
+    // Disclaimer
+    ctx.fillStyle = 'rgba(107,114,128,0.7)';
+    ctx.font = '20px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚠ 数据仅供参考，不构成投资建议', W / 2, H - 80);
+    ctx.fillText('EvoClaw · ' + now.toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'}), W / 2, H - 45);
+
+    // Download
+    const link = document.createElement('a');
+    link.download = 'EvoClaw_' + now.toISOString().slice(0, 10) + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch (err) {
+    console.error('poster error', err);
+    showToast('海报生成失败');
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
 
 loadConfig();
 refresh();
