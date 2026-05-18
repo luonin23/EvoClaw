@@ -462,13 +462,13 @@ body{
 </header>
 
 <div class="tab-bar">
-  <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
-  <button class="tab-btn active" onclick="switchTab('matrix')" id="tab-matrix">持仓矩阵</button>
+  <button class="tab-btn active" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
+  <button class="tab-btn" onclick="switchTab('matrix')" id="tab-matrix">持仓矩阵</button>
   <button class="tab-btn" onclick="switchTab('config')" id="tab-config">交易配置</button>
 </div>
 
 <!-- Tab 1: Dashboard -->
-<div id="panel-dashboard" class="tab-panel">
+<div id="panel-dashboard" class="tab-panel active">
 
   <section class="card">
     <div class="card-head">
@@ -556,7 +556,7 @@ body{
 </div>
 
 <!-- Tab 2: Full Matrix -->
-<div id="panel-matrix" class="tab-panel active">
+<div id="panel-matrix" class="tab-panel">
   <div id="fullMatrix" class="full-matrix"></div>
 </div>
 
@@ -698,7 +698,7 @@ body{
 
 <script>
 let trading = true;
-let currentTab = 'matrix';
+let currentTab = 'dashboard';
 
 function switchTab(tab) {
   currentTab = tab;
@@ -706,6 +706,8 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
   document.getElementById('panel-' + tab).classList.add('active');
+  if (tab === 'dashboard') { loadAccount(); loadStats(); loadProfitTrend(); }
+  else if (tab === 'matrix') { loadPositionsMap(); loadFullMatrix(); }
 }
 
 async function api(path) {
@@ -1160,14 +1162,14 @@ async function refresh() {
   if (window._isRefreshing) return;
   window._isRefreshing = true;
   try {
-    const posData = await api('/api/positions-map');
-    await Promise.all([
-      loadAccount(),
-      loadStats(),
-      loadPositionsMap(posData),
-      loadFullMatrix(posData),
-      loadProfitTrend()
-    ]);
+    const tasks = [];
+    if (currentTab === 'dashboard') {
+      tasks.push(loadAccount(), loadStats(), loadProfitTrend());
+    } else if (currentTab === 'matrix') {
+      const posData = await api('/api/positions-map');
+      tasks.push(loadPositionsMap(posData), loadFullMatrix(posData));
+    }
+    if (tasks.length) await Promise.all(tasks);
     document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
   } catch (e) {
     console.error('refresh error', e);
