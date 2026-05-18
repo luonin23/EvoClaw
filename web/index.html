@@ -365,7 +365,7 @@ body{
   padding:0 14px;
   font-size:12px;
 }
-.full-matrix{
+.full-matrix{contain:layout;
   display:grid;
   grid-template-columns:repeat(10,1fr);
   gap:6px;
@@ -707,7 +707,7 @@ function switchTab(tab) {
   document.getElementById('tab-' + tab).classList.add('active');
   document.getElementById('panel-' + tab).classList.add('active');
   if (tab === 'dashboard') { loadAccount(); loadStats(); loadProfitTrend(); }
-  else if (tab === 'matrix') { loadPositionsMap(); loadFullMatrix(); }
+  else if (tab === 'matrix') { loadMatrixTab(); }
 }
 
 async function api(path) {
@@ -924,9 +924,11 @@ async function loadPositionsMap(posData) {
   const maxSlots = d.max_slots || 100;
   const cols = 10;
 
-  // Build or rebuild grid to match maxSlots
+  // Build once with DocumentFragment
   if (container.children.length !== maxSlots) {
     container.innerHTML = '';
+    window._posMapCells = [];
+    const frag = document.createDocumentFragment();
     for (let i = 0; i < maxSlots; i++) {
       const cell = document.createElement('div');
       const isRightEdge = (i + 1) % cols === 0;
@@ -946,28 +948,25 @@ async function loadPositionsMap(posData) {
           const ttRect = tooltip.getBoundingClientRect();
           let left = rect.right + 8;
           let top = rect.top - 4;
-          if (left + ttRect.width > window.innerWidth - 10) {
-            left = rect.left - ttRect.width - 8;
-          }
-          if (top + ttRect.height > window.innerHeight - 10) {
-            top = rect.bottom - ttRect.height + 4;
-          }
+          if (left + ttRect.width > window.innerWidth - 10) left = rect.left - ttRect.width - 8;
+          if (top + ttRect.height > window.innerHeight - 10) top = rect.bottom - ttRect.height + 4;
           if (top < 10) top = 10;
           tooltip.style.left = left + 'px';
           tooltip.style.top = top + 'px';
         }
       });
-      cell.addEventListener('mouseleave', () => {
-        tooltip.style.display = 'none';
-      });
-      container.appendChild(cell);
+      cell.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+      frag.appendChild(cell);
+      window._posMapCells.push(cell);
     }
+    container.appendChild(frag);
   }
-  // Update cells: green=profit, red=loss, ordered by loss severity
+  // Update cells
   window._posMapSlots = d.slots;
+  const cells = window._posMapCells || Array.from(container.children);
   for (let i = 0; i < maxSlots; i++) {
     const slot = d.slots[i];
-    const cell = container.children[i];
+    const cell = cells[i];
     if (!cell) continue;
     const isRightEdge = (i + 1) % cols === 0;
     const isBottomEdge = i >= maxSlots - cols;
@@ -993,20 +992,33 @@ async function loadFullMatrix(posData) {
   if (!container) return;
   const maxSlots = d.max_slots || 100;
 
-  // Build or rebuild grid
+  // Build once with DocumentFragment + pre-create child elements
   if (container.children.length !== maxSlots) {
     container.innerHTML = '';
+    window._fullMatrixCells = [];
+    const frag = document.createDocumentFragment();
     for (let i = 0; i < maxSlots; i++) {
       const cell = document.createElement('div');
       cell.className = 'full-cell vacant';
       cell.dataset.index = i;
-      container.appendChild(cell);
+      const sym = document.createElement('div'); sym.className = 'fc-sym';
+      const dir = document.createElement('div'); dir.className = 'fc-dir';
+      const price = document.createElement('div'); price.className = 'fc-price';
+      const amt = document.createElement('div'); amt.className = 'fc-amt';
+      const pnl = document.createElement('div'); pnl.className = 'fc-pnl';
+      const rate = document.createElement('div'); rate.className = 'fc-rate';
+      cell.appendChild(sym); cell.appendChild(dir); cell.appendChild(price);
+      cell.appendChild(amt); cell.appendChild(pnl); cell.appendChild(rate);
+      frag.appendChild(cell);
+      window._fullMatrixCells.push({ cell, sym, dir, price, amt, pnl, rate });
     }
+    container.appendChild(frag);
   }
 
+  const cells = window._fullMatrixCells || Array.from(container.children).map(c => ({ cell: c }));
   for (let i = 0; i < maxSlots; i++) {
     const slot = d.slots[i];
-    const cell = container.children[i];
+    const { cell, sym, dir, price, amt, pnl, rate } = cells[i] || { cell: null };
     if (!cell) continue;
     if (slot.occupied) {
       const isProfit = (slot.pnl_rate || 0) >= 0;
@@ -1017,17 +1029,21 @@ async function loadFullMatrix(posData) {
       cell.className = cls;
       const displaySym = slot.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
       cell.title = displaySym + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
-      cell.innerHTML =
-        '<div class="fc-sym">' + displaySym + '</div>' +
-        '<div class="fc-dir">' + (isLong ? '多' : '空') + '</div>' +
-        '<div class="fc-price">' + (slot.entry_price || 0).toFixed(4) + '</div>' +
-        '<div class="fc-amt">' + (slot.contracts || 0).toFixed(2) + '</div>' +
-        '<div class="fc-pnl">' + fmtP(slot.pnl) + '</div>' +
-        '<div class="fc-rate">' + fmtR(slot.pnl_rate) + '</div>';
+      if (sym) sym.textContent = displaySym;
+      if (dir) dir.textContent = isLong ? '多' : '空';
+      if (price) price.textContent = (slot.entry_price || 0).toFixed(4);
+      if (amt) amt.textContent = (slot.contracts || 0).toFixed(2);
+      if (pnl) pnl.textContent = fmtP(slot.pnl);
+      if (rate) rate.textContent = fmtR(slot.pnl_rate);
     } else {
       cell.className = 'full-cell vacant';
       cell.title = '';
-      cell.innerHTML = '';
+      if (sym) sym.textContent = '';
+      if (dir) dir.textContent = '';
+      if (price) price.textContent = '';
+      if (amt) amt.textContent = '';
+      if (pnl) pnl.textContent = '';
+      if (rate) rate.textContent = '';
     }
   }
 }
@@ -1152,6 +1168,11 @@ function drawChart(data) {
   }
 }
 
+
+async function loadMatrixTab() {
+  const posData = await api('/api/positions-map');
+  await Promise.all([loadPositionsMap(posData), loadFullMatrix(posData)]);
+}
 async function loadProfitTrend() {
   const d = await api('/api/profit-trend?period=' + trendPeriod);
   if (!d || !d.data) return;
