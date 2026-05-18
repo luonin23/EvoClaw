@@ -1294,26 +1294,27 @@ async function generatePoster() {
     const drawX = (W - drawW) / 2, drawY = 0;
     ctx.drawImage(screenshot, drawX, drawY, drawW, drawH);
 
-    // 2. Very light edge vignette (not full overlay) so background stays visible
-    const vig = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.9);
-    vig.addColorStop(0, 'rgba(11,15,25,0)');
-    vig.addColorStop(1, 'rgba(11,15,25,0.45)');
+    // 2. Strong radial darkening in center where text lives, clear at edges
+    const vig = ctx.createRadialGradient(W / 2, H * 0.45, H * 0.15, W / 2, H * 0.45, H * 0.85);
+    vig.addColorStop(0, 'rgba(11,15,25,0.72)');
+    vig.addColorStop(0.55, 'rgba(11,15,25,0.45)');
+    vig.addColorStop(1, 'rgba(11,15,25,0.10)');
     ctx.fillStyle = vig;
     ctx.fillRect(0, 0, W, H);
 
     // 3. Title + Date
     const now = new Date();
-    ctx.shadowColor = 'rgba(0,0,0,0.9)';
-    ctx.shadowBlur = 16;
-    ctx.fillStyle = '#e5e7eb';
-    ctx.font = 'bold 56px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowBlur = 24;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 60px "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('EvoClaw 交易日报', W / 2, 170);
+    ctx.fillText('EvoClaw 交易日报', W / 2, 175);
 
     const dateStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月' + now.getDate() + '日';
-    ctx.fillStyle = '#9ca3af';
-    ctx.font = '30px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText(dateStr, W / 2, 230);
+    ctx.fillStyle = '#d1d5db';
+    ctx.font = '32px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(dateStr, W / 2, 240);
     ctx.shadowBlur = 0;
 
     // Decorative line
@@ -1354,36 +1355,42 @@ async function generatePoster() {
       const cx = startX + (i % 2) * (cardW + gapX);
       const cy = startY + Math.floor(i / 2) * (cardH + gapY);
 
-      // Semi-transparent card background (glass effect)
-      ctx.fillStyle = 'rgba(17,24,39,0.35)';
-      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-      ctx.lineWidth = 1.5;
+      // Card background: darker so text pops
+      ctx.fillStyle = 'rgba(11,15,25,0.70)';
       roundRect(ctx, cx, cy, cardW, cardH, 20);
       ctx.fill();
+
+      // Card glow border
+      ctx.strokeStyle = card.color;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = card.color;
+      ctx.shadowBlur = 18;
+      roundRect(ctx, cx, cy, cardW, cardH, 20);
       ctx.stroke();
+      ctx.shadowBlur = 0;
 
       // Left accent bar
       ctx.fillStyle = card.color;
       ctx.shadowColor = card.color;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 14;
       ctx.fillRect(cx + 26, cy + 45, 5, cardH - 90);
       ctx.shadowBlur = 0;
 
-      // Label with shadow for readability over background
-      ctx.shadowColor = 'rgba(0,0,0,0.7)';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#cbd5e1';
+      // Label
+      ctx.shadowColor = 'rgba(0,0,0,0.9)';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = '#e2e8f0';
       ctx.font = '26px "PingFang SC", "Microsoft YaHei", sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText(card.label, cx + 52, cy + 80);
       ctx.shadowBlur = 0;
 
-      // Value with shadow
-      ctx.shadowColor = 'rgba(0,0,0,0.8)';
-      ctx.shadowBlur = 10;
-      ctx.fillStyle = '#f3f4f6';
-      ctx.font = 'bold 46px "SF Mono", "Fira Code", monospace';
-      ctx.fillText(card.value, cx + 52, cy + 160);
+      // Value
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 48px "SF Mono", "Fira Code", monospace';
+      ctx.fillText(card.value, cx + 52, cy + 162);
       ctx.shadowBlur = 0;
     });
 
