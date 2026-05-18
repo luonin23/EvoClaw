@@ -1261,12 +1261,9 @@ async function generatePoster() {
   btn.disabled = true;
 
   try {
-    // Temporarily reveal all tabs so html2canvas captures full page height
     const panels = document.querySelectorAll('.tab-panel');
     const prevDisplays = [];
     panels.forEach(p => { prevDisplays.push(p.style.display); p.style.display = 'block'; });
-
-    // Wait a tick for layout reflow
     await new Promise(r => setTimeout(r, 50));
 
     const screenshot = await html2canvas(document.body, {
@@ -1278,133 +1275,31 @@ async function generatePoster() {
       windowHeight: document.documentElement.scrollHeight,
     });
 
-    // Restore tab visibility
     panels.forEach((p, i) => { p.style.display = prevDisplays[i]; });
 
-    // Create poster canvas 1080x1920 (9:16)
     const W = 1080, H = 1920;
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
 
-    // 1. Background: screenshot at full opacity, cover-fit
+    // Draw screenshot full-width, top-aligned
     const scW = screenshot.width, scH = screenshot.height;
-    const coverScale = Math.max(W / scW, H / scH);
-    const drawW = scW * coverScale, drawH = scH * coverScale;
-    const drawX = (W - drawW) / 2, drawY = 0;
-    ctx.drawImage(screenshot, drawX, drawY, drawW, drawH);
+    const scale = W / scW;
+    ctx.drawImage(screenshot, 0, 0, scW, scH, 0, 0, W, scH * scale);
 
-    // 2. Strong radial darkening in center where text lives, clear at edges
-    const vig = ctx.createRadialGradient(W / 2, H * 0.45, H * 0.15, W / 2, H * 0.45, H * 0.85);
-    vig.addColorStop(0, 'rgba(11,15,25,0.72)');
-    vig.addColorStop(0.55, 'rgba(11,15,25,0.45)');
-    vig.addColorStop(1, 'rgba(11,15,25,0.10)');
-    ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, W, H);
-
-    // 3. Title + Date
-    const now = new Date();
-    ctx.shadowColor = 'rgba(0,0,0,0.95)';
-    ctx.shadowBlur = 24;
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 60px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('EvoClaw 交易日报', W / 2, 175);
-
-    const dateStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月' + now.getDate() + '日';
-    ctx.fillStyle = '#d1d5db';
-    ctx.font = '32px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText(dateStr, W / 2, 240);
-    ctx.shadowBlur = 0;
-
-    // Decorative line
-    ctx.strokeStyle = 'rgba(14,165,233,0.8)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(W / 2 - 140, 265);
-    ctx.lineTo(W / 2 + 140, 265);
-    ctx.stroke();
-
-    // Fetch today PnL = today cumulative - yesterday cumulative
-    let todayPnl = 0;
-    try {
-      const pt = await api('/api/profit-trend?period=day');
-      if (pt && pt.data && pt.data.length) {
-        const last = pt.data[pt.data.length - 1].cumulative_pnl || 0;
-        const prev = pt.data.length >= 2 ? (pt.data[pt.data.length - 2].cumulative_pnl || 0) : 0;
-        todayPnl = last - prev;
-      }
-    } catch (e) { /* ignore */ }
-
-    const acc = window._lastAccount || {};
-    const st = window._lastStats || {};
-
-    const cards = [
-      { label: '账户余额', value: (acc.balance || 0).toFixed(2) + ' USDT', color: '#0ea5e9' },
-      { label: '当日盈亏', value: (todayPnl >= 0 ? '+' : '') + todayPnl.toFixed(4) + ' USDT', color: todayPnl >= 0 ? '#10b981' : '#ef4444' },
-      { label: '胜率', value: ((st.win_rate || 0) * 100).toFixed(1) + '%', color: '#a78bfa' },
-      { label: '持仓数', value: (acc.position_count || 0) + ' 个', color: '#f59e0b' },
-    ];
-
-    // Draw glass-morphism cards
-    const cardW = 440, cardH = 210, gapX = 50, gapY = 45;
-    const startX = (W - (cardW * 2 + gapX)) / 2;
-    const startY = 460;
-
-    cards.forEach((card, i) => {
-      const cx = startX + (i % 2) * (cardW + gapX);
-      const cy = startY + Math.floor(i / 2) * (cardH + gapY);
-
-      // Card background: darker so text pops
-      ctx.fillStyle = 'rgba(11,15,25,0.70)';
-      roundRect(ctx, cx, cy, cardW, cardH, 20);
-      ctx.fill();
-
-      // Card glow border
-      ctx.strokeStyle = card.color;
-      ctx.lineWidth = 2;
-      ctx.shadowColor = card.color;
-      ctx.shadowBlur = 18;
-      roundRect(ctx, cx, cy, cardW, cardH, 20);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Left accent bar
-      ctx.fillStyle = card.color;
-      ctx.shadowColor = card.color;
-      ctx.shadowBlur = 14;
-      ctx.fillRect(cx + 26, cy + 45, 5, cardH - 90);
-      ctx.shadowBlur = 0;
-
-      // Label
-      ctx.shadowColor = 'rgba(0,0,0,0.9)';
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = '#e2e8f0';
-      ctx.font = '26px "PingFang SC", "Microsoft YaHei", sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(card.label, cx + 52, cy + 80);
-      ctx.shadowBlur = 0;
-
-      // Value
-      ctx.shadowColor = 'rgba(0,0,0,0.95)';
-      ctx.shadowBlur = 14;
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 48px "SF Mono", "Fira Code", monospace';
-      ctx.fillText(card.value, cx + 52, cy + 162);
-      ctx.shadowBlur = 0;
-    });
-
-    // Disclaimer
+    // Top bar with EvoClaw brand
+    ctx.fillStyle = 'rgba(11,15,25,0.85)';
+    ctx.fillRect(0, 0, W, 90);
     ctx.shadowColor = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur = 8;
-    ctx.fillStyle = 'rgba(156,163,175,0.85)';
-    ctx.font = '22px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 44px "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('⚠ 数据仅供参考，不构成投资建议', W / 2, H - 90);
-    ctx.fillText('EvoClaw · ' + now.toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'}), W / 2, H - 55);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('EvoClaw', W / 2, 48);
     ctx.shadowBlur = 0;
 
-    // Download
+    const now = new Date();
     const link = document.createElement('a');
     link.download = 'EvoClaw_' + now.toISOString().slice(0, 10) + '.png';
     link.href = canvas.toDataURL('image/png');
