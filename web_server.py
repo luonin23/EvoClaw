@@ -32,8 +32,10 @@ class WebServer:
         self._last_system_time = None
         # Response cache to reduce Binance API calls
         self._api_cache = {}
-        self._api_cache_ttl = 5  # seconds (was 2, reduced API pressure)
+        self._api_cache_ttl = 15  # seconds: reduce request frequency
         self._balance_cache = (0, 0.0)  # (timestamp, balance)
+        self._cache_lock = __import__('asyncio').Lock()
+        self._system_cache = (0, None)  # (timestamp, data)
 
     def _load_config(self):
         try:
@@ -43,14 +45,20 @@ class WebServer:
             return {}
 
     async def _cached_response(self, key, handler, request):
-        """Return cached response if within TTL, otherwise call handler and cache."""
+        """Return cached response if within TTL, otherwise call handler and cache.
+        Uses a lock to prevent thundering herd on cache miss."""
         now = time.monotonic()
         cached = self._api_cache.get(key)
         if cached and now - cached[0] < self._api_cache_ttl:
             return cached[1]
-        resp = await handler(request)
-        self._api_cache[key] = (now, resp)
-        return resp
+        async with self._cache_lock:
+            # Double-check after acquiring lock
+            cached = self._api_cache.get(key)
+            if cached and now - cached[0] < self._api_cache_ttl:
+                return cached[1]
+            resp = await handler(request)
+            self._api_cache[key] = (now, resp)
+            return resp
 
     async def api_account_cached(self, request):
         return await self._cached_response("account", self.api_account, request)
@@ -276,13 +284,10 @@ class WebServer:
             # Sort by pnl_rate ascending (worst loss first, profit last)
             position_items.sort(key=lambda x: x["pnl_rate"])
 
-            # Build slots: first N filled with positions sorted by loss
+            # Only send occupied slots; client fills empty ones
             result = []
-            for i in range(max_slots):
-                if i < len(position_items):
-                    result.append({"index": i, **position_items[i], "occupied": True})
-                else:
-                    result.append({"index": i, "symbol": None, "side": None, "contracts": 0, "entry_price": 0, "pnl": 0, "pnl_rate": 0, "occupied": False})
+            for i, item in enumerate(position_items[:max_slots]):
+                result.append({"index": i, **item, "occupied": True})
 
             return web.json_response({"slots": result, "total_positions": len(all_positions), "max_slots": max_slots})
         except Exception as e:
@@ -300,6 +305,9 @@ class WebServer:
     async def api_system(self, request):
         try:
             now = time.time()
+            # Use in-memory cache for 5s to avoid repeated file reads
+            if self._system_cache[1] and now - self._system_cache[0] < 5:
+                return web.json_response(self._system_cache[1])
 
             # CPU usage from /proc/stat
             cpu_percent = 0.0
@@ -348,7 +356,7 @@ class WebServer:
             self._last_net = (rx_bytes, tx_bytes)
             self._last_system_time = now
 
-            return web.json_response({
+            data = {
                 "cpu_percent": round(cpu_percent, 1),
                 "mem_total": mem_total,
                 "mem_used": mem_used,
@@ -358,7 +366,9 @@ class WebServer:
                 "disk_percent": round(du.used / du.total * 100, 1) if du.total else 0,
                 "net_rx_speed": round(rx_speed, 0),
                 "net_tx_speed": round(tx_speed, 0),
-            })
+            }
+            self._system_cache = (now, data)
+            return web.json_response(data)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 

@@ -794,6 +794,14 @@ function toggleTrading() {
 function clr(v) { return (v || 0) >= 0 ? 'text-green' : 'text-red'; }
 function fmtP(p) { return (p >= 0 ? '+' : '') + p.toFixed(4); }
 function fmtR(r) { return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== val) el.textContent = val;
+}
+function setClass(id, cls) {
+  const el = document.getElementById(id);
+  if (el && el.className !== cls) el.className = cls;
+}
 
 function fmtBytes(b) {
   if (b < 1024) return b + ' B';
@@ -817,102 +825,91 @@ function showToast(msg) {
 async function loadAccount() {
   const d = await api('/api/account');
   if (!d) return;
-  document.getElementById('accBalance').textContent = d.balance.toFixed(2);
-  const avEl = document.getElementById('accAvailable');
-  avEl.textContent = (d.available_balance || 0).toFixed(2);
-  avEl.className = 'stat-value ' + clr(d.available_balance || 0);
-  const uEl = document.getElementById('accUnrealized');
-  uEl.textContent = fmtP(d.unrealized_pnl);
-  uEl.className = 'stat-value ' + clr(d.unrealized_pnl);
-  const trEl = document.getElementById('accTotalRate');
+  setText('accBalance', d.balance.toFixed(2));
+  setText('accAvailable', (d.available_balance || 0).toFixed(2));
+  setClass('accAvailable', 'stat-value ' + clr(d.available_balance || 0));
+  setText('accUnrealized', fmtP(d.unrealized_pnl));
+  setClass('accUnrealized', 'stat-value ' + clr(d.unrealized_pnl));
   const tr = d.total_position_pnl_rate || 0;
-  trEl.textContent = (tr >= 0 ? '+' : '') + (tr * 100).toFixed(2) + '%';
-  trEl.className = 'stat-value ' + clr(tr);
+  setText('accTotalRate', (tr >= 0 ? '+' : '') + (tr * 100).toFixed(2) + '%');
+  setClass('accTotalRate', 'stat-value ' + clr(tr));
+
+  // Incremental update for active symbols
   const symEl = document.getElementById('accActiveSymbols');
-  if (d.active_symbols && d.active_symbols.length) {
-    symEl.innerHTML = '<span style="color:var(--text-tertiary);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
-      d.active_symbols.map(s => '<span style="display:inline-block;background:var(--surface-card-hover);padding:2px 7px;border-radius:4px;margin:2px;font-size:10px">' + s + '</span>').join(' ');
-  } else {
-    symEl.innerHTML = '<span style="color:var(--text-tertiary)">当前无匹配币种 (0个)</span>';
+  const newSymText = d.active_symbols && d.active_symbols.length
+    ? '当前筛选币种 (' + d.active_symbols.length + '个): ' + d.active_symbols.join(' ')
+    : '当前无匹配币种 (0个)';
+  const oldSymText = symEl.dataset.symbols || '';
+  if (oldSymText !== newSymText) {
+    symEl.dataset.symbols = newSymText;
+    if (d.active_symbols && d.active_symbols.length) {
+      symEl.innerHTML = '<span style="color:var(--text-tertiary);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
+        d.active_symbols.map(s => '<span style="display:inline-block;background:var(--surface-card-hover);padding:2px 7px;border-radius:4px;margin:2px;font-size:10px">' + s + '</span>').join(' ');
+    } else {
+      symEl.innerHTML = '<span style="color:var(--text-tertiary)">当前无匹配币种 (0个)</span>';
+    }
   }
 
-  document.getElementById('posCount').textContent = d.position_count || 0;
-  document.getElementById('posLongCount').textContent = d.long_position_count || 0;
-  document.getElementById('posShortCount').textContent = d.short_position_count || 0;
+  setText('posCount', d.position_count || 0);
+  setText('posLongCount', d.long_position_count || 0);
+  setText('posShortCount', d.short_position_count || 0);
 
-  // 历史持仓最高亏损额/率 (账户级 4,5)
-  const hlpEl = document.getElementById('lossHistTotalPnl');
-  hlpEl.textContent = fmtP(d.hist_total_loss_pnl || 0);
-  hlpEl.className = 'stat-value ' + clr(d.hist_total_loss_pnl || 0);
-  const hlrEl = document.getElementById('lossHistTotalRate');
+  setText('lossHistTotalPnl', fmtP(d.hist_total_loss_pnl || 0));
+  setClass('lossHistTotalPnl', 'stat-value ' + clr(d.hist_total_loss_pnl || 0));
   const hlr = d.hist_total_loss_rate || 0;
-  hlrEl.textContent = fmtR(hlr);
-  hlrEl.className = 'stat-value ' + clr(hlr);
+  setText('lossHistTotalRate', fmtR(hlr));
+  setClass('lossHistTotalRate', 'stat-value ' + clr(hlr));
 
-  // 历史单币最高亏损额/率 (单币 6,7)
-  const htpEl = document.getElementById('lossHistTradePnl');
-  htpEl.textContent = fmtP(d.hist_worst_trade_pnl || 0);
-  htpEl.className = 'stat-value ' + clr(d.hist_worst_trade_pnl || 0);
-  const htrEl = document.getElementById('lossHistTradeRate');
+  setText('lossHistTradePnl', fmtP(d.hist_worst_trade_pnl || 0));
+  setClass('lossHistTradePnl', 'stat-value ' + clr(d.hist_worst_trade_pnl || 0));
   const htr = d.hist_worst_trade_rate || 0;
-  htrEl.textContent = fmtR(htr);
-  htrEl.className = 'stat-value ' + clr(htr);
+  setText('lossHistTradeRate', fmtR(htr));
+  setClass('lossHistTradeRate', 'stat-value ' + clr(htr));
 
-  // 实时单币最高亏损额/率 (实时 8,9)
-  const worstPnlEl = document.getElementById('posWorstPnl');
-  worstPnlEl.textContent = fmtP(d.worst_position_pnl || 0);
-  worstPnlEl.className = 'stat-value ' + clr(d.worst_position_pnl);
-  const worstRateEl = document.getElementById('posWorstRate');
+  setText('posWorstPnl', fmtP(d.worst_position_pnl || 0));
+  setClass('posWorstPnl', 'stat-value ' + clr(d.worst_position_pnl));
   const wr = d.worst_position_rate || 0;
-  worstRateEl.textContent = fmtR(wr);
-  worstRateEl.className = 'stat-value ' + clr(wr);
+  setText('posWorstRate', fmtR(wr));
+  setClass('posWorstRate', 'stat-value ' + clr(wr));
 
-  document.getElementById('accMarginCall').textContent = d.margin_call_count || 0;
+  setText('accMarginCall', d.margin_call_count || 0);
 }
 
 async function loadStats() {
   const d = await api('/api/stats');
   if (!d) return;
-  const tEl = document.getElementById('stTotalPnl');
-  tEl.textContent = fmtP(d.total_pnl);
-  tEl.className = 'stat-value ' + clr(d.total_pnl);
-  const fEl = document.getElementById('stTotalFee');
-  fEl.textContent = fmtP(d.total_fee);
-  fEl.className = 'stat-value ' + clr(-Math.abs(d.total_fee));
-  document.getElementById('stWinRate').textContent = (d.win_rate * 100).toFixed(1) + '%';
-  const mEl = document.getElementById('stMaxRate');
-  mEl.textContent = fmtR(d.max_single_profit_rate);
-  mEl.className = 'stat-value text-green';
-  document.getElementById('stAcctRate').textContent = fmtR(d.account_profit_rate);
-  document.getElementById('stLong').textContent = d.long_count;
-  document.getElementById('stShort').textContent = d.short_count;
-  document.getElementById('accAllClose').textContent = d.all_close_count || 0;
-  document.getElementById('accPairClose').textContent = d.pair_close_count || 0;
-  document.getElementById('accSingleClose').textContent = d.single_count || 0;
+  setText('stTotalPnl', fmtP(d.total_pnl));
+  setClass('stTotalPnl', 'stat-value ' + clr(d.total_pnl));
+  setText('stTotalFee', fmtP(d.total_fee));
+  setClass('stTotalFee', 'stat-value ' + clr(-Math.abs(d.total_fee)));
+  setText('stWinRate', (d.win_rate * 100).toFixed(1) + '%');
+  setText('stMaxRate', fmtR(d.max_single_profit_rate));
+  setClass('stMaxRate', 'stat-value text-green');
+  setText('stAcctRate', fmtR(d.account_profit_rate));
+  setText('stLong', d.long_count);
+  setText('stShort', d.short_count);
+  setText('accAllClose', d.all_close_count || 0);
+  setText('accPairClose', d.pair_close_count || 0);
+  setText('accSingleClose', d.single_count || 0);
 
-  const lpEl = document.getElementById('stLongPnl');
-  lpEl.textContent = fmtP(d.long_pnl || 0);
-  lpEl.className = 'stat-value ' + clr(d.long_pnl);
-  const lrEl = document.getElementById('stLongRate');
-  lrEl.textContent = fmtR(d.long_pnl_rate || 0);
-  lrEl.className = 'stat-value ' + clr(d.long_pnl_rate);
-  const spEl = document.getElementById('stShortPnl');
-  spEl.textContent = fmtP(d.short_pnl || 0);
-  spEl.className = 'stat-value ' + clr(d.short_pnl);
-  const srEl = document.getElementById('stShortRate');
-  srEl.textContent = fmtR(d.short_pnl_rate || 0);
-  srEl.className = 'stat-value ' + clr(d.short_pnl_rate);
+  setText('stLongPnl', fmtP(d.long_pnl || 0));
+  setClass('stLongPnl', 'stat-value ' + clr(d.long_pnl));
+  setText('stLongRate', fmtR(d.long_pnl_rate || 0));
+  setClass('stLongRate', 'stat-value ' + clr(d.long_pnl_rate));
+  setText('stShortPnl', fmtP(d.short_pnl || 0));
+  setClass('stShortPnl', 'stat-value ' + clr(d.short_pnl));
+  setText('stShortRate', fmtR(d.short_pnl_rate || 0));
+  setClass('stShortRate', 'stat-value ' + clr(d.short_pnl_rate));
 }
 
 async function loadSystem() {
   const d = await api('/api/system');
   if (!d || d.status === 'error') return;
-  const cpuEl = document.getElementById('sysCpu');
-  cpuEl.textContent = d.cpu_percent.toFixed(1) + '%';
-  cpuEl.className = 'stat-value ' + (d.cpu_percent > 80 ? 'text-red' : d.cpu_percent > 50 ? 'text-warning' : 'text-green');
-  document.getElementById('sysMem').textContent = d.mem_percent.toFixed(0) + '%';
-  document.getElementById('sysDisk').textContent = d.disk_percent.toFixed(0) + '%';
-  document.getElementById('sysNet').textContent = '↓' + fmtSpeed(d.net_rx_speed) + ' ↑' + fmtSpeed(d.net_tx_speed);
+  setText('sysCpu', d.cpu_percent.toFixed(1) + '%');
+  setClass('sysCpu', 'stat-value ' + (d.cpu_percent > 80 ? 'text-red' : d.cpu_percent > 50 ? 'text-warning' : 'text-green'));
+  setText('sysMem', d.mem_percent.toFixed(0) + '%');
+  setText('sysDisk', d.disk_percent.toFixed(0) + '%');
+  setText('sysNet', '↓' + fmtSpeed(d.net_rx_speed) + ' ↑' + fmtSpeed(d.net_tx_speed));
 }
 
 async function loadPositionsMap(posData) {
@@ -961,27 +958,34 @@ async function loadPositionsMap(posData) {
     }
     container.appendChild(frag);
   }
-  // Update cells
-  window._posMapSlots = d.slots;
+  // Update cells (server now sends only occupied slots)
+  window._posMapSlots = [];
   const cells = window._posMapCells || Array.from(container.children);
+  // Reset all to vacant first
   for (let i = 0; i < maxSlots; i++) {
-    const slot = d.slots[i];
     const cell = cells[i];
     if (!cell) continue;
     const isRightEdge = (i + 1) % cols === 0;
     const isBottomEdge = i >= maxSlots - cols;
-    if (slot.occupied) {
-      const isProfit = (slot.pnl_rate || 0) >= 0;
-      let cls = 'pos-cell occupied ' + (isProfit ? 'profit' : 'loss');
-      if (isRightEdge) cls += ' no-right';
-      if (isBottomEdge) cls += ' no-bottom';
-      cell.className = cls;
-    } else {
-      let cls = 'pos-cell vacant';
-      if (isRightEdge) cls += ' no-right';
-      if (isBottomEdge) cls += ' no-bottom';
-      cell.className = cls;
-    }
+    let cls = 'pos-cell vacant';
+    if (isRightEdge) cls += ' no-right';
+    if (isBottomEdge) cls += ' no-bottom';
+    cell.className = cls;
+  }
+  // Fill occupied
+  for (const slot of d.slots) {
+    const i = slot.index;
+    if (i >= maxSlots) continue;
+    window._posMapSlots[i] = slot;
+    const cell = cells[i];
+    if (!cell) continue;
+    const isRightEdge = (i + 1) % cols === 0;
+    const isBottomEdge = i >= maxSlots - cols;
+    const isProfit = (slot.pnl_rate || 0) >= 0;
+    let cls = 'pos-cell occupied ' + (isProfit ? 'profit' : 'loss');
+    if (isRightEdge) cls += ' no-right';
+    if (isBottomEdge) cls += ' no-bottom';
+    cell.className = cls;
   }
 }
 
@@ -1016,35 +1020,40 @@ async function loadFullMatrix(posData) {
   }
 
   const cells = window._fullMatrixCells || Array.from(container.children).map(c => ({ cell: c }));
+  // Reset all to vacant first
   for (let i = 0; i < maxSlots; i++) {
-    const slot = d.slots[i];
+    const { cell } = cells[i] || { cell: null };
+    if (!cell) continue;
+    cell.className = 'full-cell vacant';
+    cell.title = '';
+    const { sym, dir, price, amt, pnl, rate } = cells[i];
+    if (sym) sym.textContent = '';
+    if (dir) dir.textContent = '';
+    if (price) price.textContent = '';
+    if (amt) amt.textContent = '';
+    if (pnl) pnl.textContent = '';
+    if (rate) rate.textContent = '';
+  }
+  // Fill occupied (server sends sparse list)
+  for (const slot of d.slots) {
+    const i = slot.index;
+    if (i >= maxSlots) continue;
     const { cell, sym, dir, price, amt, pnl, rate } = cells[i] || { cell: null };
     if (!cell) continue;
-    if (slot.occupied) {
-      const isProfit = (slot.pnl_rate || 0) >= 0;
-      const isLong = slot.side === 'long';
-      let cls = 'full-cell';
-      cls += isLong ? ' side-long' : ' side-short';
-      cls += isProfit ? ' pnl-profit' : ' pnl-loss';
-      cell.className = cls;
-      const displaySym = slot.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
-      cell.title = displaySym + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
-      if (sym) sym.textContent = displaySym;
-      if (dir) dir.textContent = isLong ? '多' : '空';
-      if (price) price.textContent = (slot.entry_price || 0).toFixed(4);
-      if (amt) amt.textContent = (slot.contracts || 0).toFixed(2);
-      if (pnl) pnl.textContent = fmtP(slot.pnl);
-      if (rate) rate.textContent = fmtR(slot.pnl_rate);
-    } else {
-      cell.className = 'full-cell vacant';
-      cell.title = '';
-      if (sym) sym.textContent = '';
-      if (dir) dir.textContent = '';
-      if (price) price.textContent = '';
-      if (amt) amt.textContent = '';
-      if (pnl) pnl.textContent = '';
-      if (rate) rate.textContent = '';
-    }
+    const isProfit = (slot.pnl_rate || 0) >= 0;
+    const isLong = slot.side === 'long';
+    let cls = 'full-cell';
+    cls += isLong ? ' side-long' : ' side-short';
+    cls += isProfit ? ' pnl-profit' : ' pnl-loss';
+    cell.className = cls;
+    const displaySym = slot.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
+    cell.title = displaySym + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
+    if (sym) sym.textContent = displaySym;
+    if (dir) dir.textContent = isLong ? '多' : '空';
+    if (price) price.textContent = (slot.entry_price || 0).toFixed(4);
+    if (amt) amt.textContent = (slot.contracts || 0).toFixed(2);
+    if (pnl) pnl.textContent = fmtP(slot.pnl);
+    if (rate) rate.textContent = fmtR(slot.pnl_rate);
   }
 }
 
@@ -1223,7 +1232,7 @@ let refreshTimer = null;
 let systemTimer = null;
 
 function startTimers() {
-  if (!refreshTimer) refreshTimer = setInterval(refresh, 5000);
+  if (!refreshTimer) refreshTimer = setInterval(refresh, 10000);
   if (!systemTimer) systemTimer = setInterval(loadSystem, 10000);
 }
 function stopTimers() {
