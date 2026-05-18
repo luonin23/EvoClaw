@@ -1261,14 +1261,25 @@ async function generatePoster() {
   btn.disabled = true;
 
   try {
-    // Capture dashboard panel as background
-    const panel = document.body;
-    const screenshot = await html2canvas(panel, {
+    // Temporarily reveal all tabs so html2canvas captures full page height
+    const panels = document.querySelectorAll('.tab-panel');
+    const prevDisplays = [];
+    panels.forEach(p => { prevDisplays.push(p.style.display); p.style.display = 'block'; });
+
+    // Wait a tick for layout reflow
+    await new Promise(r => setTimeout(r, 50));
+
+    const screenshot = await html2canvas(document.body, {
       backgroundColor: '#0b0f19',
       scale: 2,
       useCORS: true,
       logging: false,
+      windowWidth: document.documentElement.scrollWidth,
+      windowHeight: document.documentElement.scrollHeight,
     });
+
+    // Restore tab visibility
+    panels.forEach((p, i) => { p.style.display = prevDisplays[i]; });
 
     // Create poster canvas 1080x1920 (9:16)
     const W = 1080, H = 1920;
@@ -1313,12 +1324,14 @@ async function generatePoster() {
     ctx.lineTo(W / 2 + 140, 265);
     ctx.stroke();
 
-    // Fetch today PnL
+    // Fetch today PnL = today cumulative - yesterday cumulative
     let todayPnl = 0;
     try {
       const pt = await api('/api/profit-trend?period=day');
       if (pt && pt.data && pt.data.length) {
-        todayPnl = pt.data[pt.data.length - 1].cumulative_pnl || 0;
+        const last = pt.data[pt.data.length - 1].cumulative_pnl || 0;
+        const prev = pt.data.length >= 2 ? (pt.data[pt.data.length - 2].cumulative_pnl || 0) : 0;
+        todayPnl = last - prev;
       }
     } catch (e) { /* ignore */ }
 
