@@ -913,8 +913,8 @@ async function loadSystem() {
   document.getElementById('sysNet').textContent = '↓' + fmtSpeed(d.net_rx_speed) + ' ↑' + fmtSpeed(d.net_tx_speed);
 }
 
-async function loadPositionsMap() {
-  const d = await api('/api/positions-map');
+async function loadPositionsMap(posData) {
+  const d = posData || await api('/api/positions-map');
   if (!d || !d.slots) return;
   const container = document.getElementById('posMatrix');
   const tooltip = document.getElementById('posMatrixTooltip');
@@ -984,8 +984,8 @@ async function loadPositionsMap() {
   }
 }
 
-async function loadFullMatrix() {
-  const d = await api('/api/positions-map');
+async function loadFullMatrix(posData) {
+  const d = posData || await api('/api/positions-map');
   if (!d || !d.slots) return;
   const container = document.getElementById('fullMatrix');
   if (!container) return;
@@ -1157,19 +1157,59 @@ async function loadProfitTrend() {
 }
 
 async function refresh() {
-  await Promise.all([loadAccount(), loadStats(), loadPositionsMap(), loadFullMatrix(), loadProfitTrend()]);
-  document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
+  if (window._isRefreshing) return;
+  window._isRefreshing = true;
+  try {
+    const posData = await api('/api/positions-map');
+    await Promise.all([
+      loadAccount(),
+      loadStats(),
+      loadPositionsMap(posData),
+      loadFullMatrix(posData),
+      loadProfitTrend()
+    ]);
+    document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('refresh error', e);
+  } finally {
+    window._isRefreshing = false;
+  }
 }
 
+let resizeTimer = null;
 window.addEventListener('resize', () => {
-  if (currentTab === 'dashboard') loadProfitTrend();
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (currentTab === 'dashboard') loadProfitTrend();
+  }, 300);
+});
+
+let refreshTimer = null;
+let systemTimer = null;
+
+function startTimers() {
+  if (!refreshTimer) refreshTimer = setInterval(refresh, 5000);
+  if (!systemTimer) systemTimer = setInterval(loadSystem, 10000);
+}
+function stopTimers() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  if (systemTimer) { clearInterval(systemTimer); systemTimer = null; }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopTimers();
+  } else {
+    startTimers();
+    refresh();
+    loadSystem();
+  }
 });
 
 loadConfig();
 refresh();
 loadSystem();
-setInterval(refresh, 5000);
-setInterval(loadSystem, 10000);
+startTimers();
 </script>
 <div id="posMatrixTooltip" class="pos-tooltip"></div>
 </body>
