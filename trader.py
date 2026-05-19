@@ -261,10 +261,10 @@ class Trader:
             # Replenish all
             await self.replenish_all(symbols, sides, all_positions)
 
-    # ========== Single close (3-tier profit taking) ==========
+    # ========== Single close (5-tier profit taking) ==========
 
     async def check_single_close(self, position, symbol, pos_side):
-        """3-tier partial close based on profit rate.
+        """5-tier partial close based on profit rate.
         Tier 1: e.g. 0.2% -> close 30% of current position
         Tier 2: e.g. 1.0% -> close 50% of current position
         Tier 3: e.g. 5.0% -> close 100% of current position
