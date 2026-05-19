@@ -734,7 +734,7 @@ body{
   </div>
 
   <div class="btn-row">
-    <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+    <button class="btn btn-primary" id="btnSave" onclick="saveConfig()">保存配置</button>
     <button class="btn btn-danger" onclick="toggleTrading()" id="btnToggle">停止交易</button>
   </div>
 
@@ -793,37 +793,65 @@ async function loadConfig() {
   document.getElementById('cfgSide').value = d.side || 'both';
 }
 
+function parseNum(id, fallback) {
+  const v = parseFloat(document.getElementById(id).value);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+let _saving = false;
 async function saveConfig() {
-  const skip = document.getElementById('cfgSkip').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      volume_threshold: parseFloat(document.getElementById('cfgVolumeThreshold').value) || 0,
-      price_threshold: parseFloat(document.getElementById('cfgPriceThreshold').value) || 0,
+  if (_saving) return;
+  _saving = true;
+  const btn = document.getElementById('btnSave');
+  const oldText = btn.textContent;
+  btn.textContent = '保存中...';
+  btn.disabled = true;
+
+  try {
+    const skip = document.getElementById('cfgSkip').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
+    const body = {
+      volume_threshold: parseNum('cfgVolumeThreshold', 0),
+      price_threshold: parseNum('cfgPriceThreshold', 0),
       symbol_refresh_interval: parseInt(document.getElementById('cfgSymbolRefreshInterval').value) || 86400,
       side: document.getElementById('cfgSide').value,
       profit_tiers: [
-        { threshold: parseFloat(document.getElementById('cfgTier1Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier1Close').value) / 100 },
-        { threshold: parseFloat(document.getElementById('cfgTier2Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier2Close').value) / 100 },
-        { threshold: parseFloat(document.getElementById('cfgTier3Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier3Close').value) / 100 },
-        { threshold: parseFloat(document.getElementById('cfgTier4Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier4Close').value) / 100 },
-        { threshold: parseFloat(document.getElementById('cfgTier5Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier5Close').value) / 100 },
+        { threshold: parseNum('cfgTier1Threshold', 0.2) / 100, close_pct: parseNum('cfgTier1Close', 30) / 100 },
+        { threshold: parseNum('cfgTier2Threshold', 1) / 100, close_pct: parseNum('cfgTier2Close', 50) / 100 },
+        { threshold: parseNum('cfgTier3Threshold', 5) / 100, close_pct: parseNum('cfgTier3Close', 100) / 100 },
+        { threshold: parseNum('cfgTier4Threshold', 40) / 100, close_pct: parseNum('cfgTier4Close', 50) / 100 },
+        { threshold: parseNum('cfgTier5Threshold', 50) / 100, close_pct: parseNum('cfgTier5Close', 100) / 100 },
       ],
-      replenish_stop_threshold: parseFloat(document.getElementById('cfgReplenishStop').value) / 100,
+      replenish_stop_threshold: parseNum('cfgReplenishStop', 10) / 100,
       max_position_count: parseInt(document.getElementById('cfgMaxPositionCount').value) || 100,
       enable_all_close: document.getElementById('cfgEnableAllClose').checked,
-      all_close_threshold: parseFloat(document.getElementById('cfgAllClose').value) / 100,
+      all_close_threshold: parseNum('cfgAllClose', 0.15) / 100,
       enable_margin_call: document.getElementById('cfgEnableMarginCall').checked,
-      margin_call_threshold_long: parseFloat(document.getElementById('cfgMarginCallThresholdLong').value) / 100,
-      margin_call_threshold_short: parseFloat(document.getElementById('cfgMarginCallThresholdShort').value) / 100,
-      margin_call_multiplier: parseFloat(document.getElementById('cfgMarginCallMultiplier').value),
+      margin_call_threshold_long: parseNum('cfgMarginCallThresholdLong', 0) / 100,
+      margin_call_threshold_short: parseNum('cfgMarginCallThresholdShort', 0) / 100,
+      margin_call_multiplier: parseNum('cfgMarginCallMultiplier', 2),
       enable_single_pair_close: document.getElementById('cfgEnableSinglePairClose').checked,
-      pair_close_threshold: parseFloat(document.getElementById('cfgPairClose').value) / 100,
+      pair_close_threshold: parseNum('cfgPairClose', 0.2) / 100,
       skip_symbols: skip,
-    }),
-  });
-  showToast('配置已保存');
+    };
+
+    const r = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.status === 'ok') {
+      showToast('配置已保存');
+    } else {
+      showToast('保存失败: ' + (d.message || '服务器错误'));
+    }
+  } catch (e) {
+    showToast('保存失败: ' + (e.message || '网络错误'));
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+    _saving = false;
+  }
 }
 
 async function refreshSymbolsNow() {
