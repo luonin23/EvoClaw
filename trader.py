@@ -25,6 +25,8 @@ class Trader:
         self._fail2027_retry_after = 600  # retry after 10 minutes (was 5, too aggressive)
         # System position lookup cache: built once per tick, O(1) lookup for open_fee
         self._system_pos_map: dict[str, dict] = {}  # "symbol:side" -> open_position row
+        # Track highest profit tier executed per position to avoid repeat closes
+        self._tier_executed: dict[str, int] = {}  # "symbol:side" -> highest tier index executed
 
     def _load_config(self):
         try:
@@ -150,6 +152,12 @@ class Trader:
             all_positions = await self.client.get_positions()
             exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
 
+        # Clean up tier tracking for positions that no longer exist
+        current_pos_keys = {f"{self.client.user_symbol(p['symbol'])}:{p.get('side')}" for p in all_positions}
+        for k in list(self._tier_executed.keys()):
+            if k not in current_pos_keys:
+                del self._tier_executed[k]
+
         # STEP 3: Single-symbol profit close — pass positions directly
         for p in list(all_positions):
             symbol = self.client.user_symbol(p["symbol"])
@@ -253,12 +261,22 @@ class Trader:
             # Replenish all
             await self.replenish_all(symbols, sides, all_positions)
 
-    # ========== Single close ==========
+    # ========== Single close (3-tier profit taking) ==========
 
     async def check_single_close(self, position, symbol, pos_side):
-        """Close any position (system or manual) if profit rate exceeds threshold."""
+        """3-tier partial close based on profit rate.
+        Tier 1: e.g. 0.2% -> close 30% of current position
+        Tier 2: e.g. 1.0% -> close 50% of current position
+        Tier 3: e.g. 5.0% -> close 100% of current position
+        All close amounts are floored to integers. Close pct is based on CURRENT remaining contracts.
+        """
+        import math
         cfg = self.config
-        threshold = cfg.get("profit_threshold", 0.002)
+        tiers = cfg.get("profit_tiers")
+        if not tiers:
+            # backward compatibility: old single threshold closes 100%
+            threshold = cfg.get("profit_threshold", 0.002)
+            tiers = [{"threshold": threshold, "close_pct": 1.0}]
 
         unrealized_pnl = float(position.get("unrealizedPnl", 0) or 0)
         entry_price = float(position.get("entryPrice", 0) or 0)
@@ -271,28 +289,40 @@ class Trader:
             return
 
         profit_rate = unrealized_pnl / position_value
-        if profit_rate >= threshold:
-            log.info(f"SINGLE CLOSE {symbol} {pos_side}: pnl={unrealized_pnl:.4f} rate={profit_rate:.4%}")
-            result = await self.client.close_position(symbol, pos_side, contracts)
-            if result:
-                # O(1) lookup for open_fee from cached map
-                open_fee = 0
-                sp = self._system_pos_map.get(f"{symbol}:{pos_side}")
-                if sp:
-                    open_fee = sp.get("open_fee", 0)
-                # Remove from tracking if tracked
-                self.db.remove_open(symbol, pos_side)
-                self._system_pos_map.pop(f"{symbol}:{pos_side}", None)
-                # Record trade
-                await self._record_trade(
-                    symbol=symbol,
-                    side=pos_side,
-                    entry_price=entry_price,
-                    contracts=contracts,
-                    close_result=result,
-                    trade_type="single",
-                    open_fee=open_fee,
-                )
+        pos_key = f"{symbol}:{pos_side}"
+        executed = self._tier_executed.get(pos_key, -1)
+
+        for i, tier in enumerate(tiers):
+            if i <= executed:
+                continue
+            threshold = tier.get("threshold", 0)
+            if profit_rate >= threshold:
+                close_pct = tier.get("close_pct", 1.0)
+                close_contracts = math.floor(contracts * close_pct)
+                if close_contracts < 1:
+                    continue
+                log.info(f"TIER CLOSE {symbol} {pos_side}: tier={i+1} pnl={unrealized_pnl:.4f} rate={profit_rate:.4%} close={close_contracts}/{contracts}")
+                result = await self.client.close_position(symbol, pos_side, close_contracts)
+                if result:
+                    open_fee = 0
+                    sp = self._system_pos_map.get(pos_key)
+                    if sp:
+                        open_fee = sp.get("open_fee", 0)
+                    # Only remove tracking if fully closed
+                    if close_contracts >= contracts:
+                        self.db.remove_open(symbol, pos_side)
+                        self._system_pos_map.pop(pos_key, None)
+                    await self._record_trade(
+                        symbol=symbol,
+                        side=pos_side,
+                        entry_price=entry_price,
+                        contracts=close_contracts,
+                        close_result=result,
+                        trade_type="single",
+                        open_fee=open_fee,
+                    )
+                    self._tier_executed[pos_key] = i
+                break
 
     # ========== Single pair close (多空对平) ==========
 

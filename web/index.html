@@ -598,9 +598,35 @@ body{
           <option value="short">只做空</option>
         </select>
       </div>
+    </div>
+  </div>
+
+  <div class="config-group">
+    <div class="config-group-title">分档止盈</div>
+    <div class="form-grid">
       <div class="field">
-        <label>平仓利润率 (%)</label>
-        <input type="number" id="cfgProfit" step="0.001" min="0" value="0.2">
+        <label>第一档 盈利≥(%)</label>
+        <input type="number" id="cfgTier1Threshold" step="0.001" min="0" value="0.2">
+      </div>
+      <div class="field">
+        <label>第一档 平仓比例(%)</label>
+        <input type="number" id="cfgTier1Close" step="1" min="0" max="100" value="30">
+      </div>
+      <div class="field">
+        <label>第二档 盈利≥(%)</label>
+        <input type="number" id="cfgTier2Threshold" step="0.001" min="0" value="1">
+      </div>
+      <div class="field">
+        <label>第二档 平仓比例(%)</label>
+        <input type="number" id="cfgTier2Close" step="1" min="0" max="100" value="50">
+      </div>
+      <div class="field">
+        <label>第三档 盈利≥(%)</label>
+        <input type="number" id="cfgTier3Threshold" step="0.001" min="0" value="5">
+      </div>
+      <div class="field">
+        <label>第三档 平仓比例(%)</label>
+        <input type="number" id="cfgTier3Close" step="1" min="0" max="100" value="100">
       </div>
     </div>
   </div>
@@ -726,7 +752,13 @@ async function loadConfig() {
   document.getElementById('cfgVolumeThreshold').value = d.volume_threshold || 0;
   document.getElementById('cfgPriceThreshold').value = d.price_threshold || 0;
   document.getElementById('cfgSymbolRefreshInterval').value = d.symbol_refresh_interval || 86400;
-  document.getElementById('cfgProfit').value = (d.profit_threshold || 0) * 100;
+  const tiers = d.profit_tiers || [];
+  document.getElementById('cfgTier1Threshold').value = (tiers[0] && tiers[0].threshold || 0.002) * 100;
+  document.getElementById('cfgTier1Close').value = (tiers[0] && tiers[0].close_pct || 0.3) * 100;
+  document.getElementById('cfgTier2Threshold').value = (tiers[1] && tiers[1].threshold || 0.01) * 100;
+  document.getElementById('cfgTier2Close').value = (tiers[1] && tiers[1].close_pct || 0.5) * 100;
+  document.getElementById('cfgTier3Threshold').value = (tiers[2] && tiers[2].threshold || 0.05) * 100;
+  document.getElementById('cfgTier3Close').value = (tiers[2] && tiers[2].close_pct || 1.0) * 100;
   document.getElementById('cfgReplenishStop').value = (d.replenish_stop_threshold || 0) * 100;
   document.getElementById('cfgMaxPositionCount').value = d.max_position_count || 100;
   document.getElementById('cfgEnableAllClose').checked = d.enable_all_close !== false;
@@ -751,7 +783,11 @@ async function saveConfig() {
       price_threshold: parseFloat(document.getElementById('cfgPriceThreshold').value) || 0,
       symbol_refresh_interval: parseInt(document.getElementById('cfgSymbolRefreshInterval').value) || 86400,
       side: document.getElementById('cfgSide').value,
-      profit_threshold: parseFloat(document.getElementById('cfgProfit').value) / 100,
+      profit_tiers: [
+        { threshold: parseFloat(document.getElementById('cfgTier1Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier1Close').value) / 100 },
+        { threshold: parseFloat(document.getElementById('cfgTier2Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier2Close').value) / 100 },
+        { threshold: parseFloat(document.getElementById('cfgTier3Threshold').value) / 100, close_pct: parseFloat(document.getElementById('cfgTier3Close').value) / 100 },
+      ],
       replenish_stop_threshold: parseFloat(document.getElementById('cfgReplenishStop').value) / 100,
       max_position_count: parseInt(document.getElementById('cfgMaxPositionCount').value) || 100,
       enable_all_close: document.getElementById('cfgEnableAllClose').checked,
