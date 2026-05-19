@@ -59,7 +59,9 @@ class ExchangeClient:
                     continue
                 last = float(ticker.get("last", 0) or 0)
                 volume = float(ticker.get("quoteVolume", 0) or 0)
-                if last <= price_threshold and volume >= volume_threshold:
+                price_ok = price_threshold <= 0 or last <= price_threshold
+                volume_ok = volume_threshold <= 0 or volume >= volume_threshold
+                if price_ok and volume_ok:
                     user_sym = self.user_symbol(ccxt_sym)
                     if user_sym:
                         candidates.append(user_sym)

@@ -107,7 +107,10 @@ class Trader:
             if not self._candidate_symbols or (now - self._last_symbol_refresh) >= interval:
                 volume_threshold = cfg.get("volume_threshold", 0)
                 price_threshold = cfg.get("price_threshold", 0)
-                self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
+                if volume_threshold == 0 and price_threshold == 0:
+                    self._candidate_symbols = cfg.get("symbols", [])
+                else:
+                    self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
                 self._last_symbol_refresh = now
                 log.info(f"Symbols refreshed: {len(self._candidate_symbols)} (interval={interval}s)")
 
@@ -117,7 +120,10 @@ class Trader:
             cfg = self._get_config()
             volume_threshold = cfg.get("volume_threshold", 0)
             price_threshold = cfg.get("price_threshold", 0)
-            self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
+            if volume_threshold == 0 and price_threshold == 0:
+                self._candidate_symbols = cfg.get("symbols", [])
+            else:
+                self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
             self._last_symbol_refresh = datetime.now(timezone.utc).timestamp()
             log.info(f"Symbols manually refreshed: {len(self._candidate_symbols)}")
         return self._candidate_symbols
