@@ -675,7 +675,9 @@ async def check_all_close(self, symbols, sides):
 
 ```python
 async def check_single_pair_close(self, all_positions, skip):
-    """扫描所有持仓（不限于候选列表），排除白名单。"""
+    """扫描所有持仓（不限于候选列表），排除白名单。
+    多空平均盈利率 >= threshold 时双向平仓（不要求单边盈利）。
+    """
     by_symbol = {}
     for p in all_positions:
         sym = self.client.user_symbol(p["symbol"])
@@ -687,7 +689,7 @@ async def check_single_pair_close(self, all_positions, skip):
         if not pair or "long" not in pair or "short" not in pair:
             continue
         # 计算 avg_rate = (long_rate + short_rate) / 2
-        # if avg_rate >= threshold → 双向平仓
+        # if avg_rate >= threshold → 双向平仓（含亏损边）
 ```
 
 **亏损加仓**（v1.4-fix：可重复触发 + 按当前持仓量加仓）：
@@ -1166,37 +1168,35 @@ T0+0:  replenish_missing()
 | 第2道 | `replenish_missing` → `not db.has_open()` | DB已有跟踪就不开 |
 | 第3道 | `record_open` → `DELETE ... INSERT` | 即使重复写入，DB中只保留一条 |
 
-### 4.4 全平流程（系统持仓隔离）
+### 4.4 全平流程（所有非白名单持仓）
 
 ```
 tick() → enable_all_close == true ?
   ├─ NO → 跳过全平检查
   └─ YES
          ↓
-         system_positions = db.get_open_positions()  ← 只取系统持仓
+         all_positions = client.get_positions()  ← 取所有持仓
          ↓
-         exchange_positions = client.get_positions(system_symbols)
-         ↓
-         total_pnl = Σ(p.unrealizedPnl)  ← 只累加系统持仓
+         total_pnl = Σ(p.unrealizedPnl)  ← 累加所有非白名单持仓
          total_value = Σ(entryPrice × contracts × contractSize)
          ↓
          total_pnl / total_value >= all_close_threshold ?
            ├─ YES
            │     ↓
-           │   for sp in system_positions:  ← 只平系统持仓
-           │     close_position(sp.symbol, sp.side)
-           │     db.remove_open(sp.symbol, sp.side)
+           │   for p in all_positions:  ← 平掉所有非白名单持仓
+           │     if symbol in skip_symbols: continue
+           │     close_position(symbol, side)
+           │     if db.has_open(symbol, side): db.remove_open(...)
            │     db.insert_trade(..., fee=open_fee+close_fee)
            │     ↓
            │   replenish_all() ← 全平后立即补仓（含停补检查）
            └─ NO → 继续单币种检查
 ```
 
-**手动持仓完全隔离**：
-- 手动开的仓不在 `open_positions` 表中
-- `get_open_positions()` 只返回系统持仓
-- 手动持仓的盈亏不参与全平计算
-- 手动持仓不会被全平操作关闭
+**白名单是唯一隔离手段**：
+- `skip_symbols` 中的币种不参与全平计算，也不会被全平关闭
+- 除此之外的所有持仓（包括系统追踪的、手动开的、不在候选列表中的旧持仓）均参与全平计算，达标后一律平仓
+- 平仓后如果是系统追踪持仓，同步移除 `open_positions` 记录
 
 ### 4.5 补仓流程（只在候选列表中补）
 

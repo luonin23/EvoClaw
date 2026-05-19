@@ -225,19 +225,17 @@ class Trader:
             if value > 0:
                 total_pnl += pnl
                 total_value += value
-                if pnl > 0:
-                    targets.append({
-                        "symbol": sym,
-                        "side": pos_side,
-                        "entry_price": entry_price,
-                        "contracts": contracts,
-                    })
+                targets.append({
+                    "symbol": sym,
+                    "side": pos_side,
+                    "entry_price": entry_price,
+                    "contracts": contracts,
+                })
 
         if total_value <= 0:
             return
         if total_pnl / total_value >= threshold:
             log.info(f"ALL CLOSE: pnl={total_pnl:.4f} value={total_value:.2f} rate={total_pnl/total_value:.4f} targets={len(targets)}")
-            # Close only profitable positions (never close losing ones)
             for t in targets:
                 sym = t["symbol"]
                 pos_side = t["side"]
@@ -265,6 +263,7 @@ class Trader:
                         trade_type="all_close",
                         open_fee=open_fee,
                     )
+            await self.replenish_all(symbols, sides)
 
     # ========== Single close (5-tier profit taking) ==========
 
@@ -370,8 +369,7 @@ class Trader:
                 continue
 
             avg_rate = sum(rates) / len(rates)
-            # Only close pair when BOTH sides are profitable (never close a losing side)
-            if avg_rate >= threshold and min(rates) > 0:
+            if avg_rate >= threshold:
                 log.info(f"SINGLE PAIR CLOSE {sym}: avg_rate={avg_rate:.4%} rates={[f'{r:.4%}' for r in rates]}")
                 for side in ("long", "short"):
                     result = await self.client.close_position(sym, side, contracts_map[side])
@@ -487,15 +485,17 @@ class Trader:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def replenish_all(self, symbols, sides, all_positions):
+    async def replenish_all(self, symbols, sides):
         cfg = self._get_config()
         max_count = cfg.get("max_position_count", 0)
+
+        all_positions = await self.client.get_positions()
         if max_count > 0:
             if len(all_positions) >= max_count:
                 log.info(f"REPLENISH ALL SKIP: total positions {len(all_positions)} >= limit {max_count}")
                 return
 
-        # Use passed positions for stop-check
+        # Use fetched positions for stop-check
         position_map = {}
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])

@@ -95,7 +95,7 @@ async def main():
     sides = get_sides(cfg.get("side", "both"))
     if symbols:
         # Get current exchange positions
-        positions = await client.get_positions(symbols)
+        positions = await client.get_positions()
 
         # Track existing exchange positions in DB so system can manage them
         for p in positions:
