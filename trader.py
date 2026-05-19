@@ -258,8 +258,9 @@ class Trader:
                         trade_type="all_close",
                         open_fee=open_fee,
                     )
-            # Replenish all
-            await self.replenish_all(symbols, sides, all_positions)
+            # Re-fetch positions after all-close before replenishing
+            fresh_positions = await self.client.get_positions()
+            await self.replenish_all(symbols, sides, fresh_positions)
 
     # ========== Single close (5-tier profit taking) ==========
 
