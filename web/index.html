@@ -1273,12 +1273,16 @@ function drawChart(data) {
     ctx.fill();
   });
 
-  // Value labels on each dot
+  // Value labels — skip some when crowded to avoid overlap
+  const labelW = 42 * scale;
+  const maxLabels = Math.max(1, Math.floor(chartW / labelW));
+  const step = Math.max(1, Math.ceil(data.length / maxLabels));
   ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
   ctx.font = Math.max(7, fontSize - 1) + 'px var(--font-mono)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
   data.forEach((point, i) => {
+    if (i % step !== 0 && i !== data.length - 1) return;
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
     const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
     const val = (point.rate * 100).toFixed(2) + '%';
