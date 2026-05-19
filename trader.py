@@ -462,9 +462,13 @@ class Trader:
             key = f"{sym}:{p.get('side', '')}"
             current.add(key)
 
+        max_new = max_count - len(all_positions) if max_count > 0 else None
         tasks = []
         for sym in symbols:
             for side in sides:
+                if max_new is not None and len(tasks) >= max_new:
+                    log.info(f"REPLENISH LIMIT: stop at {max_count} positions")
+                    break
                 key = f"{sym}:{side}"
                 # Only open if NOT already on exchange AND NOT already tracked by system AND not circuit-broken
                 if key not in current and not self.db.has_open(sym, side) and not self._is_skipped_2027(sym):
@@ -472,6 +476,8 @@ class Trader:
                         continue
                     open_side = "buy" if side == "long" else "sell"
                     tasks.append(self._do_open(sym, open_side, side))
+            if max_new is not None and len(tasks) >= max_new:
+                break
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -492,15 +498,21 @@ class Trader:
 
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
 
+        max_new = max_count - len(all_positions) if max_count > 0 else None
         tasks = []
         for sym in symbols:
             for side in sides:
+                if max_new is not None and len(tasks) >= max_new:
+                    log.info(f"REPLENISH ALL LIMIT: stop at {max_count} positions")
+                    break
                 if self._is_skipped_2027(sym):
                     continue
                 if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
                     continue
                 open_side = "buy" if side == "long" else "sell"
                 tasks.append(self._do_open(sym, open_side, side))
+            if max_new is not None and len(tasks) >= max_new:
+                break
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
             log.info(f"Replenished {len(tasks)} positions")

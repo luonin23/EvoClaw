@@ -136,15 +136,21 @@ async def main():
             open_tasks = []
         else:
             # Open only missing positions and record them
+            max_new = max_count - len(positions) if max_count > 0 else None
             open_tasks = []
             for sym in symbols:
                 for side in sides:
+                    if max_new is not None and len(open_tasks) >= max_new:
+                        log.info(f"STARTUP OPEN LIMIT: stop at {max_count} positions")
+                        break
                     key = f"{sym}:{side}"
                     if key not in tracked:
                         if client.should_stop_replenish(sym, side, stop_threshold, position_map):
                             continue
                         open_side = "buy" if side == "long" else "sell"
                         open_tasks.append((sym, open_side, side))
+                if max_new is not None and len(open_tasks) >= max_new:
+                    break
 
         if open_tasks:
             log.info(f"Opening {len(open_tasks)} missing positions")
