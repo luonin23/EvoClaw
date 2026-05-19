@@ -1161,15 +1161,23 @@ function setTrendPeriod(period) {
   });
 }
 
+let _chartData = null;
+let _resizeTimer = null;
+
 function drawChart(data) {
+  if (data) _chartData = data;
+  data = _chartData;
+  if (!data || data.length === 0) return;
+
   const canvas = document.getElementById('profitChart');
-  if (!canvas || !data || data.length === 0) return;
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const cssW = Math.max(1, Math.floor(rect.width));
   const cssH = Math.max(1, Math.floor(rect.height));
-  // Only resize canvas when CSS size changes to avoid reset/clear
+
+  // Always sync canvas pixel size to CSS size × DPR
   if (canvas._cssW !== cssW || canvas._cssH !== cssH) {
     canvas.width = cssW * dpr;
     canvas.height = cssH * dpr;
@@ -1177,9 +1185,22 @@ function drawChart(data) {
     canvas._cssH = cssH;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
+
   const width = cssW;
   const height = cssH;
-  const pad = { top: 16, right: 10, bottom: 40, left: 48 };
+
+  // Responsive scale based on design width of 600px
+  const scale = Math.max(0.55, Math.min(1.6, width / 600));
+  const fontSize = Math.max(8, Math.round(10 * scale));
+  const dotR = Math.max(1.5, 2.5 * scale);
+  const lineW = Math.max(1, 2 * scale);
+  const pad = {
+    top: Math.round(16 * scale),
+    right: Math.round(10 * scale),
+    bottom: Math.round(40 * scale),
+    left: Math.round(48 * scale)
+  };
+
   const chartW = Math.max(1, width - pad.left - pad.right);
   const chartH = Math.max(1, height - pad.top - pad.bottom);
 
@@ -1194,7 +1215,7 @@ function drawChart(data) {
 
   // Grid
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 1;
+  ctx.lineWidth = Math.max(0.5, 1 * scale);
   for (let i = 0; i <= 4; i++) {
     const y = pad.top + chartH * i / 4;
     ctx.beginPath();
@@ -1207,7 +1228,7 @@ function drawChart(data) {
   if (minRate < 0 && maxRate > 0) {
     const zeroY = pad.top + chartH - ((0 - minRate) / range) * chartH;
     ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.setLineDash([4, 4]);
+    ctx.setLineDash([Math.max(3, 4 * scale), Math.max(3, 4 * scale)]);
     ctx.beginPath();
     ctx.moveTo(pad.left, zeroY);
     ctx.lineTo(pad.left + chartW, zeroY);
@@ -1232,7 +1253,7 @@ function drawChart(data) {
   // Line
   ctx.beginPath();
   ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = lineW;
   ctx.lineJoin = 'round';
   data.forEach((point, i) => {
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
@@ -1248,25 +1269,24 @@ function drawChart(data) {
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
     const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
     ctx.beginPath();
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.arc(x, y, dotR, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  // X labels — show every label
+  // X labels
   ctx.fillStyle = 'var(--text-tertiary)';
-  ctx.font = '9px var(--font-mono)';
+  ctx.font = fontSize + 'px var(--font-mono)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   data.forEach((point, i) => {
     const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
     let lbl = point.label;
-    // Shorten: day → just day number, hour → HH
     if (lbl && lbl.includes('-')) {
-      lbl = lbl.split('-').pop(); // "2026-05-17" → "17"
+      lbl = lbl.split('-').pop();
     } else if (lbl && lbl.includes(':')) {
-      lbl = lbl.split(':')[0]; // "14:00" → "14"
+      lbl = lbl.split(':')[0];
     }
-    ctx.fillText(lbl, x, height - 32);
+    ctx.fillText(lbl, x, height - pad.bottom + Math.round(6 * scale));
   });
 
   // Y labels
@@ -1275,7 +1295,7 @@ function drawChart(data) {
   for (let i = 0; i <= 4; i++) {
     const rate = minRate + range * (1 - i / 4);
     const y = pad.top + chartH * i / 4;
-    ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - 6, y);
+    ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - Math.round(6 * scale), y);
   }
 }
 
@@ -1314,8 +1334,8 @@ let resizeTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (currentTab === 'dashboard') loadProfitTrend();
-  }, 300);
+    if (currentTab === 'dashboard') drawChart();
+  }, 150);
 });
 
 let refreshTimer = null;
