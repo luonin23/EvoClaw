@@ -7,6 +7,7 @@ set -e
 PROJECT_DIR="/home/claudeuser/EvoClaw"
 LOG_DIR="$PROJECT_DIR/data"
 PORT=8080
+MAX_WAIT=10
 
 echo "=== EvoClaw Restart ==="
 
@@ -16,22 +17,70 @@ echo "[1/5] Entered $PROJECT_DIR"
 
 # 2. 杀掉所有 EvoClaw 相关 Python 进程
 echo "[2/5] Stopping existing processes..."
-# 先优雅终止
-pkill -f "python3 main.py" 2>/dev/null || true
+# 先优雅终止（匹配更宽松）
+pkill -f "python.*main\\.py" 2>/dev/null || true
 sleep 1
-# 强制清理残留
-for pid in $(ps aux | grep "python3 main.py" | grep -v grep | awk '{print $2}'); do
-    echo "  Killing PID $pid"
-    kill -9 "$pid" 2>/dev/null || true
+
+# 强制清理残留，循环直到进程消失或超时
+waited=0
+while [ $waited -lt $MAX_WAIT ]; do
+    pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+    if [ -z "$pids" ]; then
+        echo "  All processes stopped"
+        break
+    fi
+    for pid in $pids; do
+        echo "  Force killing PID $pid"
+        kill -9 "$pid" 2>/dev/null || {
+            owner=$(ps -p "$pid" -o user= 2>/dev/null || echo "unknown")
+            echo "  WARNING: Cannot kill PID $pid (owner: $owner). Permission denied."
+        }
+    done
+    sleep 1
+    waited=$((waited + 1))
 done
-sleep 1
+
+# 如果进程仍存在，报错退出
+remaining=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+if [ -n "$remaining" ]; then
+    echo "  ERROR: Failed to kill processes after ${MAX_WAIT}s: $remaining"
+    ps aux | grep -E "PID|python.*main\\.py" | grep -v grep | sed 's/^/    /'
+    echo "  If owner is root, run as root or configure sudo."
+    exit 1
+fi
 
 # 3. 清理端口占用
 echo "[3/5] Cleaning port $PORT..."
-for pid in $(lsof -ti :$PORT 2>/dev/null || true); do
-    echo "  Killing port occupier PID $pid"
-    kill -9 "$pid" 2>/dev/null || true
+# 使用 fuser 强制清理端口（如果可用）
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${PORT}/tcp" 2>/dev/null || true
+fi
+
+# 循环检查端口释放
+waited=0
+while [ $waited -lt $MAX_WAIT ]; do
+    occupiers=$(lsof -ti :$PORT 2>/dev/null || true)
+    if [ -z "$occupiers" ]; then
+        echo "  Port $PORT is free"
+        break
+    fi
+    for pid in $occupiers; do
+        echo "  Killing port occupier PID $pid"
+        kill -9 "$pid" 2>/dev/null || {
+            owner=$(ps -p "$pid" -o user= 2>/dev/null || echo "unknown")
+            echo "  WARNING: Cannot kill PID $pid (owner: $owner). Permission denied."
+        }
+    done
+    sleep 1
+    waited=$((waited + 1))
 done
+
+# 如果端口仍被占用，报错退出
+if lsof -ti :$PORT >/dev/null 2>&1; then
+    echo "  ERROR: Port $PORT is still occupied after ${MAX_WAIT}s"
+    lsof -i :$PORT | sed 's/^/    /'
+    exit 1
+fi
 
 # 4. 清理日志（备份当前主日志，清空 trader.log）
 echo "[4/5] Cleaning logs..."
