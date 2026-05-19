@@ -60,6 +60,13 @@ class WebServer:
             self._api_cache[key] = (now, resp)
             return resp
 
+
+    async def _db_sync(self, fn, *args, **kwargs):
+        """Run a synchronous DB call in a thread pool to avoid blocking the event loop."""
+        import asyncio
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
     async def api_account_cached(self, request):
         return await self._cached_response("account", self.api_account, request)
 
@@ -181,25 +188,25 @@ class WebServer:
             total_pnl_rate = total_pnl / total_value if total_value > 0 else 0
             realtime_rate = sym_total_pnl / sym_total_value if sym_total_value > 0 else 0
 
-            # Update historical stats
-            hist_max_loss_rate = self.db.get_runtime_stat("max_position_loss_rate", 0)
+            # Update historical stats (offload to thread pool)
+            hist_max_loss_rate = await self._db_sync(self.db.get_runtime_stat, "max_position_loss_rate", 0)
             if current_max_loss_rate < hist_max_loss_rate:
                 hist_max_loss_rate = current_max_loss_rate
-                self.db.set_runtime_stat("max_position_loss_rate", hist_max_loss_rate)
-            hist_max_loss_pnl = self.db.get_runtime_stat("max_position_loss_pnl", 0)
+                await self._db_sync(self.db.set_runtime_stat, "max_position_loss_rate", hist_max_loss_rate)
+            hist_max_loss_pnl = await self._db_sync(self.db.get_runtime_stat, "max_position_loss_pnl", 0)
             if current_max_loss_pnl < hist_max_loss_pnl:
                 hist_max_loss_pnl = current_max_loss_pnl
-                self.db.set_runtime_stat("max_position_loss_pnl", hist_max_loss_pnl)
-            hist_total_loss_pnl = self.db.get_runtime_stat("hist_total_loss_pnl", 0)
-            hist_total_loss_rate = self.db.get_runtime_stat("hist_total_loss_rate", 0)
+                await self._db_sync(self.db.set_runtime_stat, "max_position_loss_pnl", hist_max_loss_pnl)
+            hist_total_loss_pnl = await self._db_sync(self.db.get_runtime_stat, "hist_total_loss_pnl", 0)
+            hist_total_loss_rate = await self._db_sync(self.db.get_runtime_stat, "hist_total_loss_rate", 0)
             if total_pnl < hist_total_loss_pnl:
                 hist_total_loss_pnl = total_pnl
-                self.db.set_runtime_stat("hist_total_loss_pnl", hist_total_loss_pnl)
+                await self._db_sync(self.db.set_runtime_stat, "hist_total_loss_pnl", hist_total_loss_pnl)
             if total_pnl_rate < hist_total_loss_rate:
                 hist_total_loss_rate = total_pnl_rate
-                self.db.set_runtime_stat("hist_total_loss_rate", hist_total_loss_rate)
+                await self._db_sync(self.db.set_runtime_stat, "hist_total_loss_rate", hist_total_loss_rate)
 
-            margin_call_count = int(self.db.get_runtime_stat("margin_call_count", 0))
+            margin_call_count = int(await self._db_sync(self.db.get_runtime_stat, "margin_call_count", 0))
 
             self._balance_cache = (time.monotonic(), float(balance.get("balance", 0) or 0))
             return web.json_response({
@@ -297,7 +304,7 @@ class WebServer:
         try:
             balance_data = await self.client.get_balance()
             balance = balance_data.get("balance", 0)
-            stats = self.db.get_stats(balance)
+            stats = await self._db_sync(self.db.get_stats, balance)
             return web.json_response(stats)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -410,11 +417,13 @@ class WebServer:
                     buckets.append((t.strftime("%Y-%m-%d"), t.strftime("%m-%d")))
                 start_iso = (now - timedelta(days=30)).isoformat()
 
-            with self.db.lock:
-                rows = self.db.conn.execute(
-                    "SELECT close_time, pnl FROM trades WHERE close_time >= ? ORDER BY close_time",
-                    (start_iso,),
-                ).fetchall()
+            def _fetch_trades():
+                with self.db.lock:
+                    return self.db.conn.execute(
+                        "SELECT close_time, pnl FROM trades WHERE close_time >= ? ORDER BY close_time",
+                        (start_iso,),
+                    ).fetchall()
+            rows = await self._db_sync(_fetch_trades)
 
             # Aggregate pnl by bucket
             from collections import defaultdict
@@ -446,8 +455,8 @@ class WebServer:
         try:
             limit = int(request.query.get("limit", "50"))
             offset = int(request.query.get("offset", "0"))
-            total = self.db.get_total_trades()
-            trades = self.db.get_recent_trades(limit, offset)
+            total = await self._db_sync(self.db.get_total_trades)
+            trades = await self._db_sync(self.db.get_recent_trades, limit, offset)
             return web.json_response({
                 "trades": trades,
                 "total": total,

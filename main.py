@@ -22,11 +22,34 @@ def setup_logging():
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)
     root.addHandler(ch)
+    # Use absolute path so RotatingFileHandler rotation works correctly
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "trader.log")
     fh = logging.handlers.RotatingFileHandler(
-        "data/trader.log", maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
     )
     fh.setFormatter(fmt)
     root.addHandler(fh)
+    # Clean up stale .bak files from before the fix
+    _cleanup_stale_logs()
+
+def _cleanup_stale_logs():
+    """Remove old .bak log files that accumulated before proper rotation was fixed."""
+    import glob
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    for f in sorted(glob.glob(os.path.join(data_dir, "trader.log.*.bak"))):
+        try:
+            os.remove(f)
+            logging.getLogger(__name__).info(f"Cleaned stale log: {os.path.basename(f)}")
+        except Exception:
+            pass
+    # Also limit numbered rotation files to backupCount
+    numbered = sorted(glob.glob(os.path.join(data_dir, "trader.log.[0-9]*")))
+    max_keep = 3
+    for f in numbered[:-max_keep] if len(numbered) > max_keep else []:
+        try:
+            os.remove(f)
+        except Exception:
+            pass
 
 
 def load_config():

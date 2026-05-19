@@ -296,5 +296,13 @@ class Database:
             )
             self.conn.commit()
 
+    def checkpoint(self):
+        """Checkpoint WAL to prevent unbounded growth."""
+        try:
+            with self.lock:
+                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception as e:
+            __import__("logging").getLogger(__name__).warning(f"WAL checkpoint failed: {e}")
+
     def close(self):
         self.conn.close()

@@ -16,6 +16,9 @@ class ExchangeClient:
         self.symbol_map = {}
         self._reverse_map = {}  # ccxt symbol -> user symbol (e.g. ENA/USDT:USDT -> ENAUSDT)
         self._prices = {}
+        # Throttle REPLENISH STOP logs: max 1 log per symbol per 30s
+        self._replenish_stop_cache: dict[str, float] = {}
+        self._replenish_stop_interval = 30
 
     async def load_markets(self):
         markets = await self.exchange.load_markets()
@@ -43,8 +46,8 @@ class ExchangeClient:
                     self._prices[sym] = float(ticker["last"])
                     if sym in self.market_info:
                         self.market_info[sym]["info"]["lastPrice"] = str(ticker["last"])
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"refresh_prices failed: {e}")
 
     async def get_candidate_symbols(self, volume_threshold: float, price_threshold: float) -> list[str]:
         """Return user-format symbols (e.g. ENAUSDT) filtered by 24h volume and last price."""

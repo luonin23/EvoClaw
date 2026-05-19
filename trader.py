@@ -1,6 +1,7 @@
 import asyncio
-import logging
 import json
+import logging
+import os
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ class Trader:
         self.config_path = config_path
         self.running = False
         self.config = self._load_config()
+        self._config_mtime = os.path.getmtime(self.config_path) if os.path.exists(self.config_path) else 0
         self._candidate_symbols = []
         self._last_symbol_refresh = 0
         self._refresh_lock = asyncio.Lock()
@@ -20,7 +22,7 @@ class Trader:
         self._fail2027_counts: dict[str, int] = {}
         self._fail2027_max = 5  # Skip after 5 consecutive failures
         self._fail2027_skipped_at: dict[str, float] = {}  # timestamp when circuit broke
-        self._fail2027_retry_after = 300  # retry after 5 minutes
+        self._fail2027_retry_after = 600  # retry after 10 minutes (was 5, too aggressive)
         # System position lookup cache: built once per tick, O(1) lookup for open_fee
         self._system_pos_map: dict[str, dict] = {}  # "symbol:side" -> open_position row
 
@@ -33,10 +35,13 @@ class Trader:
             return getattr(self, "config", {})
 
     def _get_config(self):
-        """Reload config each tick for hot-loading."""
+        """Reload config only when file changed (mtime-based)."""
         try:
-            with open(self.config_path, "r") as f:
-                self.config = json.load(f)
+            mtime = os.path.getmtime(self.config_path)
+            if mtime != self._config_mtime:
+                with open(self.config_path, "r") as f:
+                    self.config = json.load(f)
+                self._config_mtime = mtime
         except Exception as e:
             log.error(f"Config reload failed: {e}")
         return self.config
@@ -172,6 +177,9 @@ class Trader:
 
         # STEP 5: Replenish — pass positions directly, no internal re-fetch
         await self.replenish_missing(exchange_positions, candidate_symbols, sides, all_positions)
+
+        # Database WAL checkpoint to prevent WAL file growth
+        self.db.checkpoint()
 
     # ========== All-close: all positions excluding skip whitelist ==========
 

@@ -51,6 +51,7 @@ mkdir -p "$LOG_DIR"
 
 # 5. 启动服务
 echo "[5/5] Starting EvoClaw..."
+export PYTHONPATH=/home/claudeuser/.local/lib/python3.12/site-packages:$PYTHONPATH
 nohup python3 main.py > "$LOG_DIR/trader.log" 2>&1 &
 PID=$!
 echo "  Started with PID $PID"
