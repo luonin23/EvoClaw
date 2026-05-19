@@ -225,18 +225,19 @@ class Trader:
             if value > 0:
                 total_pnl += pnl
                 total_value += value
-                targets.append({
-                    "symbol": sym,
-                    "side": pos_side,
-                    "entry_price": entry_price,
-                    "contracts": contracts,
-                })
+                if pnl > 0:
+                    targets.append({
+                        "symbol": sym,
+                        "side": pos_side,
+                        "entry_price": entry_price,
+                        "contracts": contracts,
+                    })
 
         if total_value <= 0:
             return
         if total_pnl / total_value >= threshold:
             log.info(f"ALL CLOSE: pnl={total_pnl:.4f} value={total_value:.2f} rate={total_pnl/total_value:.4f} targets={len(targets)}")
-            # Close all targeted positions (system + manual)
+            # Close only profitable positions (never close losing ones)
             for t in targets:
                 sym = t["symbol"]
                 pos_side = t["side"]
@@ -264,9 +265,6 @@ class Trader:
                         trade_type="all_close",
                         open_fee=open_fee,
                     )
-            # Re-fetch positions after all-close before replenishing
-            fresh_positions = await self.client.get_positions()
-            await self.replenish_all(symbols, sides, fresh_positions)
 
     # ========== Single close (5-tier profit taking) ==========
 
@@ -372,7 +370,8 @@ class Trader:
                 continue
 
             avg_rate = sum(rates) / len(rates)
-            if avg_rate >= threshold:
+            # Only close pair when BOTH sides are profitable (never close a losing side)
+            if avg_rate >= threshold and min(rates) > 0:
                 log.info(f"SINGLE PAIR CLOSE {sym}: avg_rate={avg_rate:.4%} rates={[f'{r:.4%}' for r in rates]}")
                 for side in ("long", "short"):
                     result = await self.client.close_position(sym, side, contracts_map[side])
