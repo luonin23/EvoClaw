@@ -733,6 +733,20 @@ body{
     </div>
   </div>
 
+  <div class="config-group">
+    <div class="config-group-title">前端显示设置</div>
+    <div class="form-grid">
+      <div class="field">
+        <label>矩阵格子数</label>
+        <input type="number" id="cfgMatrixSlots" step="1" min="1" value="100">
+      </div>
+      <div class="field">
+        <label>矩阵列数</label>
+        <input type="number" id="cfgMatrixColumns" step="1" min="1" value="10">
+      </div>
+    </div>
+  </div>
+
   <div class="btn-row">
     <button class="btn btn-primary" id="btnSave" onclick="saveConfig()">保存配置</button>
     <button class="btn btn-danger" onclick="toggleTrading()" id="btnToggle">停止交易</button>
@@ -754,6 +768,8 @@ async function loadFrontendConfig() {
       if (cfg.matrix_columns) window.frontendConfig.matrix_columns = cfg.matrix_columns;
     }
   } catch (e) { /* use defaults */ }
+  document.getElementById('cfgMatrixSlots').value = window.frontendConfig.matrix_slots || 100;
+  document.getElementById('cfgMatrixColumns').value = window.frontendConfig.matrix_columns || 10;
 }
 
 function switchTab(tab) {
@@ -852,10 +868,23 @@ async function saveConfig() {
       body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => ({}));
-    if (r.ok && d.status === 'ok') {
+
+    const webBody = {
+      matrix_slots: parseInt(document.getElementById('cfgMatrixSlots').value) || 100,
+      matrix_columns: parseInt(document.getElementById('cfgMatrixColumns').value) || 10,
+    };
+    const wr = await fetch('/api/web-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(webBody),
+    });
+    const wd = await wr.json().catch(() => ({}));
+
+    if (r.ok && d.status === 'ok' && wr.ok && wd.status === 'ok') {
       showToast('配置已保存');
     } else {
-      showToast('保存失败: ' + (d.message || '服务器错误'));
+      const msg = d.message || wd.message || '服务器错误';
+      showToast('保存失败: ' + msg);
     }
   } catch (e) {
     showToast('保存失败: ' + (e.message || '网络错误'));
