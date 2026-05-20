@@ -743,6 +743,18 @@ body{
 <script>
 let trading = true;
 let currentTab = 'dashboard';
+window.frontendConfig = { matrix_slots: 100, matrix_columns: 10 };
+
+async function loadFrontendConfig() {
+  try {
+    const r = await fetch('/web/config.json');
+    if (r.ok) {
+      const cfg = await r.json();
+      if (cfg.matrix_slots) window.frontendConfig.matrix_slots = cfg.matrix_slots;
+      if (cfg.matrix_columns) window.frontendConfig.matrix_columns = cfg.matrix_columns;
+    }
+  } catch (e) { /* use defaults */ }
+}
 
 function switchTab(tab) {
   currentTab = tab;
@@ -1008,8 +1020,9 @@ async function loadPositionsMap(posData) {
   const container = document.getElementById('posMatrix');
   const tooltip = document.getElementById('posMatrixTooltip');
   if (!container) return;
-  const maxSlots = d.max_slots || 100;
-  const cols = 10;
+  const cols = window.frontendConfig.matrix_columns || 10;
+  const maxSlots = Math.max(d.max_slots || 100, window.frontendConfig.matrix_slots || 100);
+  container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
 
   // Build once with DocumentFragment
   if (container.children.length !== maxSlots) {
@@ -1084,7 +1097,9 @@ async function loadFullMatrix(posData) {
   if (!d || !d.slots) return;
   const container = document.getElementById('fullMatrix');
   if (!container) return;
-  const maxSlots = d.max_slots || 100;
+  const cols = window.frontendConfig.matrix_columns || 10;
+  const maxSlots = Math.max(d.max_slots || 100, window.frontendConfig.matrix_slots || 100);
+  container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
 
   // Build once with DocumentFragment + pre-create child elements
   if (container.children.length !== maxSlots) {
