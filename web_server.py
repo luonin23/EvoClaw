@@ -26,6 +26,9 @@ class WebServer:
         self.app.router.add_get("/api/system", self.api_system)
         self.app.router.add_get("/api/profit-trend", self.api_profit_trend_cached)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
+        self.app.router.add_get("/web/config.json", self.handle_web_config)
+        self.app.router.add_get("/api/web-config", self.api_web_config_get)
+        self.app.router.add_post("/api/web-config", self.api_web_config_set)
         # System metrics cache for rate calculations
         self._last_cpu = None
         self._last_net = None
@@ -86,6 +89,37 @@ class WebServer:
     async def handle_index(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
         return web.FileResponse(web_path)
+
+    async def handle_web_config(self, request):
+        config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
+        if os.path.exists(config_path):
+            return web.FileResponse(config_path)
+        return web.json_response({"matrix_slots": 100, "matrix_columns": 10})
+
+    async def api_web_config_get(self, request):
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    return web.json_response(json.load(f))
+            return web.json_response({"matrix_slots": 100, "matrix_columns": 10})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_web_config_set(self, request):
+        try:
+            data = await request.json()
+            config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
+            existing = {}
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    existing = json.load(f)
+            existing.update(data)
+            with open(config_path, "w") as f:
+                json.dump(existing, f, indent=4)
+            return web.json_response({"status": "ok", "message": "Frontend config saved"})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     async def api_config_get(self, request):
         cfg = self._load_config()

@@ -468,7 +468,10 @@ class Trader:
 
         max_new = max_count - len(all_positions) if max_count > 0 else None
         tasks = []
+        skip = set(cfg.get('skip_symbols', []))
         for sym in symbols:
+            if sym in skip:
+                continue
             for side in sides:
                 if max_new is not None and len(tasks) >= max_new:
                     log.info(f"REPLENISH LIMIT: stop at {max_count} positions")
@@ -506,7 +509,10 @@ class Trader:
 
         max_new = max_count - len(all_positions) if max_count > 0 else None
         tasks = []
+        skip = set(cfg.get('skip_symbols', []))
         for sym in symbols:
+            if sym in skip:
+                continue
             for side in sides:
                 if max_new is not None and len(tasks) >= max_new:
                     log.info(f"REPLENISH ALL LIMIT: stop at {max_count} positions")
