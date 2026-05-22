@@ -881,6 +881,8 @@ async function saveConfig() {
     const wd = await wr.json().catch(() => ({}));
 
     if (r.ok && d.status === 'ok' && wr.ok && wd.status === 'ok') {
+      window.frontendConfig.matrix_slots = webBody.matrix_slots;
+      window.frontendConfig.matrix_columns = webBody.matrix_columns;
       showToast('配置已保存');
     } else {
       const msg = d.message || wd.message || '服务器错误';
@@ -1050,7 +1052,7 @@ async function loadPositionsMap(posData) {
   const tooltip = document.getElementById('posMatrixTooltip');
   if (!container) return;
   const cols = window.frontendConfig.matrix_columns || 10;
-  const maxSlots = Math.max(d.max_slots || 100, window.frontendConfig.matrix_slots || 100);
+  const maxSlots = window.frontendConfig.matrix_slots || 100;
   container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
 
   // Build once with DocumentFragment
@@ -1127,7 +1129,7 @@ async function loadFullMatrix(posData) {
   const container = document.getElementById('fullMatrix');
   if (!container) return;
   const cols = window.frontendConfig.matrix_columns || 10;
-  const maxSlots = Math.max(d.max_slots || 100, window.frontendConfig.matrix_slots || 100);
+  const maxSlots = window.frontendConfig.matrix_slots || 100;
   container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
 
   // Build once with DocumentFragment + pre-create child elements

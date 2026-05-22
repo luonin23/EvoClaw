@@ -1718,3 +1718,20 @@ if m and m.get("swap") and m.get("quote") == "USDT":
 - 加载市场数从 727 减少到 687（排除 40 个 USDC 市场）
 - `get_candidate_symbols` 自动过滤（USDC 不在 `market_info` 中）
 - 现有 USDC 持仓不受影响（只是不再补仓/新开）
+
+### 14.6 矩阵格子数设置不生效修复
+
+**问题**：前端「显示设置」中修改矩阵格子数保存后，持仓矩阵未按新值渲染。
+
+**根因**：
+1. `saveConfig()` 保存前端配置到 `web/config.json` 后，未同步更新内存中的 `window.frontendConfig`，导致切换 tab 或刷新时仍使用旧值。
+2. `loadPositionsMap()` / `loadFullMatrix()` 中 `maxSlots` 计算为 `Math.max(d.max_slots, frontendConfig.matrix_slots)`，用户设置值会被后端 `max_position_count` 覆盖。
+
+**修复** (`web/index.html`)：
+- 保存成功后立即更新 `window.frontendConfig.matrix_slots` / `matrix_columns`
+- `maxSlots` 直接取 `window.frontendConfig.matrix_slots || 100`，不再与后端 `max_slots` 取 `Math.max`
+- 矩阵格子数成为**硬性上限**：持仓数超出设置值时，按排序规则截断显示（后端已按 `pnl_rate` 升序排序并截取）
+
+**行为变更**：
+- 矩阵格子数与 `max_position_count` 解耦：后端控制实际持仓上限，前端独立控制显示上限
+- 设置 120 则最多显示 120 格，设置 80 则最多显示 80 格，与后端持仓数量无关
