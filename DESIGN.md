@@ -1634,7 +1634,7 @@ for p in all_positions:
 
 **v1.5 新增**：`max_position_count` 配置项（默认 100）：
 - 控制最高持仓上限，所有开仓路径（replenish_missing / replenish_all / 启动开仓）均检查此限制
-- 矩阵网格数量同步此配置（`api/positions-map` 返回 `max_slots`）
+- 矩阵网格数量由前端独立配置 `matrix_slots` 控制，与 `max_position_count` 完全解耦
 - 前端根据 `max_slots` 动态重建网格
 
 ## 十四、v1.6 更新记录
@@ -1750,3 +1750,20 @@ if m and m.get("swap") and m.get("quote") == "USDT":
 - 页面初始化末尾增加 `loadFrontendConfig()` 调用
 - `fetch('/web/config.json')` 添加 `{ cache: 'no-store' }` 防止浏览器缓存旧配置
 
+
+### 14.8 后端 positions-map 返回全部持仓数据
+
+**问题**：`matrix_slots` 设为 120 后，前端渲染 120 个格子，但币信息只有 100 个（受后端 `max_position_count` 截取）。
+
+**根因**：`api_positions_map()` 用 `max_position_count` 截断了返回数据（`position_items[:max_slots]`），导致前端拿不到足够的币信息来填充格子。
+
+**修复** (`web_server.py`)：
+- `api_positions_map()` 返回**全部持仓数据**，不再用 `max_position_count` 截取
+- `max_position_count` 仅作为交易系统开仓上限，不再影响前端显示
+- 前端已有的 `if (i >= maxSlots) continue` 负责按 `matrix_slots` 截断显示
+
+**数据流**：
+1. 后端返回所有持仓（已按 `pnl_rate` 升序排序）
+2. 前端 `matrix_slots` 作为硬性显示上限：
+   - 持仓 < 格子数：显示全部，剩余格子为空
+   - 持仓 > 格子数：显示前 N 个，多余的隐藏（数据存在但不渲染）

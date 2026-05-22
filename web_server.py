@@ -295,9 +295,6 @@ class WebServer:
     async def api_positions_map(self, request):
         try:
             cfg = self._load_config()
-            max_slots = cfg.get("max_position_count", 100)
-            if max_slots <= 0:
-                max_slots = 100
 
             all_positions = await self.client.get_positions()
 
@@ -327,10 +324,10 @@ class WebServer:
 
             # Only send occupied slots; client fills empty ones
             result = []
-            for i, item in enumerate(position_items[:max_slots]):
+            for i, item in enumerate(position_items):
                 result.append({"index": i, **item, "occupied": True})
 
-            return web.json_response({"slots": result, "total_positions": len(all_positions), "max_slots": max_slots})
+            return web.json_response({"slots": result, "total_positions": len(all_positions), "max_slots": len(position_items)})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
