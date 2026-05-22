@@ -761,7 +761,7 @@ window.frontendConfig = { matrix_slots: 100, matrix_columns: 10 };
 
 async function loadFrontendConfig() {
   try {
-    const r = await fetch('/web/config.json');
+    const r = await fetch('/web/config.json', { cache: 'no-store' });
     if (r.ok) {
       const cfg = await r.json();
       if (cfg.matrix_slots) window.frontendConfig.matrix_slots = cfg.matrix_slots;
@@ -1496,6 +1496,7 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 loadConfig();
+loadFrontendConfig();
 refresh();
 loadSystem();
 startTimers();

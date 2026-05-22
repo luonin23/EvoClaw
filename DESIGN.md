@@ -1735,3 +1735,18 @@ if m and m.get("swap") and m.get("quote") == "USDT":
 **行为变更**：
 - 矩阵格子数与 `max_position_count` 解耦：后端控制实际持仓上限，前端独立控制显示上限
 - 设置 120 则最多显示 120 格，设置 80 则最多显示 80 格，与后端持仓数量无关
+
+### 14.7 矩阵格子数设置刷新后恢复默认值修复
+
+**问题**：前端设置矩阵格子数为120保存后，刷新页面输入框恢复为100。
+
+**根因**：
+1. 页面初始化时（`loadConfig()`）只加载了交易配置，**从未调用 `loadFrontendConfig()`** 读取 `web/config.json`
+2. `cfgMatrixSlots` / `cfgMatrixColumns` 输入框始终显示 HTML 硬编码的 `value="100"` / `value="10"`
+3. `window.frontendConfig` 始终使用默认值 `{ matrix_slots: 100, matrix_columns: 10 }`
+4. `fetch('/web/config.json')` 可能被浏览器缓存，返回旧值
+
+**修复** (`web/index.html`)：
+- 页面初始化末尾增加 `loadFrontendConfig()` 调用
+- `fetch('/web/config.json')` 添加 `{ cache: 'no-store' }` 防止浏览器缓存旧配置
+
