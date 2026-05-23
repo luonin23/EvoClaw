@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EvoClaw - 智能量化交易系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg-black: #000000;
+            --bg-dark: #0a0a0a;
+            --text-white: #ffffff;
+            --text-gray: #a0a0a0;
+            --green-up: #00c853;
+            --green-glow: rgba(0, 200, 83, 0.3);
+            --red-down: #ff1744;
+            --red-glow: rgba(255, 23, 68, 0.3);
+        }
+
+        body {
+            background: var(--bg-black);
+            color: var(--text-white);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            overflow-x: hidden;
+        }
+
+        .scene {
+            width: 100vw;
+            min-height: 100vh;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .scene-content {
+            width: 100%;
+            max-width: 1200px;
+            padding: 80px 40px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .grid-bg {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .k-line {
+            position: absolute;
+            width: 4px;
+            border-radius: 2px;
+            opacity: 0.12;
+        }
+
+        .k-line.green {
+            background: var(--green-up);
+            box-shadow: 0 0 10px var(--green-glow);
+        }
+
+        .k-line.red {
+            background: var(--red-down);
+            box-shadow: 0 0 10px var(--red-glow);
+        }
+
+        /* ===== SCENE 1: HERO ===== */
+        #scene-hero {
+            background: radial-gradient(ellipse at center, #111 0%, #000 100%);
+        }
+
+        .hero-title {
+            font-size: 90px;
+            font-weight: 900;
+            letter-spacing: 10px;
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .hero-title .evo {
+            color: var(--green-up);
+            text-shadow: 0 0 50px var(--green-glow);
+        }
+
+        .hero-title .claw {
+            color: var(--red-down);
+            text-shadow: 0 0 50px var(--red-glow);
+        }
+
+        .hero-subtitle {
+            font-size: 28px;
+            text-align: center;
+            color: var(--text-gray);
+            letter-spacing: 16px;
+            text-transform: uppercase;
+            margin-bottom: 50px;
+        }
+
+        .hero-desc {
+            font-size: 20px;
+            text-align: center;
+            color: var(--text-white);
+            line-height: 2;
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .hero-desc .green { color: var(--green-up); font-weight: 700; }
+        .hero-desc .red { color: var(--red-down); font-weight: 700; }
+
+        .scroll-indicator {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-gray);
+            font-size: 12px;
+            letter-spacing: 2px;
+        }
+
+        .scroll-indicator::after {
+            content: '';
+            width: 1px;
+            height: 40px;
+            background: linear-gradient(to bottom, var(--green-up), transparent);
+            animation: scrollPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes scrollPulse {
+            0%, 100% { opacity: 0.3; transform: scaleY(0.5); }
+            50% { opacity: 1; transform: scaleY(1); }
+        }
+
+        /* ===== SECTION TITLE ===== */
+        .section-title {
+            font-size: 44px;
+            font-weight: 800;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .section-title .green { color: var(--green-up); }
+        .section-title .red { color: var(--red-down); }
+
+        .section-subtitle {
+            font-size: 18px;
+            color: var(--text-gray);
+            text-align: center;
+            margin-bottom: 60px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.7;
+        }
+
+        .section-line {
+            width: 60px;
+            height: 3px;
+            background: linear-gradient(90deg, var(--green-up), var(--red-down));
+            margin: 0 auto 60px;
+            border-radius: 2px;
+        }
+
+        /* ===== CARDS ===== */
+        .card-grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+        }
+
+        .card-grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 30px;
+        }
+
+        .card-grid-6 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+        }
+
+        .info-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 16px;
+            padding: 40px 32px;
+            transition: all 0.3s ease;
+        }
+
+        .info-card:hover {
+            border-color: rgba(0, 200, 83, 0.25);
+            transform: translateY(-6px);
+            box-shadow: 0 24px 48px rgba(0, 200, 83, 0.08);
+        }
+
+        .card-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 26px;
+            margin-bottom: 24px;
+        }
+
+        .card-icon.green { background: rgba(0,200,83,0.1); border: 1px solid rgba(0,200,83,0.2); }
+        .card-icon.red { background: rgba(255,23,68,0.1); border: 1px solid rgba(255,23,68,0.2); }
+        .card-icon.white { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); }
+
+        .info-card h3 {
+            font-size: 22px;
+            margin-bottom: 14px;
+        }
+
+        .info-card p {
+            font-size: 15px;
+            color: var(--text-gray);
+            line-height: 1.8;
+        }
+
+        /* ===== COMPARE ===== */
+        #scene-compare {
+            background: var(--bg-dark);
+        }
+
+        .compare-wrap {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            max-width: 960px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .compare-box {
+            padding: 44px;
+            border-radius: 20px;
+        }
+
+        .compare-box.old {
+            background: rgba(255,23,68,0.04);
+            border: 1px solid rgba(255,23,68,0.12);
+        }
+
+        .compare-box.new {
+            background: rgba(0,200,83,0.04);
+            border: 1px solid rgba(0,200,83,0.12);
+        }
+
+        .compare-box h3 {
+            font-size: 26px;
+            margin-bottom: 28px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .compare-box.old h3 { color: var(--red-down); }
+        .compare-box.new h3 { color: var(--green-up); }
+
+        .compare-box ul { list-style: none; }
+
+        .compare-box li {
+            padding: 12px 0;
+            font-size: 15px;
+            color: var(--text-gray);
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            line-height: 1.6;
+        }
+
+        .compare-box li:last-child { border-bottom: none; }
+
+        .compare-box.old li::before {
+            content: '✕'; color: var(--red-down); font-weight: bold; flex-shrink: 0;
+        }
+
+        .compare-box.new li::before {
+            content: '✓'; color: var(--green-up); font-weight: bold; flex-shrink: 0;
+        }
+
+        .vs-circle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 56px;
+            height: 56px;
+            background: var(--bg-black);
+            border: 2px solid rgba(255,255,255,0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 800;
+            z-index: 3;
+        }
+
+        /* ===== ENGINES ===== */
+        #scene-engines {
+            background: var(--bg-black);
+        }
+
+        .engine-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 14px;
+            padding: 32px 24px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .engine-card:hover {
+            border-color: rgba(0,200,83,0.2);
+            background: rgba(0,200,83,0.02);
+        }
+
+        .engine-num {
+            font-size: 40px;
+            font-weight: 900;
+            margin-bottom: 16px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .engine-card:nth-child(odd) .engine-num { color: var(--green-up); }
+        .engine-card:nth-child(even) .engine-num { color: var(--red-down); }
+
+        .engine-card h4 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+
+        .engine-card p {
+            font-size: 14px;
+            color: var(--text-gray);
+            line-height: 1.7;
+        }
+
+        /* ===== MATRIX / DASHBOARD ===== */
+        #scene-dashboard {
+            background: var(--bg-dark);
+        }
+
+        .dash-showcase {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 50px;
+            align-items: center;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .dash-visual {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 20px;
+            padding: 36px;
+            min-height: 380px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .matrix-grid {
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            gap: 6px;
+            margin-bottom: 20px;
+        }
+
+        .m-cell {
+            aspect-ratio: 1;
+            border-radius: 4px;
+            font-size: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+        }
+
+        .m-cell.profit {
+            background: rgba(0,200,83,0.15);
+            border: 1px solid rgba(0,200,83,0.3);
+            color: var(--green-up);
+        }
+
+        .m-cell.loss {
+            background: rgba(255,23,68,0.15);
+            border: 1px solid rgba(255,23,68,0.3);
+            color: var(--red-down);
+        }
+
+        .m-cell.empty {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .dash-stats-row {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .dash-stat {
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 10px 16px;
+            text-align: center;
+            min-width: 90px;
+        }
+
+        .dash-stat .val {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .dash-stat .val.up { color: var(--green-up); }
+        .dash-stat .val.down { color: var(--red-down); }
+
+        .dash-stat .lab {
+            font-size: 10px;
+            color: var(--text-gray);
+            margin-top: 4px;
+            letter-spacing: 1px;
+        }
+
+        .dash-text h3 {
+            font-size: 32px;
+            margin-bottom: 24px;
+            line-height: 1.3;
+        }
+
+        .dash-text p {
+            font-size: 16px;
+            color: var(--text-gray);
+            line-height: 1.9;
+            margin-bottom: 20px;
+        }
+
+        .dash-list {
+            list-style: none;
+        }
+
+        .dash-list li {
+            padding: 10px 0;
+            font-size: 15px;
+            color: var(--text-white);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .dash-list li::before {
+            content: '▸';
+            color: var(--green-up);
+        }
+
+        /* ===== PROCESS ===== */
+        #scene-process {
+            background: var(--bg-black);
+        }
+
+        .process-track {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            max-width: 1000px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .process-track::before {
+            content: '';
+            position: absolute;
+            top: 36px;
+            left: 8%;
+            right: 8%;
+            height: 2px;
+            background: linear-gradient(90deg, var(--green-up), var(--red-down), var(--green-up));
+            opacity: 0.25;
+        }
+
+        .p-step {
+            flex: 1;
+            text-align: center;
+            position: relative;
+            z-index: 2;
+        }
+
+        .p-circle {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: var(--bg-black);
+            border: 2px solid;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            font-weight: 800;
+            margin: 0 auto 24px;
+        }
+
+        .p-step:nth-child(odd) .p-circle {
+            border-color: var(--green-up);
+            color: var(--green-up);
+            box-shadow: 0 0 24px var(--green-glow);
+        }
+
+        .p-step:nth-child(even) .p-circle {
+            border-color: var(--red-down);
+            color: var(--red-down);
+            box-shadow: 0 0 24px var(--red-glow);
+        }
+
+        .p-step h4 {
+            font-size: 17px;
+            margin-bottom: 10px;
+        }
+
+        .p-step p {
+            font-size: 14px;
+            color: var(--text-gray);
+            line-height: 1.6;
+        }
+
+        /* ===== ENDING ===== */
+        #scene-ending {
+            background: radial-gradient(ellipse at center, #111 0%, #000 100%);
+        }
+
+        .ending-wrap {
+            text-align: center;
+        }
+
+        .ending-big {
+            font-size: 56px;
+            font-weight: 900;
+            margin-bottom: 32px;
+            line-height: 1.3;
+        }
+
+        .ending-big .green { color: var(--green-up); }
+        .ending-big .red { color: var(--red-down); }
+
+        .ending-desc {
+            font-size: 20px;
+            color: var(--text-gray);
+            line-height: 1.9;
+            max-width: 640px;
+            margin: 0 auto 50px;
+        }
+
+        .ending-badges {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            padding: 14px 32px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            border: 1px solid;
+            background: rgba(255,255,255,0.02);
+        }
+
+        .badge.green {
+            border-color: rgba(0,200,83,0.35);
+            color: var(--green-up);
+        }
+
+        .badge.red {
+            border-color: rgba(255,23,68,0.35);
+            color: var(--red-down);
+        }
+
+        .badge.white {
+            border-color: rgba(255,255,255,0.15);
+            color: var(--text-white);
+        }
+
+        /* ===== ANIMATIONS ===== */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(40px);
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            .hero-title { font-size: 52px; letter-spacing: 4px; }
+            .hero-subtitle { font-size: 18px; letter-spacing: 6px; }
+            .section-title { font-size: 32px; }
+            .card-grid-3, .card-grid-2, .card-grid-6 { grid-template-columns: 1fr; }
+            .compare-wrap { grid-template-columns: 1fr; }
+            .vs-circle { display: none; }
+            .dash-showcase { grid-template-columns: 1fr; }
+            .process-track { flex-direction: column; }
+            .process-track::before { display: none; }
+            .ending-big { font-size: 36px; }
+            .ending-badges { flex-direction: column; align-items: center; }
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-bg"></div>
+    <div id="kline-container" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1;"></div>
+
+    <!-- ===== SCENE 1: HERO ===== -->
+    <section class="scene" id="scene-hero">
+        <div class="scene-content">
+            <h1 class="hero-title fade-in">
+                <span class="evo">EVO</span><span class="claw">CLAW</span>
+            </h1>
+            <p class="hero-subtitle fade-in">智能量化交易系统</p>
+            <p class="hero-desc fade-in">
+                让机器替你感知市场，让算法替你收割利润<br>
+                <span class="green">双向持仓</span>对冲风险，<span class="red">分层止盈</span>锁定收益<br>
+                全自动运行，7×24 小时不眠不休
+            </p>
+        </div>
+        <div class="scroll-indicator">SCROLL</div>
+    </section>
+
+    <!-- ===== SCENE 2: AI BRAIN ===== -->
+    <section class="scene" id="scene-ai">
+        <div class="scene-content">
+            <h2 class="section-title fade-in">
+                <span class="green">AI</span> 驱动的交易大脑
+            </h2>
+            <p class="section-subtitle fade-in">
+                EvoClaw 不是简单的定时任务，而是一套具备感知、决策、执行、自愈能力的智能交易体系
+            </p>
+            <div class="section-line fade-in"></div>
+
+            <div class="card-grid-3">
+                <div class="info-card fade-in">
+                    <div class="card-icon green">🧠</div>
+                    <h3>实时市场感知</h3>
+                    <p>每秒扫描全市场持仓状态，实时计算盈亏比率、波动偏离、资金健康度。比人类交易员快数百倍的反应速度，任何微小的盈利窗口都逃不过它的感知。</p>
+                </div>
+                <div class="info-card fade-in">
+                    <div class="card-icon red">🛡️</div>
+                    <h3>智能风险对冲</h3>
+                    <p>同一标的自动建立多空双向仓位，无论市场涨跌，总有一边在盈利。配合动态停补保护，当对方仓位偏离过大时自动暂停补仓，防止无限敞口。</p>
+                </div>
+                <div class="info-card fade-in">
+                    <div class="card-icon white">🔭</div>
+                    <h3>自适应标的筛选</h3>
+                    <p>基于成交量与价格维度自动扫描全市场，持续发现高流动性、低门槛的优质标的。候选池自动更新，资金永远流向最具性价比的机会。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SCENE 3: COMPARE ===== -->
+    <section class="scene" id="scene-compare">
+        <div class="scene-content">
+            <h2 class="section-title fade-in">
+                为什么放弃<span class="red">传统交易</span>？
+            </h2>
+            <p class="section-subtitle fade-in">
+                人工交易的痛点，正是 EvoClaw 的战场
+            </p>
+            <div class="section-line fade-in"></div>
+
+            <div class="compare-wrap">
+                <div class="compare-box old fade-in">
+                    <h3>人工/半自动交易</h3>
+                    <ul>
+                        <li>盯盘耗神，反应延迟以秒计</li>
+                        <li>单向押注，暴涨暴跌全靠赌</li>
+                        <li>手动选币，信息滞后维护累</li>
+                        <li>止盈僵化，利润到嘴又吐出</li>
+                        <li>亏损割肉，越亏越慌越乱</li>
+                        <li>情绪干扰，贪婪恐惧交替支配</li>
+                    </ul>
+                </div>
+                <div class="vs-circle">VS</div>
+                <div class="compare-box new fade-in">
+                    <h3>EvoClaw 全自动</h3>
+                    <ul>
+                        <li>毫秒级感知，微盈利即刻收割</li>
+                        <li>双向持仓，涨跌都有收益来源</li>
+                        <li>全市场扫描，优质标的自动入库</li>
+                        <li>阶梯止盈，利润分批落袋为安</li>
+                        <li>智能加仓，摊薄成本静待反弹</li>
+                        <li>零情绪执行，纯数据驱动决策</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SCENE 4: ENGINES ===== -->
+    <section class="scene" id="scene-engines">
+        <div class="scene-content">
+            <h2 class="section-title fade-in">
+                六大<span class="green">智能引擎</span>
+            </h2>
+            <p class="section-subtitle fade-in">
+                每一个引擎独立运行，协同配合，形成完整的交易闭环
+            </p>
+            <div class="section-line fade-in"></div>
+
+            <div class="card-grid-6">
+                <div class="engine-card fade-in">
+                    <div class="engine-num">01</div>
+                    <h4>利润收割引擎</h4>
+                    <p>多档阶梯式止盈策略，盈利达到不同阶段自动分批平仓。低位利润先落袋，高位仓位继续博弈，最大化资金利用率。</p>
+                </div>
+                <div class="engine-card fade-in">
+                    <div class="engine-num">02</div>
+                    <h4>全局风控引擎</h4>
+                    <p>当账户整体盈利达到设定阈值时，一键全平所有持仓，落袋为安。随后自动重新开仓，让资金立即回归战场。</p>
+                </div>
+                <div class="engine-card fade-in">
+                    <div class="engine-num">03</div>
+                    <h4>对冲锁定引擎</h4>
+                    <p>同一标的多空双边同时盈利时，智能判断最佳对平时机，双向平仓锁定对冲利润，释放保证金。</p>
+                </div>
+                <div class="engine-card fade-in">
+                    <div class="engine-num">04</div>
+                    <h4>成本修复引擎</h4>
+                    <p>仓位出现浮亏且达到预设条件时，自动追加仓位摊薄平均成本。基于当前持仓量动态计算加仓规模，非固定模式。</p>
+                </div>
+                <div class="engine-card fade-in">
+                    <div class="engine-num">05</div>
+                    <h4>仓位自愈引擎</h4>
+                    <p>持续监测持仓完整性，发现缺失仓位自动补齐。三重防重复机制确保不会过度开仓，停补保护防止逆势加仓。</p>
+                </div>
+                <div class="engine-card fade-in">
+                    <div class="engine-num">06</div>
+                    <h4>数据可视化引擎</h4>
+                    <p>持仓矩阵一屏尽览全局战场，多空盈亏实时统计，盈利趋势一眼看清。让数据成为你指挥交易的作战地图。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SCENE 5: DASHBOARD ===== -->
+    <section class="scene" id="scene-dashboard">
+        <div class="scene-content">
+            <h2 class="section-title fade-in">
+                你的<span class="red">交易指挥中心</span>
+            </h2>
+            <p class="section-subtitle fade-in">
+                不是冰冷的后台，而是直观的作战地图
+            </p>
+            <div class="section-line fade-in"></div>
+
+            <div class="dash-showcase">
+                <div class="dash-visual fade-in">
+                    <div class="matrix-grid">
+                        <div class="m-cell profit">BTC</div>
+                        <div class="m-cell loss">ETH</div>
+                        <div class="m-cell profit">SOL</div>
+                        <div class="m-cell empty"></div>
+                        <div class="m-cell profit">DOGE</div>
+                        <div class="m-cell loss">XRP</div>
+                        <div class="m-cell profit">ADA</div>
+                        <div class="m-cell profit">AVAX</div>
+                        <div class="m-cell empty"></div>
+                        <div class="m-cell loss">LINK</div>
+                        <div class="m-cell profit">DOT</div>
+                        <div class="m-cell empty"></div>
+                        <div class="m-cell loss">LTC</div>
+                        <div class="m-cell profit">BCH</div>
+                        <div class="m-cell empty"></div>
+                        <div class="m-cell profit">UNI</div>
+                        <div class="m-cell loss">MATIC</div>
+                        <div class="m-cell empty"></div>
+                        <div class="m-cell profit">FIL</div>
+                        <div class="m-cell empty"></div>
+                    </div>
+                    <div class="dash-stats-row">
+                        <div class="dash-stat">
+                            <div class="val up">+12.5%</div>
+                            <div class="lab">累计盈利率</div>
+                        </div>
+                        <div class="dash-stat">
+                            <div class="val up">87.3%</div>
+                            <div class="lab">胜率</div>
+                        </div>
+                        <div class="dash-stat">
+                            <div class="val down">-3.2%</div>
+                            <div class="lab">实时回撤</div>
+                        </div>
+                        <div class="dash-stat">
+                            <div class="val up">156</div>
+                            <div class="lab">总交易数</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dash-text fade-in">
+                    <h3>一屏掌控<br><span class="green">全局战场</span></h3>
+                    <p>持仓矩阵将数百个仓位浓缩为一张作战地图。绿色是盈利的阵地，红色是待收复的失地，空白是等待部署的战位。</p>
+                    <ul class="dash-list">
+                        <li>多空盈亏独立统计，策略效能一目了然</li>
+                        <li>历史最高亏损追踪，风险边界心中有数</li>
+                        <li>实时资产健康度监测，随时掌握资金状态</li>
+                        <li>盈利趋势可视化，长期表现清晰呈现</li>
+                        <li>系统性能监控，服务器状态实时可见</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SCENE 6: PROCESS ===== -->
+    <section class="scene" id="scene-process">
+        <div class="scene-content">
+            <h2 class="section-title fade-in">
+                从选币到盈利，<span class="green">全自动闭环</span>
+            </h2>
+            <p class="section-subtitle fade-in">
+                你只需配置一次，剩下的交给 EvoClaw
+            </p>
+            <div class="section-line fade-in"></div>
+
+            <div class="process-track">
+                <div class="p-step fade-in">
+                    <div class="p-circle">1</div>
+                    <h4>智能选币</h4>
+                    <p>全市场扫描高流动性标的，自动筛选符合条件的交易对并持续更新候选池</p>
+                </div>
+                <div class="p-step fade-in">
+                    <div class="p-circle">2</div>
+                    <h4>双向建仓</h4>
+                    <p>对每只候选标的同步建立多空仓位，天然对冲单边风险，无惧涨跌</p>
+                </div>
+                <div class="p-step fade-in">
+                    <div class="p-circle">3</div>
+                    <h4>实时扫描</h4>
+                    <p>每秒遍历全部持仓，计算盈亏、检测止盈止损条件、识别加仓机会</p>
+                </div>
+                <div class="p-step fade-in">
+                    <div class="p-circle">4</div>
+                    <h4>智能收割</h4>
+                    <p>达到条件即自动平仓，阶梯止盈、全平、对平多种模式协同运作</p>
+                </div>
+                <div class="p-step fade-in">
+                    <div class="p-circle">5</div>
+                    <h4>自动补仓</h4>
+                    <p>平仓后检测仓位缺口，自动补齐缺失头寸，资金永不闲置</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SCENE 7: ENDING ===== -->
+    <section class="scene" id="scene-ending">
+        <div class="scene-content ending-wrap">
+            <h2 class="ending-big fade-in">
+                <span class="green">进化</span>你的交易思维<br>
+                <span class="red">抓取</span>每一个盈利窗口
+            </h2>
+            <p class="ending-desc fade-in">
+                不需要盯盘，不需要分析，不需要情绪管理<br>
+                你设定规则，EvoClaw 替你执行<br>
+                24 小时不间断，毫秒级响应，零情绪干扰
+            </p>
+            <div class="ending-badges fade-in">
+                <div class="badge green">全自动运行</div>
+                <div class="badge red">双向对冲</div>
+                <div class="badge white">微盈利策略</div>
+                <div class="badge green">智能决策</div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        // K-line decorations
+        const kc = document.getElementById('kline-container');
+        for (let i = 0; i < 30; i++) {
+            const k = document.createElement('div');
+            k.className = 'k-line ' + (Math.random() > 0.5 ? 'green' : 'red');
+            k.style.left = Math.random() * 100 + '%';
+            k.style.top = Math.random() * 100 + '%';
+            k.style.height = (20 + Math.random() * 80) + 'px';
+            kc.appendChild(k);
+        }
+
+        // IntersectionObserver scroll animations
+        const obs = new IntersectionObserver((entries) => {
+            entries.forEach(e => {
+                if (e.isIntersecting) {
+                    const el = e.target;
+                    const siblings = Array.from(el.parentElement.querySelectorAll('.fade-in'));
+                    const idx = siblings.indexOf(el);
+                    gsap.to(el, { opacity: 1, y: 0, duration: 0.6, ease: 'power2.out', delay: idx * 0.1 });
+                    obs.unobserve(el);
+                }
+            });
+        }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
+
+        document.querySelectorAll('.fade-in').forEach(el => obs.observe(el));
+
+        // Hero auto entrance
+        gsap.to('#scene-hero .hero-title', { opacity: 1, y: 0, duration: 1, ease: 'power3.out', delay: 0.3 });
+        gsap.to('#scene-hero .hero-subtitle', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out', delay: 0.6 });
+        gsap.to('#scene-hero .hero-desc', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out', delay: 0.9 });
+    </script>
+</body>
+</html>
