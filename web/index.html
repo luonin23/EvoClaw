@@ -785,7 +785,10 @@ function switchTab(tab) {
 
 async function api(path) {
   try {
-    const r = await fetch(path);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10000);
+    const r = await fetch(path, { signal: ctrl.signal });
+    clearTimeout(t);
     if (!r.ok) return null;
     return await r.json();
   } catch { return null }
@@ -1202,7 +1205,7 @@ function setTrendPeriod(period) {
   document.getElementById('btnDay').classList.toggle('active', period === 'day');
   document.getElementById('btnHour').disabled = true;
   document.getElementById('btnDay').disabled = true;
-  loadProfitTrend().then(() => {
+  loadProfitTrend(period).finally(() => {
     document.getElementById('btnHour').disabled = false;
     document.getElementById('btnDay').disabled = false;
   });
@@ -1212,9 +1215,10 @@ let _chartData = null;
 let _resizeTimer = null;
 
 function drawChart(data) {
-  if (data) _chartData = data;
-  data = _chartData;
-  if (!data || data.length === 0) return;
+  try {
+    if (data) _chartData = data;
+    data = _chartData;
+    if (!data || data.length === 0) return;
 
   const canvas = document.getElementById('profitChart');
   if (!canvas) return;
@@ -1360,6 +1364,9 @@ function drawChart(data) {
     const y = pad.top + chartH * i / 4;
     ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - Math.round(6 * scale), y);
   }
+  } catch (e) {
+    console.error('drawChart error', e);
+  }
 }
 
 
@@ -1367,9 +1374,12 @@ async function loadMatrixTab() {
   const posData = await api('/api/positions-map');
   await Promise.all([loadPositionsMap(posData), loadFullMatrix(posData)]);
 }
-async function loadProfitTrend() {
-  const d = await api('/api/profit-trend?period=' + trendPeriod);
+async function loadProfitTrend(period) {
+  period = period || trendPeriod;
+  const d = await api('/api/profit-trend?period=' + period);
   if (!d || !d.data) return;
+  // Ignore stale responses if user switched period while fetching
+  if (period !== trendPeriod) return;
   drawChart(d.data);
 }
 
