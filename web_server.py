@@ -16,6 +16,7 @@ class WebServer:
         self.trader = trader
         self.app = web.Application()
         self.app.router.add_get("/", self.handle_index)
+        self.app.router.add_get("/intro.html", self.handle_intro)
         self.app.router.add_get("/api/config", self.api_config_get)
         self.app.router.add_post("/api/config", self.api_config_set)
         self.app.router.add_get("/api/account", self.api_account_cached)
@@ -88,6 +89,10 @@ class WebServer:
 
     async def handle_index(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
+        return web.FileResponse(web_path)
+
+    async def handle_intro(self, request):
+        web_path = os.path.join(os.path.dirname(__file__), "web", "intro.html")
         return web.FileResponse(web_path)
 
     async def handle_web_config(self, request):
