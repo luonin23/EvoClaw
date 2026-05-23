@@ -425,6 +425,13 @@ class Trader:
             if loss_rate >= threshold:
                 # v1.4-fix: add based on current position size, not min contracts
                 add_amount = contracts * multiplier
+                min_amount = self.client.calc_min_contracts(sym)
+                if add_amount < min_amount:
+                    log.info(
+                        f"MARGIN CALL {sym} {side}: calculated {add_amount} < min {min_amount}, "
+                        f"using min amount"
+                    )
+                    add_amount = min_amount
                 log.info(
                     f"MARGIN CALL {sym} {side}: loss={loss_rate:.4%} threshold={threshold:.4%} "
                     f"adding {add_amount} contracts (current={contracts} x {multiplier})"
