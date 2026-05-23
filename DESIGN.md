@@ -182,6 +182,7 @@ async def run(self):
 - 扫描所有持仓，排除白名单
 - 多单亏损 ≥ `margin_call_threshold_long` 或空单亏损 ≥ `margin_call_threshold_short`
 - 加仓数量 = 当前持仓合约数 × `margin_call_multiplier`
+- **最小下单量保护**：若计算值低于交易所最小名义价值（如 5 USDT），自动提升为 calc_min_contracts() 计算出的最小合约数，确保加仓单不会被交易所拒绝
 - **可重复触发**：每轮 tick 满足条件就继续加，无次数限制
 - 加仓时累加 `added_fee` 到 `open_positions.open_fee`
 
@@ -720,6 +721,7 @@ profit_rate = unrealized_pnl / position_value
 | 持仓叠加到 1000+ | 只检查交易所持仓 | 增加 DB `open_positions` 双重检查 |
 | 已有持仓不触发平仓 | 启动时未记录到 `open_positions` | 启动时遍历交易所持仓并 `record_open()` |
 | 平仓盈亏记录为 0 | ccxt `create_order()` 不返回 `closedPnL` | `_record_trade()` 手动计算 PnL |
+| 加仓被交易所拒绝 | 加仓数量 = contracts x multiplier，未检查最小名义价值 | 加仓前与 `calc_min_contracts()` 取较大值，不足时自动提升到最小下单量 |
 
 ### 7.4 补仓停补漏洞
 
