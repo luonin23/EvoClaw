@@ -50,18 +50,33 @@ class WebServer:
 
     async def _cached_response(self, key, handler, request):
         """Return cached response if within TTL, otherwise call handler and cache.
-        Uses a lock to prevent thundering herd on cache miss."""
+        Uses a lock to prevent thundering herd on cache miss.
+        Caches parsed JSON data instead of Response objects to avoid aiohttp reuse issues."""
         now = time.monotonic()
         cached = self._api_cache.get(key)
         if cached and now - cached[0] < self._api_cache_ttl:
-            return cached[1]
+            data = cached[1]
+            if isinstance(data, dict):
+                return web.json_response(data)
+            return data
         async with self._cache_lock:
             # Double-check after acquiring lock
             cached = self._api_cache.get(key)
             if cached and now - cached[0] < self._api_cache_ttl:
-                return cached[1]
+                data = cached[1]
+                if isinstance(data, dict):
+                    return web.json_response(data)
+                return data
             resp = await handler(request)
-            self._api_cache[key] = (now, resp)
+            # Extract JSON data from response body to avoid caching Response objects
+            try:
+                if hasattr(resp, 'body') and resp.body:
+                    cached_data = json.loads(resp.body)
+                else:
+                    cached_data = resp
+            except Exception:
+                cached_data = resp
+            self._api_cache[key] = (now, cached_data)
             return resp
 
 
@@ -425,6 +440,7 @@ class WebServer:
     async def api_profit_trend(self, request):
         try:
             from datetime import datetime, timezone, timedelta
+            t0 = time.monotonic()
             period = request.query.get("period", "hour")  # 'hour' or 'day'
             # Use cached balance from api_account to avoid extra network request
             cached_ts, cached_bal = self._balance_cache
@@ -434,6 +450,7 @@ class WebServer:
                 balance_data = await self.client.get_balance()
                 balance = balance_data.get("balance", 0)
                 self._balance_cache = (time.monotonic(), float(balance) if balance else 0.0)
+            t1 = time.monotonic()
             if balance <= 0:
                 balance = 1  # avoid division by zero
 
@@ -460,6 +477,7 @@ class WebServer:
                         (start_iso,),
                     ).fetchall()
             rows = await self._db_sync(_fetch_trades)
+            t2 = time.monotonic()
 
             # Aggregate pnl by bucket
             from collections import defaultdict
