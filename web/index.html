@@ -175,15 +175,15 @@ body::after{
 @keyframes panelEnter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
 .bento-grid{display:grid;gap:12px}
-.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto auto}
-.bento-dashboard .bento-main{grid-column:1;grid-row:1/4}
+.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto}
+.bento-dashboard .bento-trend{grid-column:1;grid-row:1}
+.bento-dashboard .bento-flow{grid-column:1;grid-row:2}
 .bento-dashboard .bento-side-top{grid-column:2;grid-row:1}
-.bento-dashboard .bento-side-mid{grid-column:2;grid-row:2}
-.bento-dashboard .bento-side-bottom{grid-column:2;grid-row:3}
-.bento-dashboard .bento-bottom-row{grid-column:1/3;grid-row:4;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bento-dashboard .bento-side-bottom{grid-column:2;grid-row:2}
+.bento-dashboard .bento-bottom-row{grid-column:1/3;grid-row:3;display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:900px){
   .bento-dashboard{grid-template-columns:1fr;grid-template-rows:auto}
-  .bento-dashboard .bento-main,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-mid,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1;grid-row:auto}
+  .bento-dashboard .bento-trend,.bento-dashboard .bento-flow,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1;grid-row:auto}
   .bento-dashboard .bento-bottom-row{grid-template-columns:1fr}
 }
 
@@ -557,15 +557,16 @@ body::after{
 <div id="panel-dashboard" class="tab-panel active">
   <div class="bento-grid bento-dashboard">
 
-    <div class="tile bento-main">
+    <div class="tile bento-trend">
       <div class="tile-head">
-        <div class="icon-wrap"><i class="ph ph-brain"></i></div>
-        <h2>交易决策流图</h2>
-        <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
+        <div class="icon-wrap"><i class="ph ph-trend-up"></i></div>
+        <h2>盈利趋势</h2>
+        <div class="tile-actions">
+          <button class="btn btn-secondary btn-sm active" id="btnHour" onclick="setTrendPeriod('hour')">小时</button>
+          <button class="btn btn-secondary btn-sm" id="btnDay" onclick="setTrendPeriod('day')">日</button>
+        </div>
       </div>
-      <div class="flow-graph-container">
-        <div class="flow-graph" id="flowGraph"></div>
-      </div>
+      <div class="chart-wrap"><canvas id="profitChart"></canvas></div>
     </div>
 
     <div class="tile bento-side-top">
@@ -581,16 +582,15 @@ body::after{
       </div>
     </div>
 
-    <div class="tile bento-side-mid">
+    <div class="tile bento-flow">
       <div class="tile-head">
-        <div class="icon-wrap"><i class="ph ph-trend-up"></i></div>
-        <h2>盈利趋势</h2>
-        <div class="tile-actions">
-          <button class="btn btn-secondary btn-sm active" id="btnHour" onclick="setTrendPeriod('hour')">小时</button>
-          <button class="btn btn-secondary btn-sm" id="btnDay" onclick="setTrendPeriod('day')">日</button>
-        </div>
+        <div class="icon-wrap"><i class="ph ph-brain"></i></div>
+        <h2>交易决策流图</h2>
+        <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
       </div>
-      <div class="chart-wrap"><canvas id="profitChart"></canvas></div>
+      <div class="flow-graph-container">
+        <div class="flow-graph" id="flowGraph"></div>
+      </div>
     </div>
 
     <div class="tile bento-side-bottom">
