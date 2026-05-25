@@ -411,12 +411,12 @@ body::after{
   #profitChart{height:180px}
 }
 
-/* ===== Strategy Flow Graph (upgraded v2: branching + particles) ===== */
+/* ===== Strategy Flow Graph (upgraded v3: Layout C center trunk) ===== */
 .flow-graph-container{
   background:var(--bg-elevated);border:1px solid var(--border-subtle);
   border-radius:var(--radius-lg);padding:16px 12px;overflow-x:auto;
 }
-.flow-graph{width:100%;position:relative;min-height:720px}
+.flow-graph{width:100%;position:relative;min-height:620px}
 .flow-svg{width:100%;height:auto;display:block}
 
 /* Nodes */
@@ -1563,31 +1563,32 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// ===== Strategy Flow Graph (v2: branching + particles) =====
+// ===== Strategy Flow Graph (v3: Layout C center trunk) =====
 const FLOW_NODES = [
-  { id:'start',      name:'Tick 开始',       type:'data',    x:320, y:20,  w:130, h:30 },
-  { id:'symbols',    name:'刷新交易对',       type:'data',    x:320, y:56,  w:130, h:30 },
-  { id:'prices',     name:'刷新价格',         type:'data',    x:320, y:92,  w:130, h:30 },
-  { id:'positions',  name:'获取持仓',         type:'data',    x:320, y:128, w:130, h:30 },
+  // Center trunk — data flow
+  { id:'start',      name:'Tick 开始',       type:'data',    x:195, y:15,  w:130, h:26 },
+  { id:'symbols',    name:'刷新交易对',       type:'data',    x:195, y:48,  w:130, h:26 },
+  { id:'prices',     name:'刷新价格',         type:'data',    x:195, y:81,  w:130, h:26 },
+  { id:'positions',  name:'获取持仓',         type:'data',    x:195, y:114, w:130, h:26 },
 
-  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:325, y:180, w:130, h:30, checkKey:'enable_all_close' },
-  { id:'allClose',   name:'全仓平仓',         type:'action',  x:60,  y:180, w:110, h:30 },
-  { id:'allReplenish',name:'补开全仓',        type:'action',  x:60,  y:220, w:110, h:30 },
+  // Decision diamonds — center
+  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:195, y:158, w:130, h:26, checkKey:'enable_all_close' },
+  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:195, y:236, w:130, h:26 },
+  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:195, y:314, w:130, h:26, checkKey:'enable_single_pair_close' },
+  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:195, y:392, w:130, h:26, checkKey:'enable_margin_call' },
+  { id:'replenish',  name:'补开仓位?',        type:'check',   x:195, y:470, w:130, h:26 },
 
-  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:325, y:280, w:130, h:30 },
-  { id:'tierClose',  name:'部分/全部平仓',    type:'action',  x:60,  y:280, w:110, h:30 },
+  // Left action branches — aligned with their check nodes
+  { id:'allClose',   name:'全仓平仓',         type:'action',  x:30,  y:158, w:110, h:24 },
+  { id:'allReplenish',name:'补开全仓',        type:'action',  x:30,  y:196, w:110, h:24 },
+  { id:'tierClose',  name:'部分/全部平仓',    type:'action',  x:30,  y:236, w:110, h:24 },
+  { id:'pairClose',  name:'多空对平',         type:'action',  x:30,  y:314, w:110, h:24 },
+  { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:30,  y:392, w:110, h:24 },
+  { id:'openPos',    name:'开仓',             type:'action',  x:30,  y:470, w:110, h:24 },
 
-  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:325, y:350, w:130, h:30, checkKey:'enable_single_pair_close' },
-  { id:'pairClose',  name:'多空对平',         type:'action',  x:60,  y:350, w:110, h:30 },
-
-  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:325, y:420, w:130, h:30, checkKey:'enable_margin_call' },
-  { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:60,  y:420, w:110, h:30 },
-
-  { id:'replenish',  name:'补开仓位?',        type:'check',   x:325, y:490, w:130, h:30 },
-  { id:'openPos',    name:'开仓',             type:'action',  x:60,  y:490, w:110, h:30 },
-
-  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:320, y:560, w:130, h:30 },
-  { id:'end',        name:'Tick 结束',        type:'data',    x:320, y:596, w:130, h:30 },
+  // End of trunk
+  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:195, y:530, w:130, h:26 },
+  { id:'end',        name:'Tick 结束',        type:'data',    x:195, y:564, w:130, h:26 },
 ];
 
 const FLOW_EDGES = [
@@ -1647,15 +1648,21 @@ function buildEdgePath(edge) {
   } else if (edge.type === 'yes') {
     const s = leftCenter(from);
     const e = rightCenter(to);
-    return `M ${s.x} ${s.y} L ${e.x} ${e.y}`;
+    // Gentle horizontal curve when y differs slightly
+    const midX = (s.x + e.x) * 0.5;
+    return `M ${s.x} ${s.y} C ${midX} ${s.y} ${midX} ${e.y} ${e.x} ${e.y}`;
   } else if (edge.type === 'no') {
     const s = bottomCenter(from);
     const e = topCenter(to);
-    return `M ${s.x} ${s.y} C ${s.x} ${s.y+18} ${e.x} ${e.y-18} ${e.x} ${e.y}`;
+    const dist = Math.max(1, e.y - s.y);
+    const offset = Math.min(dist * 0.45, 22);
+    return `M ${s.x} ${s.y} C ${s.x} ${s.y + offset} ${e.x} ${e.y - offset} ${e.x} ${e.y}`;
   } else {
     const s = bottomCenter(from);
     const e = topCenter(to);
-    return `M ${s.x} ${s.y} C ${s.x} ${s.y+12} ${e.x} ${e.y-12} ${e.x} ${e.y}`;
+    const dist = Math.max(1, e.y - s.y);
+    const offset = Math.min(dist * 0.45, 14);
+    return `M ${s.x} ${s.y} C ${s.x} ${s.y + offset} ${e.x} ${e.y - offset} ${e.x} ${e.y}`;
   }
 }
 
@@ -1663,9 +1670,9 @@ function buildFlowGraph() {
   const container = document.getElementById('flowGraph');
   if (!container) return;
   const containerW = Math.max(container.clientWidth || 360, 360);
-  const scale = containerW / 520;
-  const totalW = 520;
-  const totalH = 640;
+  const scale = containerW / 460;
+  const totalW = 460;
+  const totalH = 620;
 
   let svg = `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMin meet"><defs>`;
   svg += '<marker id="arrow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#475569"/></marker>';
@@ -1679,7 +1686,7 @@ function buildFlowGraph() {
     if (!d) return;
     const colorClass = e.color === '#00e5a0' ? ' triggered' : (e.color === '#f59e0b' ? ' active' : '');
     const marker = e.color === '#00e5a0' ? 'url(#arrowG)' : (e.color === '#f59e0b' ? 'url(#arrowA)' : 'url(#arrow)');
-    svg += `<path id="edge-${e.from}-${e.to}" class="flow-edge${colorClass}" d="${d}" marker-end="${marker}"/>`;
+    svg += `<path id="edge-${e.from}-${e.to}" class="flow-edge${colorClass}" d="${d}" marker-end="${marker}" data-base-color="${e.color || ''}"/>`;
 
     // Edge label
     if (e.label) {

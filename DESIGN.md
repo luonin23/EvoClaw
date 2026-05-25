@@ -416,7 +416,7 @@ except sqlite3.OperationalError:
 - **Cyber-FinTech Terminal** 视觉风格：深色太空蓝基底 + 霓虹青 accent
 - **字体栈**：Geist（Variable，100-900）+ JetBrains Mono（等宽数据）
 - **图标系统**：Phosphor Icons (`ph-*`)，全矢量、单色、支持 weight 变换
-- **四标签页 SPA**：数据仪表盘 / 持仓矩阵 / 策略视图 / 交易配置
+- **三标签页 SPA**：数据仪表盘 / 持仓矩阵 / 交易配置
 - **视觉特效**：Liquid Glass 面板、neon glow 边框、动态脉冲边线、滚动 triggered stagger reveal
 - **响应式**：移动端优先的断点缩放，Bento Grid 自动重排
 
@@ -438,13 +438,11 @@ except sqlite3.OperationalError:
 #### 3.5.3 标签页结构与 Bento Grid 布局
 
 **数据仪表盘** (`ph-squares-four`)：
-- 左侧主区（跨 2 行）：**交易决策流图**（SVG，21 节点蛇形布局，动态脉冲边线）
-- 右侧 stacking：**系统监控** + **账户概览**
+- 左侧主区（跨 2 行）：**交易决策流图**（SVG，17 节点中心主干 + 左向分支布局，粒子动画）
+- 右侧 stacking：**系统监控** + **盈利趋势** + **账户概览**
 - 底部全宽行（`bento-bottom-row`，`1fr 1fr` 等分）：**持仓状态** + **交易统计**
 
 **持仓矩阵** (`ph-grid-four`)：全屏响应式网格，按盈亏率热力着色。
-
-**策略视图** (`ph-tree-structure`)：盈利趋势图（Canvas，小时/日切换）+ 实时交易日志。
 
 **交易配置** (`ph-gear`)：9 大分组配置面板。
 
@@ -455,13 +453,11 @@ except sqlite3.OperationalError:
 | 账户/统计 | 10 秒 | `setInterval(refresh, 10000)`，带 `AbortController` 取消过期请求 |
 | 系统监控 | 10 秒 | `setInterval(loadSystem, 10000)` |
 | 策略流图 | 10 秒 | 随 dashboard 主刷新循环调用 `updateFlowGraph()` |
-| 实时日志 | 3 秒 | 独立 tick 模拟器轮询（`startTickSimulation`），追加渲染，自动滚动 |
 | 页面可见性 | — | 隐藏时暂停所有定时器，恢复时立即全量刷新 |
 | 防重复刷新 | — | `window._isRefreshing` 标志位 + `lastPeriod` 防陈旧数据 |
 
-**初始化职责分离**：
-- `loadDashboardView()`：首次构建 SVG 流图、加载配置、初始化 `_prevStats` / `_prevAccount`、启动 `startTickSimulation()`。
-- `loadStrategyView()`：加载账户/统计、加载日志流；不再负责流图构建。
+**初始化职责**：
+- `loadDashboardView()`：首次构建 SVG 流图、加载配置、初始化 `_prevStats` / `_prevAccount`。
 
 #### 3.5.5 持仓矩阵
 
@@ -486,153 +482,36 @@ except sqlite3.OperationalError:
 - **增强特效**：线条 neon glow（`shadowBlur` + accent 色）、数据点脉冲动画
 - 响应式缩放：基于设计宽度 600px 计算 `scale` 因子
 - 标签防重叠：根据图表宽度计算最大标签数，均匀采样
-- **所在位置**：策略视图标签页（原 dashboard 主区已让位给决策流图）
+- **所在位置**：Dashboard 右侧账户概览上方
 
 #### 3.5.7 策略决策流图 (Dashboard 主区)
 
 **核心实现**：
 - 纯 SVG 渲染，无外部依赖
-- **21 个节点**覆盖完整交易生命周期：信号获取 → 候选筛选 → 多空判断 → 仓位计算 → 风控检查 → 下单执行 → 持仓监控 → 止盈/补仓/全平 → 日志记录
-- **蛇形布局 (Snake Layout)**：奇数行从左到右，偶数行从右到左，形成紧凑 S 型流向
+- **17 个节点**覆盖完整交易生命周期：Tick 开始 → 刷新交易对/价格/持仓 → 五项策略检查 → 对应动作执行 → 数据库持久化 → Tick 结束
+- **Layout C — 中心主干 + 左向分支**：
+  - 主干（居中）：数据节点（圆角矩形）+ 决策节点（菱形）垂直排列
+  - 分支（左侧）：动作节点（胶囊矩形）与对应决策节点水平对齐，通过横向边线连接
+  - 返回边线：从动作节点右侧以 S 型贝塞尔曲线回到下一决策节点左侧
 - **动态边线**：
   - 实线 = 策略启用且流程活跃
   - 虚线 = 策略禁用或路径未触发
   - `stroke-dashoffset` 脉冲动画，速度反映系统繁忙度
+  - 粒子动画：沿边线持续移动的小圆点，颜色区分路径类型
 - **节点状态**：
   - 激活态：霓虹青 glow + 实心填充
+  - 触发态：绿色 glow（动作节点执行时）
   - 禁用态：50% 透明度 + 灰色边框
   - 错误态：红色脉冲
-- **图标系统**：使用 ASCII 符号（`◎ ◉ ▲ ▼ ◆ □ ▷ ◁ ▣ ◇ ▪ ▫ ▬ ▭ ◐ ◑ ◒ ◓ ◔ ◕`）替代 emoji，避免 SVG 跨平台渲染差异
+- **边线标签**：`触发`（yes 分支）、`继续`（no 分支），带背景遮罩防重叠
 
-#### 3.5.8 实时日志 (Terminal Stream)
-
-- 终端风格面板：JetBrains Mono 等宽字体，左侧青绿色时间戳
-- 自动滚动到底部，保留最近 200 条
-- 日志级别着色：`INFO` = accent 青，`WARN` = 琥珀色，`ERROR` = 霓虹红
-- 支持手动暂停/恢复滚动
-
-#### 3.5.9 配置面板
+#### 3.5.8 配置面板
 
 9 个分组：币种筛选、基础交易、分档止盈、补仓设置、账户级全平、亏损加仓、多空对平、白名单、前端显示设置。
 
 **配置加载**：
 - 交易配置：`loadConfig()` 从 `/api/config` 获取
-- 前端配置：`loadFrontendConfig()` 从 `/web/config.json` 获取（带 `cache: 'no-store'` 防浏览器缓存）
-
-**配置保存**：
-- 同时提交两份配置：交易配置 → `POST /api/config`，前端配置 → `POST /api/web-config`
-- 保存成功后立即更新 `window.frontendConfig`，确保即时生效
-- `loadDashboardView()`：首次构建 SVG 流图、加载配置、初始化 `_prevStats` / `_prevAccount`、启动 `startTickSimulation()`。
-- `loadStrategyView()`：加载账户/统计、加载日志流；不再负责流图构建。
-
-#### 3.5.5 持仓矩阵
-
-- 突破 `max-width: 960px` 限制，占满视口宽度
-- 网格大小由 `window.frontendConfig.matrix_slots`（默认 100）和 `matrix_columns`（默认 10）控制
-- 使用 `DocumentFragment` 一次性构建 DOM，子元素预创建并缓存
-- 币种名去除 `USDT`/`USDC` 后缀
-- 响应式适配：小屏幕逐级隐藏次要字段，字体自动缩小
-
-**数据流**：
-1. 后端 `/api/positions-map` 返回全部持仓（按 `pnl_rate` 升序排序）
-2. 前端 `matrix_slots` 作为硬性显示上限：
-   - 持仓 < 格子数：显示全部，剩余格子为空
-   - 持仓 > 格子数：显示前 N 个（亏损最多的优先），多余的隐藏
-
-> **设计决策**：`matrix_slots`（前端显示配置）与 `max_position_count`（交易配置）完全解耦。前者只控制显示，后者只控制交易系统的开仓上限。
-
-#### 3.5.6 盈利趋势图
-
-- Canvas 2D 绘制，支持高 DPI（`devicePixelRatio` 适配）
-- 按小时/天聚合盈亏数据，绿色/红色面积填充 + 二次贝塞尔曲线平滑
-- **增强特效**：线条 neon glow（`shadowBlur` + accent 色）、数据点脉冲动画
-- 响应式缩放：基于设计宽度 600px 计算 `scale` 因子
-- 标签防重叠：根据图表宽度计算最大标签数，均匀采样
-- **所在位置**：策略视图标签页（原 dashboard 主区已让位给决策流图）
-
-#### 3.5.7 策略决策流图 (Dashboard 主区)
-
-**核心实现**：
-- 纯 SVG 渲染，无外部依赖
-- **21 个节点**覆盖完整交易生命周期：信号获取 → 候选筛选 → 多空判断 → 仓位计算 → 风控检查 → 下单执行 → 持仓监控 → 止盈/补仓/全平 → 日志记录
-- **蛇形布局 (Snake Layout)**：奇数行从左到右，偶数行从右到左，形成紧凑 S 型流向
-- **动态边线**：
-  - 实线 = 策略启用且流程活跃
-  - 虚线 = 策略禁用或路径未触发
-  - `stroke-dashoffset` 脉冲动画，速度反映系统繁忙度
-- **节点状态**：
-  - 激活态：霓虹青 glow + 实心填充
-  - 禁用态：50% 透明度 + 灰色边框
-  - 错误态：红色脉冲
-- **图标系统**：使用 ASCII 符号（`◎ ◉ ▲ ▼ ◆ □ ▷ ◁ ▣ ◇ ▪ ▫ ▬ ▭ ◐ ◑ ◒ ◓ ◔ ◕`）替代 emoji，避免 SVG 跨平台渲染差异
-
-#### 3.5.8 实时日志 (Terminal Stream)
-
-- 终端风格面板：JetBrains Mono 等宽字体，左侧青绿色时间戳
-- 自动滚动到底部，保留最近 200 条
-- 日志级别着色：`INFO` = accent 青，`WARN` = 琥珀色，`ERROR` = 霓虹红
-- 支持手动暂停/恢复滚动
-
-#### 3.5.9 配置面板
-
-9 个分组：币种筛选、基础交易、分档止盈、补仓设置、账户级全平、亏损加仓、多空对平、白名单、前端显示设置。
-
-**配置加载**：
-- 交易配置：`loadConfig()` 从 `/api/config` 获取
-- 前端配置：`loadFrontendConfig()` 从 `/web/config.json` 获取（带 `cache: 'no-store'` 防浏览器缓存）
-
-**配置保存**：
-- 同时提交两份配置：交易配置 → `POST /api/config`，前端配置 → `POST /api/web-config`
-- 保存成功后立即更新 `window.frontendConfig`，确保即时生效
-- 币种名去除 `USDT`/`USDC` 后缀
-- 响应式适配：小屏幕逐级隐藏次要字段，字体自动缩小
-
-**数据流**：
-1. 后端 `/api/positions-map` 返回全部持仓（按 `pnl_rate` 升序排序）
-2. 前端 `matrix_slots` 作为硬性显示上限：
-   - 持仓 < 格子数：显示全部，剩余格子为空
-   - 持仓 > 格子数：显示前 N 个（亏损最多的优先），多余的隐藏
-
-> **设计决策**：`matrix_slots`（前端显示配置）与 `max_position_count`（交易配置）完全解耦。前者只控制显示，后者只控制交易系统的开仓上限。
-
-#### 3.5.6 盈利趋势图
-
-- Canvas 2D 绘制，支持高 DPI（`devicePixelRatio` 适配）
-- 按小时/天聚合盈亏数据，绿色/红色面积填充 + 二次贝塞尔曲线平滑
-- **增强特效**：线条 neon glow（`shadowBlur` + accent 色）、数据点脉冲动画
-- 响应式缩放：基于设计宽度 600px 计算 `scale` 因子
-- 标签防重叠：根据图表宽度计算最大标签数，均匀采样
-
-#### 3.5.7 策略决策流图 (Strategy View)
-
-**核心实现**：
-- 纯 SVG 渲染，无外部依赖
-- **21 个节点**覆盖完整交易生命周期：信号获取 → 候选筛选 → 多空判断 → 仓位计算 → 风控检查 → 下单执行 → 持仓监控 → 止盈/补仓/全平 → 日志记录
-- **蛇形布局 (Snake Layout)**：奇数行从左到右，偶数行从右到左，形成紧凑 S 型流向
-- **动态边线**：
-  - 实线 = 策略启用且流程活跃
-  - 虚线 = 策略禁用或路径未触发
-  - `stroke-dashoffset` 脉冲动画，速度反映系统繁忙度
-- **节点状态**：
-  - 激活态：霓虹青 glow + 实心填充
-  - 禁用态：50% 透明度 + 灰色边框
-  - 错误态：红色脉冲
-- **图标系统**：使用 ASCII 符号（`◎ ◉ ▲ ▼ ◆ □ ▷ ◁ ▣ ◇ ▪ ▫ ▬ ▭ ◐ ◑ ◒ ◓ ◔ ◕`）替代 emoji，避免 SVG 跨平台渲染差异
-
-#### 3.5.8 实时日志 (Terminal Stream)
-
-- 终端风格面板：JetBrains Mono 等宽字体，左侧青绿色时间戳
-- 自动滚动到底部，保留最近 200 条
-- 日志级别着色：`INFO` = accent 青，`WARN` = 琥珀色，`ERROR` = 霓虹红
-- 支持手动暂停/恢复滚动
-
-#### 3.5.9 配置面板
-
-9 个分组：币种筛选、基础交易、分档止盈、补仓设置、账户级全平、亏损加仓、多空对平、白名单、前端显示设置。
-
-**配置加载**：
-- 交易配置：`loadConfig()` 从 `/api/config` 获取
-- 前端配置：`loadFrontendConfig()` 从 `/web/config.json` 获取（带 `cache: 'no-store'` 防浏览器缓存）
+- 前端配置：`loadFrontendConfig()` 从 `/web/config.json` 获取（带 `cache: no-store` 防浏览器缓存）
 
 **配置保存**：
 - 同时提交两份配置：交易配置 → `POST /api/config`，前端配置 → `POST /api/web-config`
