@@ -175,14 +175,15 @@ body::after{
 @keyframes panelEnter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
 .bento-grid{display:grid;gap:12px}
-.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto}
-.bento-dashboard .bento-main{grid-row:1/3}
+.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto auto}
+.bento-dashboard .bento-main{grid-column:1;grid-row:1/4}
 .bento-dashboard .bento-side-top{grid-column:2;grid-row:1}
-.bento-dashboard .bento-side-bottom{grid-column:2;grid-row:2}
-.bento-dashboard .bento-bottom-row{grid-column:1/3;grid-row:3;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bento-dashboard .bento-side-mid{grid-column:2;grid-row:2}
+.bento-dashboard .bento-side-bottom{grid-column:2;grid-row:3}
+.bento-dashboard .bento-bottom-row{grid-column:1/3;grid-row:4;display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:900px){
   .bento-dashboard{grid-template-columns:1fr;grid-template-rows:auto}
-  .bento-dashboard .bento-main,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1;grid-row:auto}
+  .bento-dashboard .bento-main,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-mid,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1;grid-row:auto}
   .bento-dashboard .bento-bottom-row{grid-template-columns:1fr}
 }
 
@@ -410,82 +411,102 @@ body::after{
   #profitChart{height:180px}
 }
 
-/* ===== Strategy Flow Graph (upgraded) ===== */
+/* ===== Strategy Flow Graph (upgraded v2: branching + particles) ===== */
 .flow-graph-container{
   background:var(--bg-elevated);border:1px solid var(--border-subtle);
-  border-radius:var(--radius-lg);padding:16px 12px;margin-bottom:12px;overflow-x:auto;
+  border-radius:var(--radius-lg);padding:16px 12px;overflow-x:auto;
 }
-.flow-graph{width:100%;position:relative}
+.flow-graph{width:100%;position:relative;min-height:720px}
 .flow-svg{width:100%;height:auto;display:block}
+
+/* Nodes */
 .flow-node-rect{
-  fill:var(--surface-input);stroke:var(--border-medium);stroke-width:1.5;
-  rx:8;ry:8;transition:all .3s ease;
+  fill:var(--bg-surface);stroke:var(--border-medium);stroke-width:1.5;
+  rx:6;ry:6;transition:all .35s ease;
 }
 .flow-node-check{
-  fill:var(--surface-input);stroke:var(--accent);stroke-width:1.5;
-  rx:8;ry:8;transition:all .3s ease;
+  fill:var(--bg-surface);stroke:var(--accent);stroke-width:1.8;
+  transition:all .35s ease;
 }
 .flow-node-action{
-  fill:rgba(0,229,160,.06);stroke:var(--success);stroke-width:1.5;
-  rx:22;ry:22;transition:all .3s ease;
+  fill:rgba(0,229,160,.08);stroke:var(--success);stroke-width:1.5;
+  rx:18;ry:18;transition:all .35s ease;
 }
 .flow-node-rect.active,.flow-node-check.active{
   stroke:var(--warning);stroke-width:2.5;
-  filter:drop-shadow(0 0 8px rgba(245,158,11,.4));
+  filter:drop-shadow(0 0 10px rgba(245,158,11,.45));
 }
 .flow-node-rect.triggered,.flow-node-check.triggered,.flow-node-action.triggered{
   stroke:var(--success);stroke-width:2.5;
-  filter:drop-shadow(0 0 8px rgba(0,229,160,.4));
+  filter:drop-shadow(0 0 10px rgba(0,229,160,.5));
 }
 .flow-node-action.active{
   stroke:var(--warning);stroke-width:2.5;
-  filter:drop-shadow(0 0 8px rgba(245,158,11,.4));
+  filter:drop-shadow(0 0 10px rgba(245,158,11,.45));
 }
 .flow-node-rect.error,.flow-node-check.error{
   stroke:var(--error);stroke-width:2;
 }
 .flow-node-rect.disabled,.flow-node-check.disabled,.flow-node-action.disabled{
-  stroke:var(--text-muted);opacity:.35;
+  stroke:var(--text-muted);opacity:.3;
 }
 .flow-node-rect.dimmed,.flow-node-check.dimmed,.flow-node-action.dimmed{
-  stroke:#4b5563;opacity:.4;fill:#1f2937;
+  stroke:#4b5563;opacity:.35;fill:#1f2937;
 }
 .flow-node-text{
-  fill:var(--text-primary);font-size:12px;font-weight:600;
+  fill:var(--text-primary);font-size:11px;font-weight:600;
   text-anchor:middle;dominant-baseline:middle;pointer-events:none;
 }
 .flow-node-sub{
-  fill:var(--text-secondary);font-size:10px;
+  fill:var(--text-secondary);font-size:9px;
   text-anchor:middle;dominant-baseline:middle;pointer-events:none;
 }
+
+/* Edges */
 .flow-edge{
-  fill:none;stroke:#64748b;stroke-width:2.5;transition:stroke .3s;
+  fill:none;stroke:#475569;stroke-width:2;transition:stroke .3s;
 }
 .flow-edge.active{
-  stroke:var(--warning);stroke-dasharray:8 4;
-  animation:flowDash .6s linear infinite;
+  stroke:var(--warning);
 }
 .flow-edge.triggered{
-  stroke:var(--success);stroke-dasharray:8 4;
-  animation:flowDash .6s linear infinite;
+  stroke:var(--success);
 }
-@keyframes flowDash{to{stroke-dashoffset:-24}}
+.flow-edge.dimmed{
+  stroke:#334155;opacity:.35;
+}
+
+/* Particles */
+.flow-particle{
+  fill:var(--accent);filter:drop-shadow(0 0 3px var(--accent));
+}
+.flow-particle.green{
+  fill:var(--success);filter:drop-shadow(0 0 3px var(--success));
+}
+.flow-particle.amber{
+  fill:var(--warning);filter:drop-shadow(0 0 3px var(--warning));
+}
+.flow-particle.dimmed{
+  opacity:.2;
+}
+
+/* Labels on edges */
+.flow-edge-label{
+  fill:var(--text-muted);font-size:9px;font-weight:600;
+  text-anchor:middle;dominant-baseline:middle;
+  background:var(--bg-base);
+}
+.flow-edge-label-bg{
+  fill:var(--bg-base);
+}
+
 @keyframes nodePulse{
   0%,100%{filter:drop-shadow(0 0 6px rgba(245,158,11,.5)); stroke-width:2.5;}
-  50%{filter:drop-shadow(0 0 20px rgba(245,158,11,.9)); stroke-width:3.5;}
+  50%{filter:drop-shadow(0 0 22px rgba(245,158,11,.95)); stroke-width:3.5;}
 }
 .flow-node-rect.pulsing,.flow-node-check.pulsing,.flow-node-action.pulsing{
   animation:nodePulse 1.2s ease-in-out infinite;
 }
-
-/* Log Stream */
-.log-stream-container{
-  background:var(--bg-elevated);border:1px solid var(--border-subtle);
-  border-radius:var(--radius-lg);padding:12px;max-height:320px;overflow-y:auto;
-  font-family:var(--font-mono);font-size:11px;line-height:1.7;
-}
-.log-entry{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;gap:8px}
-.log-entry:last-child{border-bottom:none}
 .log-time{color:var(--text-muted);white-space:nowrap}
 .log-msg{flex:1;word-break:break-all}
 .log-type-open{color:var(--accent)}
@@ -527,9 +548,6 @@ body::after{
   <button class="tab-btn" onclick="switchTab('matrix')" id="tab-matrix">
     <i class="ph ph-grid-nine"></i> 持仓矩阵
   </button>
-  <button class="tab-btn" onclick="switchTab('strategy')" id="tab-strategy">
-    <i class="ph ph-brain"></i> 策略视图
-  </button>
   <button class="tab-btn" onclick="switchTab('config')" id="tab-config">
     <i class="ph ph-sliders-horizontal"></i> 交易配置
   </button>
@@ -561,6 +579,18 @@ body::after{
         <div class="stat-cell"><div class="stat-value" id="sysDisk">-</div><div class="stat-label">硬盘使用</div></div>
         <div class="stat-cell"><div class="stat-value" id="sysNet">-</div><div class="stat-label">网络吞吐</div></div>
       </div>
+    </div>
+
+    <div class="tile bento-side-mid">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-trend-up"></i></div>
+        <h2>盈利趋势</h2>
+        <div class="tile-actions">
+          <button class="btn btn-secondary btn-sm active" id="btnHour" onclick="setTrendPeriod('hour')">小时</button>
+          <button class="btn btn-secondary btn-sm" id="btnDay" onclick="setTrendPeriod('day')">日</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="profitChart"></canvas></div>
     </div>
 
     <div class="tile bento-side-bottom">
@@ -627,32 +657,6 @@ body::after{
 <!-- Tab 2: Matrix -->
 <div id="panel-matrix" class="tab-panel">
   <div id="fullMatrix" class="full-matrix"></div>
-</div>
-
-<!-- Tab: Strategy View -->
-<div id="panel-strategy" class="tab-panel">
-  <div class="tile">
-    <div class="tile-head">
-      <div class="icon-wrap"><i class="ph ph-trend-up"></i></div>
-      <h2>盈利趋势</h2>
-      <div class="tile-actions">
-        <button class="btn btn-secondary btn-sm active" id="btnHour" onclick="setTrendPeriod('hour')">小时</button>
-        <button class="btn btn-secondary btn-sm" id="btnDay" onclick="setTrendPeriod('day')">日</button>
-      </div>
-    </div>
-    <div class="chart-wrap"><canvas id="profitChart"></canvas></div>
-  </div>
-
-  <div class="tile">
-    <div class="tile-head">
-      <div class="icon-wrap"><i class="ph ph-scroll"></i></div>
-      <h2>实时交易日志</h2>
-      <span style="margin-left:auto;font-size:11px;color:var(--text-muted)" id="logCount">加载中...</span>
-    </div>
-    <div class="log-stream-container" id="logStream">
-      <div style="color:var(--text-muted);text-align:center;padding:20px 0">等待数据...</div>
-    </div>
-  </div>
 </div>
 
 <!-- Tab 3: Config -->
@@ -775,7 +779,7 @@ function switchTab(tab) {
   document.getElementById('panel-' + tab).classList.add('active');
   if (tab === 'dashboard') { loadDashboardView(); }
   else if (tab === 'matrix') { loadMatrixTab(); }
-  else if (tab === 'strategy') { loadStrategyView(); loadProfitTrend(); }
+  else if (tab === 'config') { loadConfig(); }
 }
 
 async function api(path) {
@@ -1440,13 +1444,11 @@ async function refresh() {
   try {
     const tasks = [];
     if (currentTab === 'dashboard') {
-      tasks.push(loadAccount(), loadStats());
+      tasks.push(loadAccount(), loadStats(), loadProfitTrend());
       Promise.all(tasks).then(() => updateFlowGraph());
     } else if (currentTab === 'matrix') {
       const posData = await api('/api/positions-map');
       tasks.push(loadPositionsMap(posData), loadFullMatrix(posData));
-    } else if (currentTab === 'strategy') {
-      tasks.push(loadAccount(), loadStats(), loadLogStream(), loadProfitTrend());
     }
     if (tasks.length) await Promise.all(tasks);
     document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
@@ -1464,8 +1466,8 @@ window.addEventListener('resize', () => {
     if (currentTab === 'dashboard') {
       buildFlowGraph();
       updateFlowGraph();
+      drawChart();
     }
-    if (currentTab === 'strategy') drawChart();
   }, 150);
 });
 
@@ -1561,112 +1563,174 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// ===== Strategy Flow Graph =====
+// ===== Strategy Flow Graph (v2: branching + particles) =====
 const FLOW_NODES = [
-  { id:'start',      name:'Tick 开始',       icon:'▶',  type:'data', group:'data' },
-  { id:'symbols',    name:'刷新交易对',       icon:'≈',  type:'data', group:'data' },
-  { id:'prices',     name:'刷新价格',         icon:'$',  type:'data', group:'data' },
-  { id:'positions',  name:'获取持仓',         icon:'#',  type:'data', group:'data' },
-  { id:'allCheck',   name:'全仓止盈检查',     icon:'?',  type:'check', group:'all',  checkKey:'enable_all_close' },
-  { id:'allClose',   name:'全仓平仓',         icon:'C',  type:'action', group:'all' },
-  { id:'allReplenish',name:'补开全仓',        icon:'R',  type:'action', group:'all' },
-  { id:'refetch1',   name:'重新获取持仓',     icon:'F',  type:'data', group:'all' },
-  { id:'tierCheck',  name:'分级止盈检查',     icon:'?',  type:'check', group:'tier' },
-  { id:'tierClose',  name:'部分/全部平仓',    icon:'C',  type:'action', group:'tier' },
-  { id:'refetch2',   name:'重新获取持仓',     icon:'F',  type:'data', group:'tier' },
-  { id:'pairCheck',  name:'多空对平检查',     icon:'?',  type:'check', group:'pair', checkKey:'enable_single_pair_close' },
-  { id:'pairClose',  name:'多空对平',         icon:'=',  type:'action', group:'pair' },
-  { id:'refetch3',   name:'重新获取持仓',     icon:'F',  type:'data', group:'pair' },
-  { id:'marginCheck',name:'亏损加仓检查',     icon:'?',  type:'check', group:'margin', checkKey:'enable_margin_call' },
-  { id:'marginAdd',  name:'亏损加仓',         icon:'+',  type:'action', group:'margin' },
-  { id:'refetch4',   name:'重新获取持仓',     icon:'F',  type:'data', group:'margin' },
-  { id:'replenish',  name:'补开仓位',         icon:'R',  type:'check', group:'replenish' },
-  { id:'openPos',    name:'开仓',             icon:'O',  type:'action', group:'replenish' },
-  { id:'checkpoint', name:'数据库持久化',     icon:'D',  type:'data', group:'end' },
-  { id:'end',        name:'Tick 结束',        icon:'■',  type:'data', group:'end' },
+  { id:'start',      name:'Tick 开始',       type:'data',    x:365, y:20,  w:130, h:34 },
+  { id:'symbols',    name:'刷新交易对',       type:'data',    x:365, y:64,  w:130, h:34 },
+  { id:'prices',     name:'刷新价格',         type:'data',    x:365, y:108, w:130, h:34 },
+  { id:'positions',  name:'获取持仓',         type:'data',    x:365, y:152, w:130, h:34 },
+
+  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:370, y:206, w:140, h:34, checkKey:'enable_all_close' },
+  { id:'allClose',   name:'全仓平仓',         type:'action',  x:40,  y:206, w:120, h:34 },
+  { id:'allReplenish',name:'补开全仓',        type:'action',  x:40,  y:254, w:120, h:34 },
+
+  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:370, y:312, w:140, h:34 },
+  { id:'tierClose',  name:'部分/全部平仓',    type:'action',  x:40,  y:312, w:130, h:34 },
+
+  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:370, y:418, w:140, h:34, checkKey:'enable_single_pair_close' },
+  { id:'pairClose',  name:'多空对平',         type:'action',  x:40,  y:418, w:120, h:34 },
+
+  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:370, y:524, w:140, h:34, checkKey:'enable_margin_call' },
+  { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:40,  y:524, w:120, h:34 },
+
+  { id:'replenish',  name:'补开仓位?',        type:'check',   x:370, y:630, w:140, h:34 },
+  { id:'openPos',    name:'开仓',             type:'action',  x:40,  y:630, w:120, h:34 },
+
+  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:365, y:688, w:130, h:34 },
+  { id:'end',        name:'Tick 结束',        type:'data',    x:365, y:732, w:130, h:34 },
 ];
+
+const FLOW_EDGES = [
+  { from:'start',      to:'symbols' },
+  { from:'symbols',    to:'prices' },
+  { from:'prices',     to:'positions' },
+  { from:'positions',  to:'allCheck' },
+
+  { from:'allCheck',   to:'allClose',    label:'触发', color:'#00e5a0', type:'yes' },
+  { from:'allCheck',   to:'tierCheck',   label:'继续', type:'no' },
+  { from:'allClose',   to:'allReplenish' },
+  { from:'allReplenish',to:'tierCheck',  curve:'back', color:'#f59e0b' },
+
+  { from:'tierCheck',  to:'tierClose',   label:'触发', color:'#00e5a0', type:'yes' },
+  { from:'tierCheck',  to:'pairCheck',   label:'继续', type:'no' },
+  { from:'tierClose',  to:'pairCheck',   curve:'back', color:'#f59e0b' },
+
+  { from:'pairCheck',  to:'pairClose',   label:'触发', color:'#00e5a0', type:'yes' },
+  { from:'pairCheck',  to:'marginCheck', label:'继续', type:'no' },
+  { from:'pairClose',  to:'marginCheck', curve:'back', color:'#f59e0b' },
+
+  { from:'marginCheck',to:'marginAdd',   label:'触发', color:'#00e5a0', type:'yes' },
+  { from:'marginCheck',to:'replenish',   label:'继续', type:'no' },
+  { from:'marginAdd',  to:'replenish',   curve:'back', color:'#f59e0b' },
+
+  { from:'replenish',  to:'openPos',     label:'触发', color:'#00e5a0', type:'yes' },
+  { from:'replenish',  to:'checkpoint',  label:'继续', type:'no' },
+  { from:'openPos',    to:'checkpoint',  curve:'back', color:'#f59e0b' },
+
+  { from:'checkpoint', to:'end' },
+];
+
 let _flowConfig = null;
 let _prevStats = {};
 let _prevAccount = {};
 let _tickTimer = null;
 let _scanning = false;
 
+function getNode(id) { return FLOW_NODES.find(n => n.id === id); }
+function cx(n){ return n.x + n.w/2; }
+function cy(n){ return n.y + n.h/2; }
+function topCenter(n){ return { x:cx(n), y:n.y }; }
+function bottomCenter(n){ return { x:cx(n), y:n.y+n.h }; }
+function leftCenter(n){ return { x:n.x, y:cy(n) }; }
+function rightCenter(n){ return { x:n.x+n.w, y:cy(n) }; }
+
+function buildEdgePath(edge) {
+  const from = getNode(edge.from);
+  const to = getNode(edge.to);
+  if (!from || !to) return '';
+
+  let d = '';
+  if (edge.curve === 'back') {
+    const s = rightCenter(from);
+    const e = leftCenter(to);
+    const midY = (s.y + e.y) / 2;
+    d = `M ${s.x} ${s.y} C ${s.x+40} ${s.y} ${e.x-40} ${e.y} ${e.x} ${e.y}`;
+  } else if (edge.type === 'yes') {
+    const s = leftCenter(from);
+    const e = rightCenter(to);
+    d = `M ${s.x} ${s.y} C ${s.x-30} ${s.y} ${e.x+30} ${e.y} ${e.x} ${e.y}`;
+  } else if (edge.type === 'no') {
+    const s = bottomCenter(from);
+    const e = topCenter(to);
+    d = `M ${s.x} ${s.y} C ${s.x} ${s.y+28} ${e.x} ${e.y-28} ${e.x} ${e.y}`;
+  } else {
+    const s = bottomCenter(from);
+    const e = topCenter(to);
+    d = `M ${s.x} ${s.y} C ${s.x} ${s.y+20} ${e.x} ${e.y-20} ${e.x} ${e.y}`;
+  }
+  return d;
+}
+
 function buildFlowGraph() {
   const container = document.getElementById('flowGraph');
   if (!container) return;
   const containerW = Math.max(container.clientWidth || 360, 360);
-  const paddingX = 16;
-  const availableW = containerW - paddingX * 2;
+  const scale = containerW / 640;
+  const totalW = 640;
+  const totalH = 780;
 
-  let cols, gapX, nodeW, nodeH, fontSize, subFontSize;
-  if (containerW < 480) {
-    cols = 2; gapX = 28; nodeH = 50; fontSize = 11; subFontSize = 9;
-  } else if (containerW < 640) {
-    cols = 3; gapX = 32; nodeH = 50; fontSize = 12; subFontSize = 10;
-  } else if (containerW < 860) {
-    cols = 4; gapX = 36; nodeH = 50; fontSize = 12; subFontSize = 10;
-  } else {
-    cols = 5; gapX = 40; nodeH = 50; fontSize = 13; subFontSize = 10;
-  }
-  nodeW = (availableW - (cols - 1) * gapX) / cols;
-
-  const gapY = 56;
-  const startX = paddingX;
-  const startY = 20;
-
-  const rows = Math.ceil(FLOW_NODES.length / cols);
-  const totalW = containerW;
-  const totalH = startY + rows * (nodeH + gapY) + 20;
-
-  let svg = '<svg class="flow-svg" viewBox="0 0 ' + totalW + ' ' + totalH + '" preserveAspectRatio="xMidYMin meet"><defs>';
-  svg += '<marker id="arrow" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 7 2.5, 0 5" fill="#64748b"/></marker>';
-  svg += '<marker id="arrowA" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 7 2.5, 0 5" fill="var(--warning)"/></marker>';
-  svg += '<marker id="arrowG" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 7 2.5, 0 5" fill="var(--success)"/></marker>';
+  let svg = `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMin meet"><defs>`;
+  svg += '<marker id="arrow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#475569"/></marker>';
+  svg += '<marker id="arrowA" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#f59e0b"/></marker>';
+  svg += '<marker id="arrowG" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#00e5a0"/></marker>';
   svg += '</defs>';
 
-  function getPos(i) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const isEvenRow = row % 2 === 0;
-    const x = isEvenRow
-      ? startX + col * (nodeW + gapX)
-      : startX + (cols - 1 - col) * (nodeW + gapX);
-    const y = startY + row * (nodeH + gapY);
-    return { x, y, cx: x + nodeW/2, cy: y + nodeH/2 };
-  }
+  // Edges
+  FLOW_EDGES.forEach((e, i) => {
+    const d = buildEdgePath(e);
+    if (!d) return;
+    const colorClass = e.color === '#00e5a0' ? ' triggered' : (e.color === '#f59e0b' ? ' active' : '');
+    const marker = e.color === '#00e5a0' ? 'url(#arrowG)' : (e.color === '#f59e0b' ? 'url(#arrowA)' : 'url(#arrow)');
+    svg += `<path id="edge-${e.from}-${e.to}" class="flow-edge${colorClass}" d="${d}" marker-end="${marker}"/>`;
 
-  FLOW_NODES.forEach((n, i) => {
-    const pos = getPos(i);
+    // Edge label
+    if (e.label) {
+      const from = getNode(e.from);
+      const to = getNode(e.to);
+      let lx, ly;
+      if (e.type === 'yes') {
+        lx = (leftCenter(from).x + rightCenter(to).x) / 2;
+        ly = (leftCenter(from).y + rightCenter(to).y) / 2 - 6;
+      } else if (e.type === 'no') {
+        lx = (bottomCenter(from).x + topCenter(to).x) / 2 + 10;
+        ly = (bottomCenter(from).y + topCenter(to).y) / 2;
+      } else {
+        lx = (bottomCenter(from).x + topCenter(to).x) / 2;
+        ly = (bottomCenter(from).y + topCenter(to).y) / 2;
+      }
+      svg += `<rect class="flow-edge-label-bg" x="${lx-14}" y="${ly-7}" width="28" height="14" rx="3"/>`;
+      svg += `<text class="flow-edge-label" x="${lx}" y="${ly+3}">${e.label}</text>`;
+    }
+
+    // Particle
+    const pColor = e.color === '#00e5a0' ? 'green' : (e.color === '#f59e0b' ? 'amber' : '');
+    const dur = e.type === 'yes' ? '1.4s' : (e.curve === 'back' ? '1.8s' : '2.2s');
+    svg += `<circle r="2.2" class="flow-particle ${pColor}" opacity="0.85">`;
+    svg += `<animateMotion dur="${dur}" repeatCount="indefinite" path="${d}"/>`;
+    svg += `</circle>`;
+  });
+
+  // Nodes
+  FLOW_NODES.forEach(n => {
     const isAction = n.type === 'action';
     const isCheck = n.type === 'check';
-    const rx = isAction ? 20 : 8;
     const shapeClass = isAction ? 'flow-node-action' : (isCheck ? 'flow-node-check' : 'flow-node-rect');
-    svg += '<g id="node-' + n.id + '" data-index="' + i + '" >';
-    svg += '<rect id="rect-' + n.id + '" class="' + shapeClass + '" x="' + pos.x + '" y="' + pos.y + '" width="' + nodeW + '" height="' + nodeH + '" rx="' + rx + '"/>';
-    svg += '<text class="flow-node-text" x="' + pos.cx + '" y="' + (pos.cy - 4) + '" style="font-size:' + fontSize + 'px">' + n.icon + ' ' + n.name + '</text>';
-    svg += '<text id="sub-' + n.id + '" class="flow-node-sub" x="' + pos.cx + '" y="' + (pos.cy + 12) + '" style="font-size:' + subFontSize + 'px"></text>';
+    svg += `<g id="node-${n.id}">`;
+    if (isCheck) {
+      const dx = n.w/2, dy = n.h/2;
+      svg += `<polygon id="rect-${n.id}" class="${shapeClass}" points="${cx(n)},${n.y} ${n.x+n.w},${cy(n)} ${cx(n)},${n.y+n.h} ${n.x},${cy(n)}"/>`;
+    } else {
+      const rx = isAction ? 16 : 6;
+      svg += `<rect id="rect-${n.id}" class="${shapeClass}" x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${rx}"/>`;
+    }
+    svg += `<text class="flow-node-text" x="${cx(n)}" y="${cy(n)-1}">${n.name}</text>`;
+    svg += `<text id="sub-${n.id}" class="flow-node-sub" x="${cx(n)}" y="${cy(n)+11}"></text>`;
     svg += '</g>';
   });
 
-  const arrowOffset = 1;
-  for (let i = 0; i < FLOW_NODES.length - 1; i++) {
-    const p1 = getPos(i);
-    const p2 = getPos(i + 1);
-    const isRowEnd = (i + 1) % cols === 0;
-    let d;
-    if (isRowEnd) {
-      d = 'M' + p1.cx + ' ' + (p1.y + nodeH) + ' L' + p2.cx + ' ' + (p2.y - arrowOffset);
-    } else {
-      const dir = p1.cx < p2.cx ? 1 : -1;
-      const endX = p2.x + (dir === 1 ? -arrowOffset : nodeW + arrowOffset);
-      d = 'M' + (p1.x + (dir === 1 ? nodeW : 0)) + ' ' + p1.cy + ' L' + endX + ' ' + p2.cy;
-    }
-    svg += '<path id="edge-' + i + '" class="flow-edge" d="' + d + '" marker-end="url(#arrow)"/>';
-  }
-
   svg += '</svg>';
   container.innerHTML = svg;
-  container._layout = { cols, nodeW, nodeH, gapX, gapY, startX, startY };
+  container._flowScale = scale;
 }
 
 function pulseNode(nodeId, color) {
@@ -1678,16 +1742,18 @@ function pulseNode(nodeId, color) {
   setTimeout(() => rect.classList.remove('pulsing'), 1200);
 }
 
-function lightEdge(idx, color) {
-  const edge = document.getElementById('edge-' + idx);
+function lightEdge(fromId, toId, color) {
+  const edge = document.getElementById('edge-' + fromId + '-' + toId);
   if (!edge) return;
-  edge.classList.remove('active', 'triggered');
+  edge.classList.remove('active', 'triggered', 'dimmed');
   if (color) {
     edge.classList.add(color);
-    edge.setAttribute('marker-end', color === 'triggered' ? 'url(#arrowG)' : 'url(#arrowA)');
+    const marker = color === 'triggered' ? 'url(#arrowG)' : 'url(#arrowA)';
+    edge.setAttribute('marker-end', marker);
     setTimeout(() => {
       edge.classList.remove('active', 'triggered');
-      edge.setAttribute('marker-end', 'url(#arrow)');
+      const baseColor = edge.getAttribute('data-base-color');
+      edge.setAttribute('marker-end', baseColor === '#00e5a0' ? 'url(#arrowG)' : (baseColor === '#f59e0b' ? 'url(#arrowA)' : 'url(#arrow)'));
     }, 1200);
   }
 }
@@ -1697,56 +1763,105 @@ function dimNode(nodeId) {
   if (rect) rect.classList.add('dimmed');
 }
 
+function dimEdge(fromId, toId) {
+  const edge = document.getElementById('edge-' + fromId + '-' + toId);
+  if (edge) edge.classList.add('dimmed');
+}
+
 function runTickPulse(triggeredMap) {
   if (_scanning) return;
   _scanning = true;
   const triggered = triggeredMap || {};
   function done() { _scanning = false; }
+
+  // Reset all
   FLOW_NODES.forEach(n => {
     const rect = document.getElementById('rect-' + n.id);
     if (rect) rect.classList.remove('active', 'pulsing', 'triggered', 'dimmed');
   });
+  FLOW_EDGES.forEach(e => {
+    const edge = document.getElementById('edge-' + e.from + '-' + e.to);
+    if (edge) edge.classList.remove('active', 'triggered', 'dimmed');
+  });
 
-  let i = 0;
-  function scanNext() {
-    if (i >= FLOW_NODES.length) {
-      setTimeout(done, 800);
+  // Always pulse main trunk
+  ['start','symbols','prices','positions'].forEach(id => pulseNode(id, 'active'));
+
+  // Dim disabled branches first
+  FLOW_EDGES.forEach(e => {
+    const fromNode = getNode(e.from);
+    const toNode = getNode(e.to);
+    if (fromNode.checkKey && _flowConfig && !_flowConfig[fromNode.checkKey]) {
+      if (e.type === 'yes') {
+        dimEdge(e.from, e.to);
+        dimNode(toNode.id);
+      }
+    }
+  });
+
+  const sequence = [
+    { ids:['allCheck'], delay:200 },
+    { ids:['allClose','allReplenish'], delay:350, ifTriggered:'allClose' },
+    { ids:['tierCheck'], delay:500 },
+    { ids:['tierClose'], delay:650, ifTriggered:'tierClose' },
+    { ids:['pairCheck'], delay:800 },
+    { ids:['pairClose'], delay:950, ifTriggered:'pairClose' },
+    { ids:['marginCheck'], delay:1100 },
+    { ids:['marginAdd'], delay:1250, ifTriggered:'marginAdd' },
+    { ids:['replenish'], delay:1400 },
+    { ids:['openPos'], delay:1550, ifTriggered:'openPos' },
+    { ids:['checkpoint','end'], delay:1700 },
+  ];
+
+  let seqIdx = 0;
+  function runSeq() {
+    if (seqIdx >= sequence.length) {
+      setTimeout(done, 600);
       return;
     }
-    const n = FLOW_NODES[i];
-    const isTriggered = triggered[n.id] === true;
-    const isDisabled = n.checkKey && _flowConfig && !_flowConfig[n.checkKey];
+    const step = sequence[seqIdx];
+    seqIdx++;
 
-    if (isDisabled) {
-      dimNode(n.id);
-      const sub = document.getElementById('sub-' + n.id);
-      if (sub) sub.textContent = '已禁用';
-    } else if (n.type === 'action') {
-      if (isTriggered) {
-        pulseNode(n.id, 'triggered');
+    if (step.ifTriggered && !triggered[step.ifTriggered]) {
+      runSeq();
+      return;
+    }
+
+    step.ids.forEach(id => {
+      const n = getNode(id);
+      if (!n) return;
+      const isDisabled = n.checkKey && _flowConfig && !_flowConfig[n.checkKey];
+      if (isDisabled) {
+        dimNode(id);
+        return;
+      }
+      const isTriggered = triggered[id] === true;
+      if (n.type === 'action') {
+        pulseNode(id, isTriggered ? 'triggered' : 'dimmed');
+      } else if (n.type === 'check') {
+        pulseNode(id, isTriggered ? 'triggered' : 'active');
       } else {
-        dimNode(n.id);
+        pulseNode(id, 'active');
       }
-    } else if (n.type === 'check') {
-      pulseNode(n.id, isTriggered ? 'triggered' : 'active');
-    } else {
-      pulseNode(n.id, 'active');
-    }
+    });
 
-    if (i > 0) {
-      const prev = FLOW_NODES[i-1];
-      const prevDisabled = prev.checkKey && _flowConfig && !_flowConfig[prev.checkKey];
-      if (!prevDisabled) {
-        const edgeColor = (isTriggered || n.type === 'data' || n.type === 'check') ? (isTriggered ? 'triggered' : 'active') : null;
-        if (edgeColor) lightEdge(i-1, edgeColor);
-      }
-    }
+    // Light edges leading to these nodes
+    step.ids.forEach(id => {
+      FLOW_EDGES.forEach(e => {
+        if (e.to === id) {
+          const fromNode = getNode(e.from);
+          const fromDisabled = fromNode.checkKey && _flowConfig && !_flowConfig[fromNode.checkKey];
+          if (fromDisabled && e.type === 'yes') return;
+          const toNode = getNode(id);
+          const color = (triggered[id] || toNode.type === 'check' || toNode.type === 'data') ? (triggered[id] ? 'triggered' : 'active') : null;
+          if (color) lightEdge(e.from, e.to, color);
+        }
+      });
+    });
 
-    i++;
-    setTimeout(scanNext, 450);
+    setTimeout(runSeq, step.delay);
   }
-
-  scanNext();
+  runSeq();
 }
 
 function updateFlowGraph() {
@@ -1754,13 +1869,19 @@ function updateFlowGraph() {
   const stats = window._lastStats || {};
   const account = window._lastAccount || {};
 
-  document.getElementById('sub-symbols').textContent = (account.active_symbols||[]).length + ' 个币种';
-  document.getElementById('sub-positions').textContent = (account.position_count||0) + ' 仓';
-  document.getElementById('sub-allCheck').textContent = '阈值 ' + ((_flowConfig.all_close_threshold||0)*100).toFixed(2) + '%';
-  document.getElementById('sub-tierCheck').textContent = (stats.single_count||0) + ' 次';
-  document.getElementById('sub-pairCheck').textContent = '阈值 ' + ((_flowConfig.pair_close_threshold||(_flowConfig.profit_threshold||0))*100).toFixed(2) + '%';
-  document.getElementById('sub-marginCheck').textContent = '倍率 x' + (_flowConfig.margin_call_multiplier||2);
-  document.getElementById('sub-replenish').textContent = '上限 ' + (_flowConfig.max_position_count||0) + ' 仓';
+  const subEls = {
+    symbols:    (account.active_symbols||[]).length + ' 个币种',
+    positions:  (account.position_count||0) + ' 仓',
+    allCheck:   '阈值 ' + ((_flowConfig.all_close_threshold||0)*100).toFixed(2) + '%',
+    tierCheck:  (stats.single_count||0) + ' 次',
+    pairCheck:  '阈值 ' + ((_flowConfig.pair_close_threshold||(_flowConfig.profit_threshold||0))*100).toFixed(2) + '%',
+    marginCheck:'倍率 x' + (_flowConfig.margin_call_multiplier||2),
+    replenish:  '上限 ' + (_flowConfig.max_position_count||0) + ' 仓',
+  };
+  Object.entries(subEls).forEach(([id, text]) => {
+    const el = document.getElementById('sub-' + id);
+    if (el) el.textContent = text;
+  });
 
   FLOW_NODES.forEach(n => {
     const rect = document.getElementById('rect-' + n.id);
@@ -1772,28 +1893,34 @@ function updateFlowGraph() {
     }
   });
 
+  // Dim edges for disabled checks
+  FLOW_EDGES.forEach(e => {
+    const fromNode = getNode(e.from);
+    const edgeEl = document.getElementById('edge-' + e.from + '-' + e.to);
+    if (!edgeEl) return;
+    if (fromNode.checkKey && _flowConfig && !_flowConfig[fromNode.checkKey] && e.type === 'yes') {
+      edgeEl.classList.add('dimmed');
+    } else {
+      edgeEl.classList.remove('dimmed');
+    }
+  });
+
   const triggered = {};
   if ((stats.all_close_count||0) > (_prevStats.all_close_count||0)) {
-    triggered['allCheck'] = true;
-    triggered['allClose'] = true;
-    triggered['allReplenish'] = true;
+    triggered['allCheck'] = true; triggered['allClose'] = true; triggered['allReplenish'] = true;
   }
   if ((stats.single_count||0) > (_prevStats.single_count||0)) {
-    triggered['tierCheck'] = true;
-    triggered['tierClose'] = true;
+    triggered['tierCheck'] = true; triggered['tierClose'] = true;
   }
   if ((stats.pair_close_count||0) > (_prevStats.pair_close_count||0)) {
-    triggered['pairCheck'] = true;
-    triggered['pairClose'] = true;
+    triggered['pairCheck'] = true; triggered['pairClose'] = true;
   }
   if ((account.margin_call_count||0) > (_prevAccount.margin_call_count||0)) {
-    triggered['marginCheck'] = true;
-    triggered['marginAdd'] = true;
+    triggered['marginCheck'] = true; triggered['marginAdd'] = true;
   }
   const posIncreased = (account.position_count||0) > (_prevAccount.position_count||0);
   if (posIncreased && !triggered['marginAdd']) {
-    triggered['replenish'] = true;
-    triggered['openPos'] = true;
+    triggered['replenish'] = true; triggered['openPos'] = true;
   }
 
   _prevStats = JSON.parse(JSON.stringify(stats));
@@ -1829,44 +1956,8 @@ async function loadDashboardView() {
   updateFlowGraph();
   startTickSimulation();
 }
+// Removed strategy tab and log stream
 
-async function loadStrategyView() {
-  await loadAccount();
-  await loadStats();
-  await loadLogStream();
-}
-
-let _logOffset = 0;
-const _logMaxEntries = 100;
-
-function formatLogEntry(t) {
-  const typeColors = {
-    'all_close': 'log-type-all',
-    'single': 'log-type-close',
-    'pair_close': 'log-type-pair',
-    'margin_call': 'log-type-margin',
-  };
-  let msg = '';
-  if (t.type === 'all_close') msg = `全仓平仓 ${t.symbol} 盈亏: ${(t.pnl||0).toFixed(4)} USDT`;
-  else if (t.type === 'single') msg = `分级止盈 ${t.symbol} ${t.side==='long'?'多':'空'} 盈亏: ${(t.pnl||0).toFixed(4)} 率: ${((t.pnl_rate||0)*100).toFixed(2)}%`;
-  else if (t.type === 'pair_close') msg = `多空对平 ${t.symbol} 盈亏: ${(t.pnl||0).toFixed(4)} USDT`;
-  else if (t.type === 'margin_call') msg = `亏损加仓 ${t.symbol} ${t.side==='long'?'多':'空'} 数量: ${(t.amount||0).toFixed(2)}`;
-  else msg = `${t.symbol} ${t.side==='long'?'多':'空'} 平仓 盈亏: ${(t.pnl||0).toFixed(4)}`;
-
-  const time = t.close_time ? t.close_time.slice(11,19) : '--:--:--';
-  const cls = typeColors[t.type] || 'log-type-close';
-  return `<div class="log-entry"><span class="log-time">${time}</span><span class="log-msg ${cls}">${msg}</span></div>`;
-}
-
-async function loadLogStream() {
-  const d = await api('/api/trades?limit=30');
-  if (!d || !d.trades) return;
-  const container = document.getElementById('logStream');
-  const entries = d.trades.map(formatLogEntry).join('');
-  container.innerHTML = entries || '<div style="color:var(--text-muted);text-align:center;padding:20px 0">暂无交易记录</div>';
-  document.getElementById('logCount').textContent = `${d.trades.length} 条记录 / 共 ${d.total||0} 笔`;
-  container.scrollTop = container.scrollHeight;
-}
 
 loadConfig();
 loadFrontendConfig();
