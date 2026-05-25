@@ -412,20 +412,50 @@ except sqlite3.OperationalError:
 
 #### 3.5.1 整体架构
 
-- 单 HTML 文件，无构建步骤，零依赖
-- 深色主题，绿色=盈利，红色=亏损
-- 三标签页 SPA：数据仪表盘 / 持仓矩阵 / 交易配置
+- 单 HTML 文件，无构建步骤
+- **Cyber-FinTech Terminal** 视觉风格：深色太空蓝基底 + 霓虹青 accent
+- **字体栈**：Geist（Variable，100-900）+ JetBrains Mono（等宽数据）
+- **图标系统**：Phosphor Icons (`ph-*`)，全矢量、单色、支持 weight 变换
+- **四标签页 SPA**：数据仪表盘 / 持仓矩阵 / 策略视图 / 交易配置
+- **视觉特效**：Liquid Glass 面板、neon glow 边框、动态脉冲边线、滚动 triggered stagger reveal
+- **响应式**：移动端优先的断点缩放，Bento Grid 自动重排
 
-#### 3.5.2 数据刷新机制
+#### 3.5.2 设计系统 (Design Tokens)
+
+所有颜色与特效通过 `:root` CSS 变量集中管理，并保留 legacy 别名保证 JS 向后兼容：
+
+| Token | 值 | 用途 |
+|-------|-----|------|
+| `--bg-base` | `#070a12` | 页面底层背景 |
+| `--bg-elevated` | `#0d1220` | 卡片/面板背景 |
+| `--accent` | `#00d4ff` | 主强调色（霓虹青） |
+| `--success` | `#00e5a0` | 盈利/做多指示 |
+| `--error` | `#ff4757` | 亏损/做空指示 |
+| `--color-primary` | `var(--accent)` | **Legacy 别名** |
+| `--color-long` | `var(--success)` | **Legacy 别名** |
+| `--color-short` | `var(--error)` | **Legacy 别名** |
+
+#### 3.5.3 标签页结构
+
+| 标签 | 图标 | 核心内容 |
+|------|------|----------|
+| 数据仪表盘 | `ph-squares-four` | Bento Grid 布局：盈利趋势图（主卡片，跨 2 行）+ 账户概览 + 系统监控 + 实时日志 |
+| 持仓矩阵 | `ph-grid-four` | 全屏响应式网格，按盈亏率热力着色 |
+| 策略视图 | `ph-tree-structure` | SVG 策略决策流图：21 节点蛇形布局，动态脉冲边线，实时状态高亮 |
+| 交易配置 | `ph-gear` | 9 大分组配置面板 |
+
+#### 3.5.4 数据刷新机制
 
 | 数据源 | 刷新频率 | 说明 |
 |--------|----------|------|
-| 账户/统计/趋势 | 5 秒 | `setInterval(refresh, 5000)` |
+| 账户/统计/趋势 | 5 秒 | `setInterval(refresh, 5000)`，带 `AbortController` 取消过期请求 |
 | 系统监控 | 10 秒 | `setInterval(loadSystem, 10000)` |
-| 页面可见性 | — | 隐藏时暂停定时器，恢复时立即刷新 |
-| 防重复刷新 | — | `window._isRefreshing` 标志位 |
+| 策略流图 | 5 秒 | 随主刷新循环更新节点状态与边线脉冲 |
+| 实时日志 | 3 秒 | 独立轮询，追加渲染，自动滚动 |
+| 页面可见性 | — | 隐藏时暂停所有定时器，恢复时立即全量刷新 |
+| 防重复刷新 | — | `window._isRefreshing` 标志位 + `lastPeriod` 防陈旧数据 |
 
-#### 3.5.3 持仓矩阵
+#### 3.5.5 持仓矩阵
 
 - 突破 `max-width: 960px` 限制，占满视口宽度
 - 网格大小由 `window.frontendConfig.matrix_slots`（默认 100）和 `matrix_columns`（默认 10）控制
@@ -441,14 +471,38 @@ except sqlite3.OperationalError:
 
 > **设计决策**：`matrix_slots`（前端显示配置）与 `max_position_count`（交易配置）完全解耦。前者只控制显示，后者只控制交易系统的开仓上限。
 
-#### 3.5.4 盈利趋势图
+#### 3.5.6 盈利趋势图
 
 - Canvas 2D 绘制，支持高 DPI（`devicePixelRatio` 适配）
-- 按小时/天聚合盈亏数据，绿色/红色面积填充
+- 按小时/天聚合盈亏数据，绿色/红色面积填充 + 二次贝塞尔曲线平滑
+- **增强特效**：线条 neon glow（`shadowBlur` + accent 色）、数据点脉冲动画
 - 响应式缩放：基于设计宽度 600px 计算 `scale` 因子
 - 标签防重叠：根据图表宽度计算最大标签数，均匀采样
 
-#### 3.5.5 配置面板
+#### 3.5.7 策略决策流图 (Strategy View)
+
+**核心实现**：
+- 纯 SVG 渲染，无外部依赖
+- **21 个节点**覆盖完整交易生命周期：信号获取 → 候选筛选 → 多空判断 → 仓位计算 → 风控检查 → 下单执行 → 持仓监控 → 止盈/补仓/全平 → 日志记录
+- **蛇形布局 (Snake Layout)**：奇数行从左到右，偶数行从右到左，形成紧凑 S 型流向
+- **动态边线**：
+  - 实线 = 策略启用且流程活跃
+  - 虚线 = 策略禁用或路径未触发
+  - `stroke-dashoffset` 脉冲动画，速度反映系统繁忙度
+- **节点状态**：
+  - 激活态：霓虹青 glow + 实心填充
+  - 禁用态：50% 透明度 + 灰色边框
+  - 错误态：红色脉冲
+- **图标系统**：使用 ASCII 符号（`◎ ◉ ▲ ▼ ◆ □ ▷ ◁ ▣ ◇ ▪ ▫ ▬ ▭ ◐ ◑ ◒ ◓ ◔ ◕`）替代 emoji，避免 SVG 跨平台渲染差异
+
+#### 3.5.8 实时日志 (Terminal Stream)
+
+- 终端风格面板：JetBrains Mono 等宽字体，左侧青绿色时间戳
+- 自动滚动到底部，保留最近 200 条
+- 日志级别着色：`INFO` = accent 青，`WARN` = 琥珀色，`ERROR` = 霓虹红
+- 支持手动暂停/恢复滚动
+
+#### 3.5.9 配置面板
 
 9 个分组：币种筛选、基础交易、分档止盈、补仓设置、账户级全平、亏损加仓、多空对平、白名单、前端显示设置。
 
@@ -459,7 +513,6 @@ except sqlite3.OperationalError:
 **配置保存**：
 - 同时提交两份配置：交易配置 → `POST /api/config`，前端配置 → `POST /api/web-config`
 - 保存成功后立即更新 `window.frontendConfig`，确保即时生效
-
 ## 四、配置体系
 
 ### 4.1 交易配置 (config.json)

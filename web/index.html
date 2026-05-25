@@ -3,758 +3,750 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EvoClaw 交易仪表盘</title>
+<title>EvoClaw Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
 <style>
+@font-face {
+  font-family: 'Geist';
+  src: url('https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --color-primary: #0ea5e9;
-  --color-primary-dim: #0284c7;
-  --color-success: #10b981;
-  --color-error: #ef4444;
-  --color-warning: #f59e0b;
-  --surface-bg: #0b0f19;
-  --surface-card: #111827;
-  --surface-card-hover: #1a2234;
-  --surface-input: #0b0f19;
-  --surface-border: #1e2a3a;
-  --text-primary: #e5e7eb;
-  --text-secondary: #9ca3af;
-  --text-tertiary: #6b7280;
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro", "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  --bg-base: #070a12;
+  --bg-elevated: #0d1220;
+  --bg-surface: #111827;
+  --bg-hover: #1a2234;
+  --accent: #00d4ff;
+  --accent-dim: #0891b2;
+  --accent-glow: rgba(0, 212, 255, 0.15);
+  --success: #00e5a0;
+  --success-dim: #059669;
+  --success-glow: rgba(0, 229, 160, 0.12);
+  --error: #ff4757;
+  --error-dim: #dc2626;
+  --error-glow: rgba(255, 71, 87, 0.12);
+  --warning: #f59e0b;
+  --border-subtle: rgba(255,255,255,0.06);
+  --border-medium: rgba(255,255,255,0.10);
+  --border-strong: rgba(255,255,255,0.14);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+  --text-muted: #475569;
+  --font-ui: 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.3);
+  /* Legacy aliases for JS compatibility */
+  --color-primary: var(--accent);
+  --color-success: var(--success);
+  --color-error: var(--error);
+  --color-warning: var(--warning);
+  --surface-bg: var(--bg-base);
+  --surface-card: var(--bg-elevated);
+  --surface-card-hover: var(--bg-hover);
+  --surface-input: rgba(255,255,255,0.02);
+  --surface-border: var(--border-subtle);
+  --font-sans: var(--font-ui);
 }
 
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-html{font-size:14px}
+html{font-size:14px;scroll-behavior:smooth}
 body{
-  font-family:var(--font-sans);
-  background:var(--surface-bg);
+  font-family:var(--font-ui);
+  background:var(--bg-base);
   color:var(--text-primary);
   line-height:1.5;
-  padding:12px;
-  max-width:960px;
-  margin:0 auto;
   -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  z-index:-1;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 40%, rgba(0,212,255,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 60%, rgba(0,229,160,0.03) 0%, transparent 50%);
+  pointer-events:none;
+}
+body::after{
+  content:'';
+  position:fixed;
+  inset:0;
+  z-index:9999;
+  opacity:0.025;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events:none;
 }
 
-/* Header */
+.app-shell{max-width:1200px;margin:0 auto;padding:16px 20px 40px}
+
 .page-header{
   display:flex;
   align-items:center;
   justify-content:space-between;
-  padding:8px 0 12px;
-  border-bottom:1px solid var(--surface-border);
-  margin-bottom:12px;
+  padding:12px 0 16px;
+  margin-bottom:16px;
+  position:relative;
 }
-.page-header h1{
-  font-size:20px;
-  font-weight:700;
-  letter-spacing:-.02em;
-  background:linear-gradient(135deg,var(--color-primary),#a78bfa);
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-  background-clip:text;
+.page-header::after{
+  content:'';
+  position:absolute;
+  bottom:0;left:0;right:0;
+  height:1px;
+  background:linear-gradient(90deg, transparent, var(--border-medium), transparent);
 }
+.brand{display:flex;align-items:center;gap:10px;cursor:pointer}
+.brand-icon{
+  width:32px;height:32px;border-radius:var(--radius-sm);
+  background:linear-gradient(135deg, var(--accent), var(--success));
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;color:#000;
+  box-shadow:0 0 12px rgba(0,212,255,0.3);
+}
+.brand h1{
+  font-size:22px;font-weight:700;letter-spacing:-0.03em;
+  background:linear-gradient(135deg, var(--text-primary), var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.brand .version{
+  font-family:var(--font-mono);font-size:10px;color:var(--text-muted);
+  background:var(--bg-elevated);padding:2px 6px;border-radius:4px;
+  border:1px solid var(--border-subtle);letter-spacing:0.05em;
+}
+.header-actions{display:flex;align-items:center;gap:10px}
+.header-ad{
+  font-size:11px;color:var(--warning);text-decoration:none;
+  background:rgba(245,158,11,0.08);padding:4px 10px;border-radius:999px;
+  border:1px solid rgba(245,158,11,0.2);white-space:nowrap;
+  transition:all 0.2s;display:flex;align-items:center;gap:4px;
+}
+.header-ad:hover{background:rgba(245,158,11,0.15)}
+
 .status-pill{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  font-size:11px;
-  color:var(--text-secondary);
-  background:var(--surface-card);
-  padding:3px 10px;
-  border-radius:9999px;
-  border:1px solid var(--surface-border);
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);
+  background:var(--bg-elevated);padding:5px 12px;border-radius:9999px;
+  border:1px solid var(--border-subtle);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
 }
 .status-dot{
-  width:6px;height:6px;
-  border-radius:50%;
-  background:var(--color-success);
-  animation:pulse 2s ease-in-out infinite;
+  width:6px;height:6px;border-radius:50%;background:var(--success);
+  box-shadow:0 0 8px var(--success);
+  animation:breathe 2.5s ease-in-out infinite;
 }
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes breathe{0%,100%{opacity:1;box-shadow:0 0 8px var(--success)}50%{opacity:0.4;box-shadow:0 0 2px var(--success)}}
 
-/* Tabs */
 .tab-bar{
-  display:flex;
-  gap:4px;
-  margin-bottom:12px;
-  background:var(--surface-card);
-  border:1px solid var(--surface-border);
-  border-radius:8px;
-  padding:3px;
+  display:flex;gap:6px;margin-bottom:20px;
+  background:var(--bg-elevated);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-md);padding:4px;position:relative;
 }
 .tab-btn{
-  flex:1;
-  background:transparent;
-  border:none;
-  color:var(--text-secondary);
-  font-size:13px;
-  font-weight:600;
-  padding:8px 0;
-  border-radius:6px;
-  cursor:pointer;
-  transition:all .15s;
-  font-family:var(--font-sans);
+  flex:1;background:transparent;border:none;color:var(--text-secondary);
+  font-size:13px;font-weight:600;font-family:var(--font-ui);
+  padding:9px 0;border-radius:var(--radius-sm);cursor:pointer;
+  transition:all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position:relative;display:flex;align-items:center;justify-content:center;
+  gap:6px;letter-spacing:0.01em;
 }
 .tab-btn:hover{color:var(--text-primary)}
 .tab-btn.active{
-  background:var(--color-primary);
-  color:#fff;
+  background:linear-gradient(135deg, rgba(0,212,255,0.12), rgba(0,229,160,0.08));
+  color:var(--accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 8px rgba(0,212,255,0.08);
 }
-.tab-panel{display:none;animation:fadeIn .25s ease}
+.tab-btn .ph{font-size:15px}
+.tab-panel{display:none;animation:panelEnter 0.35s cubic-bezier(0.16,1,0.3,1)}
 .tab-panel.active{display:block}
+@keyframes panelEnter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
-/* Card */
-.card{
-  background:var(--surface-card);
-  border:1px solid var(--surface-border);
-  border-radius:10px;
-  padding:12px;
-  margin-bottom:10px;
-  box-shadow:0 1px 4px rgba(0,0,0,.4);
-}
-.card-head{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  margin-bottom:10px;
-}
-.card-head .icon{
-  width:22px;height:22px;
-  display:flex;align-items:center;justify-content:center;
-  border-radius:5px;
-  font-size:13px;
-  flex-shrink:0;
-}
-.card-head h2{
-  font-size:12px;
-  font-weight:600;
-  text-transform:uppercase;
-  letter-spacing:.06em;
-  color:var(--text-secondary);
+.bento-grid{display:grid;gap:12px}
+.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto}
+.bento-dashboard .bento-main{grid-row:1/3}
+.bento-dashboard .bento-side-top{grid-column:2;grid-row:1}
+.bento-dashboard .bento-side-bottom{grid-column:2;grid-row:2}
+.bento-dashboard .bento-wide-left{grid-column:1;grid-row:3}
+.bento-dashboard .bento-wide-right{grid-column:2;grid-row:3}
+@media(max-width:900px){
+  .bento-dashboard{grid-template-columns:1fr;grid-template-rows:auto}
+  .bento-dashboard .bento-main,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-wide-left,.bento-dashboard .bento-wide-right{grid-column:1;grid-row:auto}
 }
 
-/* Stat Grid - compact 4-col */
-.stat-grid{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:8px;
+.tile{
+  background:var(--bg-elevated);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);padding:16px;position:relative;overflow:hidden;
+  transition:all 0.25s cubic-bezier(0.16,1,0.3,1);
 }
-.stat-card{
-  background:var(--surface-input);
-  border:1px solid var(--surface-border);
-  border-radius:8px;
-  padding:8px 4px;
-  text-align:center;
-  transition:all .15s;
+.tile::before{
+  content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;
+  background:linear-gradient(135deg, rgba(255,255,255,0.08), transparent 40%, transparent 60%, rgba(255,255,255,0.04));
+  -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  pointer-events:none;opacity:0;transition:opacity 0.3s;
 }
-.stat-card:hover{
-  background:var(--surface-card-hover);
-  border-color:#2a3a4e;
+.tile:hover::before{opacity:1}
+.tile:hover{border-color:var(--border-medium);transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.tile-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.tile-head .icon-wrap{
+  width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+  border-radius:var(--radius-sm);font-size:15px;flex-shrink:0;
+  background:rgba(255,255,255,0.04);border:1px solid var(--border-subtle);color:var(--accent);
 }
+.tile-head h2{
+  font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-secondary);
+}
+.tile-head .tile-actions{margin-left:auto;display:flex;gap:4px}
+
+.stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.stat-grid.cols-4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:640px){.stat-grid.cols-4{grid-template-columns:repeat(2,1fr)}}
+.stat-cell{
+  background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-md);padding:10px 8px;text-align:center;
+  transition:all 0.2s;position:relative;overflow:hidden;
+}
+.stat-cell::after{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity:0;transition:opacity 0.3s;
+}
+.stat-cell:hover::after{opacity:0.4}
+.stat-cell:hover{background:rgba(255,255,255,0.04);border-color:var(--border-medium)}
 .stat-value{
-  font-size:clamp(11px, 2.5vw, 15px);
-  font-weight:700;
-  font-family:var(--font-mono);
-  margin-bottom:2px;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
+  font-size:clamp(12px, 2.2vw, 15px);font-weight:700;font-family:var(--font-mono);
+  margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em;
 }
 .stat-label{
-  font-size:clamp(8px, 1.8vw, 10px);
-  color:var(--text-tertiary);
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-#profitChart{width:100%;height:180px;display:block}
-#btnHour.active,#btnDay.active{background:var(--color-primary);color:#fff;border-color:var(--color-primary)}
-
-/* Config Form */
-.form-grid{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:10px;
-}
-.field{display:flex;flex-direction:column;gap:3px}
-.field.full{grid-column:1/-1}
-.field label{
-  font-size:11px;
-  font-weight:500;
-  color:var(--text-secondary);
-}
-.field input,.field select,.field textarea{
-  background:var(--surface-input);
-  border:1px solid var(--surface-border);
-  color:var(--text-primary);
-  padding:7px 10px;
-  border-radius:6px;
-  font-size:13px;
-  font-family:var(--font-sans);
-  transition:border-color .15s;
-  outline:none;
-  height:34px;
-}
-.field input:focus,.field select:focus,.field textarea:focus{
-  border-color:var(--color-primary);
-}
-.field textarea{min-height:60px;height:auto;resize:vertical}
-.field select{cursor:pointer}
-
-/* Config Group */
-.config-group{
-  border:1px solid var(--surface-border);
-  border-radius:8px;
-  padding:10px;
-  margin-bottom:8px;
-  background:rgba(255,255,255,.02);
-}
-.config-group-title{
-  font-size:11px;
-  font-weight:600;
-  color:var(--text-tertiary);
-  text-transform:uppercase;
-  letter-spacing:.06em;
-  margin-bottom:8px;
-  padding-bottom:6px;
-  border-bottom:1px solid var(--surface-border);
+  font-size:clamp(8px, 1.6vw, 10px);color:var(--text-tertiary);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;letter-spacing:0.02em;
 }
 
-/* Buttons */
-.btn-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.chart-wrap{position:relative;width:100%;height:220px}
+#profitChart{width:100%;height:220px;display:block}
+
+.sym-bar{
+  margin-bottom:12px;padding:8px 10px;
+  background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-md);font-size:11px;font-family:var(--font-mono);
+  color:var(--text-secondary);line-height:1.8;word-break:break-all;
+}
+.sym-tag{
+  display:inline-block;background:rgba(0,212,255,0.08);
+  border:1px solid rgba(0,212,255,0.15);padding:2px 7px;border-radius:4px;
+  margin:2px;font-size:10px;color:var(--accent);font-weight:500;letter-spacing:0.02em;
+}
+
+.btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .btn{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:4px;
-  height:36px;
-  padding:0 16px;
-  border:none;
-  border-radius:6px;
-  font-size:13px;
-  font-weight:600;
-  cursor:pointer;
-  transition:all .15s;
-  font-family:var(--font-sans);
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:36px;padding:0 16px;border:none;border-radius:var(--radius-sm);
+  font-size:13px;font-weight:600;cursor:pointer;
+  transition:all 0.15s cubic-bezier(0.16,1,0.3,1);
+  font-family:var(--font-ui);letter-spacing:0.01em;position:relative;overflow:hidden;
 }
-.btn-primary{background:var(--color-primary);color:#fff}
-.btn-primary:hover{background:var(--color-primary-dim)}
-.btn-danger{background:var(--color-error);color:#fff}
-.btn-danger:hover{background:#dc2626}
+.btn::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg, rgba(255,255,255,0.12), transparent);
+  opacity:0;transition:opacity 0.2s;
+}
+.btn:hover::after{opacity:1}
+.btn:active{transform:scale(0.97)}
+.btn-primary{
+  background:linear-gradient(135deg, var(--accent), var(--accent-dim));color:#000;
+  box-shadow:0 2px 12px rgba(0,212,255,0.2);
+}
+.btn-primary:hover{box-shadow:0 4px 20px rgba(0,212,255,0.3)}
+.btn-danger{
+  background:linear-gradient(135deg, var(--error), var(--error-dim));color:#fff;
+  box-shadow:0 2px 12px rgba(255,71,87,0.2);
+}
+.btn-danger:hover{box-shadow:0 4px 20px rgba(255,71,87,0.3)}
 .btn-secondary{
-  background:var(--surface-card-hover);
-  color:var(--text-primary);
-  border:1px solid var(--surface-border);
+  background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-subtle);
 }
-.btn-secondary:hover{background:#1f2937}
-.btn:active{transform:scale(.97)}
+.btn-secondary:hover{background:var(--bg-hover);border-color:var(--border-medium)}
+.btn-sm{height:28px;padding:0 10px;font-size:11px}
+.btn .ph{font-size:14px}
 
-/* Switch */
-.switch-wrap{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  min-height:34px;
-}
+.switch-wrap{display:flex;align-items:center;gap:10px;min-height:36px}
 .switch{position:relative;width:44px;height:24px;flex-shrink:0;cursor:pointer}
 .switch input{opacity:0;width:0;height:0;position:absolute}
 .switch .track{
-  position:absolute;inset:0;
-  background:#374151;
-  border-radius:12px;
-  transition:background .15s;
+  position:absolute;inset:0;background:#334155;border-radius:12px;transition:background 0.2s;
 }
 .switch .track::before{
-  content:"";
-  position:absolute;
-  width:18px;height:18px;
-  left:3px;bottom:3px;
-  background:#fff;
-  border-radius:50%;
-  transition:transform .15s;
+  content:"";position:absolute;width:18px;height:18px;left:3px;bottom:3px;
+  background:#fff;border-radius:50%;
+  transition:transform 0.2s cubic-bezier(0.16,1,0.3,1);
+  box-shadow:0 1px 3px rgba(0,0,0,0.3);
 }
-.switch input:checked+.track{background:var(--color-success)}
+.switch input:checked+.track{background:var(--success)}
 .switch input:checked+.track::before{transform:translateX(20px)}
 .switch-label{font-size:12px;color:var(--text-secondary)}
 
-/* Helpers */
-.text-green{color:var(--color-success)}
-.text-red{color:var(--color-error)}
-.text-warning{color:var(--color-warning)}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field.full{grid-column:1/-1}
+.field label{font-size:11px;font-weight:500;color:var(--text-secondary);letter-spacing:0.02em}
+.field input,.field select,.field textarea{
+  background:rgba(255,255,255,0.03);border:1px solid var(--border-subtle);
+  color:var(--text-primary);padding:8px 11px;border-radius:var(--radius-sm);
+  font-size:13px;font-family:var(--font-ui);transition:all 0.2s;outline:none;height:36px;
+}
+.field input:focus,.field select:focus,.field textarea:focus{
+  border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,255,0.08);
+}
+.field textarea{min-height:64px;height:auto;resize:vertical}
+.field select{cursor:pointer}
 
-/* Position Matrix */
-.pos-matrix{
-  display:grid;
-  grid-template-columns:repeat(10,1fr);
-  gap:15px;
-  max-width:200px;
-  margin:0 auto;
-  position:relative;
+.config-group{
+  border:1px solid var(--border-subtle);border-radius:var(--radius-md);
+  padding:14px;margin-bottom:10px;background:rgba(255,255,255,0.015);position:relative;
 }
+.config-group-title{
+  font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;
+  letter-spacing:0.08em;margin-bottom:10px;padding-bottom:8px;
+  border-bottom:1px solid var(--border-subtle);
+  display:flex;align-items:center;gap:6px;
+}
+.config-group-title .ph{font-size:13px}
+
+.text-green{color:var(--success)}
+.text-red{color:var(--error)}
+.text-warning{color:var(--warning)}
+.text-accent{color:var(--accent)}
+
+.pos-matrix{display:grid;grid-template-columns:repeat(10,1fr);gap:14px;max-width:200px;margin:0 auto;position:relative}
 .pos-cell{
-  aspect-ratio:1;
-  border-radius:2px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  font-size:5px;
-  font-weight:700;
-  font-family:var(--font-mono);
-  color:#fff;
-  cursor:pointer;
-  transition:all .15s;
-  position:relative;
-  border:1px solid transparent;
+  aspect-ratio:1;border-radius:3px;display:flex;align-items:center;justify-content:center;
+  font-size:5px;font-weight:700;font-family:var(--font-mono);color:#fff;
+  cursor:pointer;transition:all 0.15s;position:relative;border:1px solid transparent;
 }
-.pos-cell:hover{transform:scale(1.4);z-index:2;border-color:#fff}
-/* Profit/Loss coloring: green=profit, red=loss */
-.pos-cell.profit{background:var(--color-success)}
-.pos-cell.loss{background:var(--color-error)}
-.pos-cell.vacant{background:var(--surface-input);border:1px solid var(--surface-border)}
-.pos-cell.occupied{animation:cellPulse 1.5s ease-in-out infinite}
-@keyframes cellPulse{0%,100%{opacity:1;box-shadow:0 0 3px currentColor}50%{opacity:.5;box-shadow:none}}
-/* Cross connector lines between cells */
-.pos-cell::after,
-.pos-cell::before{
-  content:'';
-  position:absolute;
-  background:#6b7280;
-  z-index:0;
-}
-/* Horizontal line (right side) */
-.pos-cell::after{
-  width:18px;
-  height:2px;
-  right:-17px;
-  top:50%;
-  transform:translateY(-50%);
-}
-/* Vertical line (bottom side) */
-.pos-cell::before{
-  width:2px;
-  height:18px;
-  bottom:-17px;
-  left:50%;
-  transform:translateX(-50%);
-}
-/* Remove lines at right edge and bottom edge */
+.pos-cell:hover{transform:scale(1.5);z-index:2;border-color:rgba(255,255,255,0.3)}
+.pos-cell.profit{background:var(--success);box-shadow:0 0 6px var(--success-glow)}
+.pos-cell.loss{background:var(--error);box-shadow:0 0 6px var(--error-glow)}
+.pos-cell.vacant{background:rgba(255,255,255,0.03);border:1px solid var(--border-subtle)}
+.pos-cell.occupied{animation:cellPulse 2s ease-in-out infinite}
+@keyframes cellPulse{0%,100%{opacity:1;box-shadow:0 0 4px currentColor}50%{opacity:0.55;box-shadow:none}}
+.pos-cell::after,.pos-cell::before{content:'';position:absolute;background:var(--text-muted);z-index:0;opacity:0.3}
+.pos-cell::after{width:16px;height:1px;right:-15px;top:50%;transform:translateY(-50%)}
+.pos-cell::before{width:1px;height:16px;bottom:-15px;left:50%;transform:translateX(-50%)}
 .pos-cell.no-right::after{display:none}
 .pos-cell.no-bottom::before{display:none}
 
-/* Full-screen Matrix */
-#panel-matrix{
-  position:relative;
-  left:50%;
-  right:50%;
-  margin-left:-50vw;
-  margin-right:-50vw;
-  width:100vw;
-  padding:12px;
-  max-width:none;
-}
-.matrix-toolbar{
-  display:flex;
-  justify-content:center;
-  gap:8px;
-  margin-bottom:12px;
-}
-.matrix-toolbar .btn{
-  height:32px;
-  padding:0 14px;
-  font-size:12px;
-}
-.full-matrix{contain:layout;
-  display:grid;
-  grid-template-columns:repeat(10,1fr);
-  gap:6px;
-  width:100%;
-  max-width:100%;
-}
+#panel-matrix{position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;width:100vw;padding:12px;max-width:none}
+.matrix-toolbar{display:flex;justify-content:center;gap:8px;margin-bottom:12px}
+.matrix-toolbar .btn{height:32px;padding:0 14px;font-size:12px}
+.full-matrix{contain:layout;display:grid;grid-template-columns:repeat(10,1fr);gap:6px;width:100%;max-width:100%}
 .full-cell{
-  aspect-ratio:1;
-  border-radius:6px;
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-  padding:3px;
-  font-family:var(--font-mono);
-  color:#fff;
-  cursor:pointer;
-  transition:all .15s;
-  position:relative;
-  border:2px solid transparent;
-  overflow:hidden;
-  text-align:center;
-  line-height:1.2;
-  background:transparent;
+  aspect-ratio:1;border-radius:var(--radius-sm);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:3px;font-family:var(--font-mono);
+  color:#fff;cursor:pointer;transition:all 0.15s;position:relative;
+  border:2px solid transparent;overflow:hidden;text-align:center;line-height:1.2;background:transparent;
 }
-.full-cell:hover{transform:scale(1.05);z-index:2;border-color:#fff}
-.full-cell.vacant{background:transparent;border:1px solid var(--surface-border);color:var(--text-tertiary)}
-/* Side mode: text color by side */
-.full-cell.side-long .fc-sym,.full-cell.side-long .fc-dir{color:var(--color-success)}
-.full-cell.side-short .fc-sym,.full-cell.side-short .fc-dir{color:var(--color-error)}
-/* PnL mode: border color by profit/loss */
-.full-cell.pnl-profit{border-color:var(--color-success)}
-.full-cell.pnl-loss{border-color:var(--color-error)}
+.full-cell:hover{transform:scale(1.05);z-index:2;border-color:rgba(255,255,255,0.4)}
+.full-cell.vacant{background:transparent;border:1px solid var(--border-subtle);color:var(--text-tertiary)}
+.full-cell.side-long .fc-sym,.full-cell.side-long .fc-dir{color:var(--success)}
+.full-cell.side-short .fc-sym,.full-cell.side-short .fc-dir{color:var(--error)}
+.full-cell.pnl-profit{border-color:var(--success);box-shadow:inset 0 0 8px var(--success-glow)}
+.full-cell.pnl-loss{border-color:var(--error);box-shadow:inset 0 0 8px var(--error-glow)}
 .full-cell .fc-sym{font-size:10px;font-weight:700;word-break:break-all;line-height:1.1;width:100%}
-.full-cell .fc-dir{font-size:9px;opacity:.9}
-.full-cell .fc-price{font-size:9px;opacity:.85}
-.full-cell .fc-amt{font-size:9px;opacity:.85}
+.full-cell .fc-dir{font-size:9px;opacity:0.9}
+.full-cell .fc-price{font-size:9px;opacity:0.85}
+.full-cell .fc-amt{font-size:9px;opacity:0.85}
 .full-cell .fc-pnl{font-size:10px;font-weight:700}
-.full-cell .fc-rate{font-size:9px;opacity:.9}
-@media(max-width:900px){
-  .full-cell .fc-price,.full-cell .fc-amt{display:none}
-  .full-cell .fc-sym{font-size:10px}
-  .full-cell .fc-pnl{font-size:9px}
-}
-@media(max-width:640px){
-  .full-cell .fc-dir,.full-cell .fc-rate{display:none}
-  .full-cell .fc-sym{font-size:9px}
-  .full-cell .fc-pnl{font-size:8px}
-}
-@media(max-width:400px){
-  .full-cell{padding:2px}
-  .full-cell .fc-sym{font-size:8px}
-  .full-cell .fc-pnl{font-size:7px}
-}
+.full-cell .fc-rate{font-size:9px;opacity:0.9}
+@media(max-width:900px){.full-cell .fc-price,.full-cell .fc-amt{display:none}.full-cell .fc-sym{font-size:10px}.full-cell .fc-pnl{font-size:9px}}
+@media(max-width:640px){.full-cell .fc-dir,.full-cell .fc-rate{display:none}.full-cell .fc-sym{font-size:9px}.full-cell .fc-pnl{font-size:8px}}
+@media(max-width:400px){.full-cell{padding:2px}.full-cell .fc-sym{font-size:8px}.full-cell .fc-pnl{font-size:7px}}
 
-/* Tooltip */
 .pos-tooltip{
-  position:fixed;
-  background:rgba(11,15,25,.95);
-  border:1px solid var(--surface-border);
-  border-radius:6px;
-  padding:6px 10px;
-  font-size:11px;
-  color:var(--text-primary);
-  z-index:9999;
-  pointer-events:none;
-  white-space:nowrap;
-  display:none;
-  line-height:1.6;
-  box-shadow:0 4px 12px rgba(0,0,0,.5);
+  position:fixed;background:rgba(7,10,18,0.95);border:1px solid var(--border-medium);
+  border-radius:var(--radius-md);padding:10px 14px;font-size:11px;color:var(--text-primary);
+  z-index:9999;pointer-events:none;white-space:nowrap;display:none;line-height:1.7;
+  box-shadow:var(--shadow-md), 0 0 40px rgba(0,0,0,0.4);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);font-family:var(--font-mono);
 }
 
-/* Responsive */
+.tile{opacity:0;animation:tileEnter 0.5s cubic-bezier(0.16,1,0.3,1) forwards}
+.tile:nth-child(1){animation-delay:0.05s}
+.tile:nth-child(2){animation-delay:0.10s}
+.tile:nth-child(3){animation-delay:0.15s}
+.tile:nth-child(4){animation-delay:0.20s}
+.tile:nth-child(5){animation-delay:0.25s}
+@keyframes tileEnter{from{opacity:0;transform:translateY(16px) scale(0.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+@keyframes valueFlashGreen{0%{color:var(--success);text-shadow:0 0 8px var(--success-glow)}100%{color:inherit;text-shadow:none}}
+@keyframes valueFlashRed{0%{color:var(--error);text-shadow:0 0 8px var(--error-glow)}100%{color:inherit;text-shadow:none}}
+.value-flash-green{animation:valueFlashGreen 0.8s ease-out}
+.value-flash-red{animation:valueFlashRed 0.8s ease-out}
+
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-medium);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--border-strong)}
+
 @media(max-width:640px){
-  body{padding:8px}
-  .stat-grid{grid-template-columns:repeat(3,1fr)}
+  .app-shell{padding:10px 12px 30px}
+  .stat-grid.cols-4{grid-template-columns:repeat(2,1fr)}
   .form-grid{grid-template-columns:1fr}
   .field.full{grid-column:auto}
-  .page-header h1{font-size:18px}
+  .brand h1{font-size:18px}
+  .chart-wrap{height:180px}
+  #profitChart{height:180px}
 }
-@media(max-width:400px){
-  .stat-grid{grid-template-columns:repeat(2,1fr)}
+
+/* ===== Strategy Flow Graph (upgraded) ===== */
+.flow-graph-container{
+  background:var(--bg-elevated);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);padding:16px 12px;margin-bottom:12px;overflow-x:auto;
 }
+.flow-graph{width:100%;position:relative}
+.flow-svg{width:100%;height:auto;display:block}
+.flow-node-rect{
+  fill:var(--surface-input);stroke:var(--border-medium);stroke-width:1.5;
+  rx:8;ry:8;transition:all .3s ease;
+}
+.flow-node-check{
+  fill:var(--surface-input);stroke:var(--accent);stroke-width:1.5;
+  rx:8;ry:8;transition:all .3s ease;
+}
+.flow-node-action{
+  fill:rgba(0,229,160,.06);stroke:var(--success);stroke-width:1.5;
+  rx:22;ry:22;transition:all .3s ease;
+}
+.flow-node-rect.active,.flow-node-check.active{
+  stroke:var(--warning);stroke-width:2.5;
+  filter:drop-shadow(0 0 8px rgba(245,158,11,.4));
+}
+.flow-node-rect.triggered,.flow-node-check.triggered,.flow-node-action.triggered{
+  stroke:var(--success);stroke-width:2.5;
+  filter:drop-shadow(0 0 8px rgba(0,229,160,.4));
+}
+.flow-node-action.active{
+  stroke:var(--warning);stroke-width:2.5;
+  filter:drop-shadow(0 0 8px rgba(245,158,11,.4));
+}
+.flow-node-rect.error,.flow-node-check.error{
+  stroke:var(--error);stroke-width:2;
+}
+.flow-node-rect.disabled,.flow-node-check.disabled,.flow-node-action.disabled{
+  stroke:var(--text-muted);opacity:.35;
+}
+.flow-node-rect.dimmed,.flow-node-check.dimmed,.flow-node-action.dimmed{
+  stroke:#4b5563;opacity:.4;fill:#1f2937;
+}
+.flow-node-text{
+  fill:var(--text-primary);font-size:12px;font-weight:600;
+  text-anchor:middle;dominant-baseline:middle;pointer-events:none;
+}
+.flow-node-sub{
+  fill:var(--text-secondary);font-size:10px;
+  text-anchor:middle;dominant-baseline:middle;pointer-events:none;
+}
+.flow-edge{
+  fill:none;stroke:#64748b;stroke-width:2.5;transition:stroke .3s;
+}
+.flow-edge.active{
+  stroke:var(--warning);stroke-dasharray:8 4;
+  animation:flowDash .6s linear infinite;
+}
+.flow-edge.triggered{
+  stroke:var(--success);stroke-dasharray:8 4;
+  animation:flowDash .6s linear infinite;
+}
+@keyframes flowDash{to{stroke-dashoffset:-24}}
+@keyframes nodePulse{
+  0%,100%{filter:drop-shadow(0 0 6px rgba(245,158,11,.5)); stroke-width:2.5;}
+  50%{filter:drop-shadow(0 0 20px rgba(245,158,11,.9)); stroke-width:3.5;}
+}
+.flow-node-rect.pulsing,.flow-node-check.pulsing,.flow-node-action.pulsing{
+  animation:nodePulse 1.2s ease-in-out infinite;
+}
+
+/* Log Stream */
+.log-stream-container{
+  background:var(--bg-elevated);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);padding:12px;max-height:320px;overflow-y:auto;
+  font-family:var(--font-mono);font-size:11px;line-height:1.7;
+}
+.log-entry{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;gap:8px}
+.log-entry:last-child{border-bottom:none}
+.log-time{color:var(--text-muted);white-space:nowrap}
+.log-msg{flex:1;word-break:break-all}
+.log-type-open{color:var(--accent)}
+.log-type-close{color:var(--success)}
+.log-type-margin{color:var(--error)}
+.log-type-all{color:var(--warning)}
+.log-type-pair{color:#a78bfa}
 </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 
+<div class="app-shell">
+
 <header class="page-header">
-  <h1 onclick="window.open('/intro.html','_blank')" style="cursor:pointer;">⚡ EvoClaw</h1>
-  <a href="/intro.html" target="_blank" class="header-ad" style="margin-left:8px;font-size:11px;color:var(--color-warning);text-decoration:none;background:rgba(245,158,11,.1);padding:2px 8px;border-radius:999px;border:1px solid rgba(245,158,11,.25);white-space:nowrap;">✨ 了解 EvoClaw</a>
-  <button class="btn btn-primary" onclick="generatePoster()" id="btnPoster" style="margin-left:auto;margin-right:8px;height:28px;padding:0 12px;font-size:11px;">📸 生成海报</button>
-  <div class="status-pill" id="statusBar">
-    <span class="status-dot"></span>
-    <span id="statusText">连接中...</span>
+  <div class="brand" onclick="window.open('/intro.html','_blank')">
+    <div class="brand-icon"><i class="ph-fill ph-lightning"></i></div>
+    <h1>EvoClaw</h1>
+    <span class="version">TERMINAL v2</span>
+  </div>
+  <div class="header-actions">
+    <a href="/intro.html" target="_blank" class="header-ad">
+      <i class="ph ph-sparkle"></i> 了解 EvoClaw
+    </a>
+    <button class="btn btn-primary btn-sm" onclick="generatePoster()" id="btnPoster">
+      <i class="ph ph-camera"></i> 生成海报
+    </button>
+    <div class="status-pill" id="statusBar">
+      <span class="status-dot"></span>
+      <span id="statusText">连接中...</span>
+    </div>
   </div>
 </header>
 
 <div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('dashboard')" id="tab-dashboard">数据仪表盘</button>
-  <button class="tab-btn" onclick="switchTab('matrix')" id="tab-matrix">持仓矩阵</button>
-  <button class="tab-btn" onclick="switchTab('config')" id="tab-config">交易配置</button>
+  <button class="tab-btn active" onclick="switchTab('dashboard')" id="tab-dashboard">
+    <i class="ph ph-squares-four"></i> 数据仪表盘
+  </button>
+  <button class="tab-btn" onclick="switchTab('matrix')" id="tab-matrix">
+    <i class="ph ph-grid-nine"></i> 持仓矩阵
+  </button>
+  <button class="tab-btn" onclick="switchTab('strategy')" id="tab-strategy">
+    <i class="ph ph-brain"></i> 策略视图
+  </button>
+  <button class="tab-btn" onclick="switchTab('config')" id="tab-config">
+    <i class="ph ph-sliders-horizontal"></i> 交易配置
+  </button>
 </div>
 
 <!-- Tab 1: Dashboard -->
 <div id="panel-dashboard" class="tab-panel active">
+  <div class="bento-grid bento-dashboard">
 
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(14,165,233,.1);color:var(--color-primary)">🖥</div>
-      <h2>系统监控</h2>
+    <div class="tile bento-main">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-trend-up"></i></div>
+        <h2>盈利趋势</h2>
+        <div class="tile-actions">
+          <button class="btn btn-secondary btn-sm active" id="btnHour" onclick="setTrendPeriod('hour')">小时</button>
+          <button class="btn btn-secondary btn-sm" id="btnDay" onclick="setTrendPeriod('day')">日</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="profitChart"></canvas></div>
     </div>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-value" id="sysCpu">-</div><div class="stat-label">CPU 使用率</div></div>
-      <div class="stat-card"><div class="stat-value" id="sysMem">-</div><div class="stat-label">内存使用</div></div>
-      <div class="stat-card"><div class="stat-value" id="sysDisk">-</div><div class="stat-label">硬盘使用</div></div>
-      <div class="stat-card"><div class="stat-value" id="sysNet">-</div><div class="stat-label">网络吞吐</div></div>
-    </div>
-  </section>
 
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(16,185,129,.1);color:var(--color-success)">📈</div>
-      <h2>盈利趋势</h2>
-      <div style="margin-left:auto;display:flex;gap:4px;">
-        <button class="btn btn-secondary active" id="btnHour" onclick="setTrendPeriod('hour')" style="height:28px;padding:0 10px;font-size:11px;">小时</button>
-        <button class="btn btn-secondary" id="btnDay" onclick="setTrendPeriod('day')" style="height:28px;padding:0 10px;font-size:11px;">日</button>
+    <div class="tile bento-side-top">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-cpu"></i></div>
+        <h2>系统监控</h2>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-cell"><div class="stat-value" id="sysCpu">-</div><div class="stat-label">CPU 使用率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="sysMem">-</div><div class="stat-label">内存使用</div></div>
+        <div class="stat-cell"><div class="stat-value" id="sysDisk">-</div><div class="stat-label">硬盘使用</div></div>
+        <div class="stat-cell"><div class="stat-value" id="sysNet">-</div><div class="stat-label">网络吞吐</div></div>
       </div>
     </div>
-    <canvas id="profitChart" style="width:100%;height:180px;display:block;"></canvas>
-  </section>
 
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(16,185,129,.1);color:var(--color-success)">￥</div>
-      <h2>账户概览</h2>
+    <div class="tile bento-side-bottom">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-wallet"></i></div>
+        <h2>账户概览</h2>
+      </div>
+      <div id="accActiveSymbols" class="sym-bar"><span style="color:var(--text-muted)">筛选币种加载中...</span></div>
+      <div class="stat-grid">
+        <div class="stat-cell"><div class="stat-value" id="accBalance">-</div><div class="stat-label">账户余额</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accAvailable">-</div><div class="stat-label">可转出余额</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accUnrealized">-</div><div class="stat-label">未实现盈亏</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accTotalRate">-</div><div class="stat-label">持仓盈亏率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accAllClose">-</div><div class="stat-label">全平次数</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accPairClose">-</div><div class="stat-label">对冲平仓</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accSingleClose">-</div><div class="stat-label">单项平仓</div></div>
+        <div class="stat-cell"><div class="stat-value" id="accMarginCall">-</div><div class="stat-label">加仓次数</div></div>
+      </div>
     </div>
-    <div id="accActiveSymbols" style="margin-bottom:10px;padding:8px;background:var(--surface-input);border:1px solid var(--surface-border);border-radius:6px;font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);line-height:1.7;word-break:break-all;">
-      <span style="color:var(--text-tertiary)">筛选币种加载中...</span>
-    </div>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-value" id="accBalance">-</div><div class="stat-label">账户余额</div></div>
-      <div class="stat-card"><div class="stat-value" id="accAvailable">-</div><div class="stat-label">可转出余额</div></div>
-      <div class="stat-card"><div class="stat-value" id="accUnrealized">-</div><div class="stat-label">未实现盈亏</div></div>
-      <div class="stat-card"><div class="stat-value" id="accTotalRate">-</div><div class="stat-label">持仓盈亏率</div></div>
-      <div class="stat-card"><div class="stat-value" id="accAllClose">-</div><div class="stat-label">全平次数</div></div>
-      <div class="stat-card"><div class="stat-value" id="accPairClose">-</div><div class="stat-label">对冲平仓</div></div>
-      <div class="stat-card"><div class="stat-value" id="accSingleClose">-</div><div class="stat-label">单项平仓</div></div>
-      <div class="stat-card"><div class="stat-value" id="accMarginCall">-</div><div class="stat-label">加仓次数</div></div>
-    </div>
-  </section>
 
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(167,139,250,.1);color:#a78bfa">📋</div>
-      <h2>持仓状态</h2>
+    <div class="tile bento-wide-left">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-chart-bar"></i></div>
+        <h2>持仓状态</h2>
+      </div>
+      <div class="stat-grid cols-4">
+        <div class="stat-cell"><div class="stat-value" id="posCount">-</div><div class="stat-label">持仓数</div></div>
+        <div class="stat-cell"><div class="stat-value" id="posLongCount">-</div><div class="stat-label">多单</div></div>
+        <div class="stat-cell"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
+        <div class="stat-cell"><div class="stat-value" id="lossHistTotalPnl">-</div><div class="stat-label">历史最高亏损额</div></div>
+        <div class="stat-cell"><div class="stat-value" id="lossHistTotalRate">-</div><div class="stat-label">历史最高亏损率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="lossHistTradePnl">-</div><div class="stat-label">单币最高亏损额</div></div>
+        <div class="stat-cell"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">单币最高亏损率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
+        <div class="stat-cell"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
+      </div>
     </div>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-value" id="posCount">-</div><div class="stat-label">持仓数</div></div>
-      <div class="stat-card"><div class="stat-value" id="posLongCount">-</div><div class="stat-label">多单</div></div>
-      <div class="stat-card"><div class="stat-value" id="posShortCount">-</div><div class="stat-label">空单</div></div>
-      <div class="stat-card"><div class="stat-value" id="lossHistTotalPnl">-</div><div class="stat-label">历史持仓最高亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="lossHistTotalRate">-</div><div class="stat-label">历史持仓最高亏损率</div></div>
-      <div class="stat-card"><div class="stat-value" id="lossHistTradePnl">-</div><div class="stat-label">历史单币最高亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="lossHistTradeRate">-</div><div class="stat-label">历史单币最高亏损率</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstPnl">-</div><div class="stat-label">实时单币最高亏损额</div></div>
-      <div class="stat-card"><div class="stat-value" id="posWorstRate">-</div><div class="stat-label">实时单币最高亏损率</div></div>
-    </div>
-  </section>
 
-  <section class="card">
-    <div class="card-head">
-      <div class="icon" style="background:rgba(245,158,11,.1);color:var(--color-warning)">📊</div>
-      <h2>交易统计</h2>
+    <div class="tile bento-wide-right">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-chart-pie-slice"></i></div>
+        <h2>交易统计</h2>
+      </div>
+      <div class="stat-grid cols-4">
+        <div class="stat-cell"><div class="stat-value" id="stTotalPnl">-</div><div class="stat-label">累计盈亏</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stTotalFee">-</div><div class="stat-label">累计手续费</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stWinRate">-</div><div class="stat-label">胜率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stMaxRate">-</div><div class="stat-label">最高盈利率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stAcctRate">-</div><div class="stat-label">累计盈利率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stLong">-</div><div class="stat-label">多单平仓</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stShort">-</div><div class="stat-label">空单平仓</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stLongPnl">-</div><div class="stat-label">多单盈利</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stLongRate">-</div><div class="stat-label">多单盈利率</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stShortPnl">-</div><div class="stat-label">空单盈利</div></div>
+        <div class="stat-cell"><div class="stat-value" id="stShortRate">-</div><div class="stat-label">空单盈利率</div></div>
+      </div>
     </div>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-value" id="stTotalPnl">-</div><div class="stat-label">累计盈亏</div></div>
-      <div class="stat-card"><div class="stat-value" id="stTotalFee">-</div><div class="stat-label">累计手续费</div></div>
-      <div class="stat-card"><div class="stat-value" id="stWinRate">-</div><div class="stat-label">胜率</div></div>
-      <div class="stat-card"><div class="stat-value" id="stMaxRate">-</div><div class="stat-label">最高盈利率</div></div>
-      <div class="stat-card"><div class="stat-value" id="stAcctRate">-</div><div class="stat-label">累计盈利率</div></div>
-      <div class="stat-card"><div class="stat-value" id="stLong">-</div><div class="stat-label">多单平仓</div></div>
-      <div class="stat-card"><div class="stat-value" id="stShort">-</div><div class="stat-label">空单平仓</div></div>
-      <div class="stat-card"><div class="stat-value" id="stLongPnl">-</div><div class="stat-label">多单盈利</div></div>
-      <div class="stat-card"><div class="stat-value" id="stLongRate">-</div><div class="stat-label">多单盈利率</div></div>
-      <div class="stat-card"><div class="stat-value" id="stShortPnl">-</div><div class="stat-label">空单盈利</div></div>
-      <div class="stat-card"><div class="stat-value" id="stShortRate">-</div><div class="stat-label">空单盈利率</div></div>
-    </div>
-  </section>
 
+  </div>
 </div>
 
-<!-- Tab 2: Full Matrix -->
+<!-- Tab 2: Matrix -->
 <div id="panel-matrix" class="tab-panel">
   <div id="fullMatrix" class="full-matrix"></div>
+</div>
+
+<!-- Tab: Strategy View -->
+<div id="panel-strategy" class="tab-panel">
+  <div class="tile">
+    <div class="tile-head">
+      <div class="icon-wrap"><i class="ph ph-brain"></i></div>
+      <h2>交易决策流图</h2>
+      <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
+    </div>
+    <div class="flow-graph-container">
+      <div class="flow-graph" id="flowGraph"></div>
+    </div>
+  </div>
+
+  <div class="tile">
+    <div class="tile-head">
+      <div class="icon-wrap"><i class="ph ph-scroll"></i></div>
+      <h2>实时交易日志</h2>
+      <span style="margin-left:auto;font-size:11px;color:var(--text-muted)" id="logCount">加载中...</span>
+    </div>
+    <div class="log-stream-container" id="logStream">
+      <div style="color:var(--text-muted);text-align:center;padding:20px 0">等待数据...</div>
+    </div>
+  </div>
 </div>
 
 <!-- Tab 3: Config -->
 <div id="panel-config" class="tab-panel">
 
   <div class="config-group">
-    <div class="config-group-title">币种筛选</div>
+    <div class="config-group-title"><i class="ph ph-funnel"></i> 币种筛选</div>
     <div class="form-grid">
-      <div class="field">
-        <label>交易量筛选 (USDT)</label>
-        <input type="number" id="cfgVolumeThreshold" step="1000000" min="0" value="0" placeholder="24h 成交量">
-      </div>
-      <div class="field">
-        <label>币单价筛选 (USDT)</label>
-        <input type="number" id="cfgPriceThreshold" step="0.001" min="0" value="0" placeholder="最新价格">
-      </div>
-      <div class="field">
-        <label>币种刷新间隔 (秒)</label>
-        <input type="number" id="cfgSymbolRefreshInterval" step="1" min="1" value="86400">
-      </div>
-      <div class="field full">
-        <label></label>
-        <button class="btn btn-secondary" style="width:100%" onclick="refreshSymbolsNow()">立即刷新币种</button>
-      </div>
+      <div class="field"><label>交易量筛选 (USDT)</label><input type="number" id="cfgVolumeThreshold" step="1000000" min="0" value="0" placeholder="24h 成交量"></div>
+      <div class="field"><label>币单价筛选 (USDT)</label><input type="number" id="cfgPriceThreshold" step="0.001" min="0" value="0" placeholder="最新价格"></div>
+      <div class="field"><label>币种刷新间隔 (秒)</label><input type="number" id="cfgSymbolRefreshInterval" step="1" min="1" value="86400"></div>
+      <div class="field full"><label></label><button class="btn btn-secondary" style="width:100%" onclick="refreshSymbolsNow()"><i class="ph ph-arrows-clockwise"></i> 立即刷新币种</button></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">基础交易</div>
+    <div class="config-group-title"><i class="ph ph-arrows-left-right"></i> 基础交易</div>
     <div class="form-grid">
-      <div class="field">
-        <label>交易方向</label>
-        <select id="cfgSide">
-          <option value="both">双向（多空）</option>
-          <option value="long">只做多</option>
-          <option value="short">只做空</option>
-        </select>
-      </div>
+      <div class="field"><label>交易方向</label><select id="cfgSide"><option value="both">双向（多空）</option><option value="long">只做多</option><option value="short">只做空</option></select></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">分档止盈</div>
+    <div class="config-group-title"><i class="ph ph-chart-line-up"></i> 分档止盈</div>
     <div class="form-grid">
-      <div class="field">
-        <label>第一档 盈利≥(%)</label>
-        <input type="number" id="cfgTier1Threshold" step="0.001" min="0" value="0.2">
-      </div>
-      <div class="field">
-        <label>第一档 平仓比例(%)</label>
-        <input type="number" id="cfgTier1Close" step="1" min="0" max="100" value="30">
-      </div>
-      <div class="field">
-        <label>第二档 盈利≥(%)</label>
-        <input type="number" id="cfgTier2Threshold" step="0.001" min="0" value="1">
-      </div>
-      <div class="field">
-        <label>第二档 平仓比例(%)</label>
-        <input type="number" id="cfgTier2Close" step="1" min="0" max="100" value="50">
-      </div>
-      <div class="field">
-        <label>第三档 盈利≥(%)</label>
-        <input type="number" id="cfgTier3Threshold" step="0.001" min="0" value="5">
-      </div>
-      <div class="field">
-        <label>第三档 平仓比例(%)</label>
-        <input type="number" id="cfgTier3Close" step="1" min="0" max="100" value="100">
-      </div>
-      <div class="field">
-        <label>第四档 盈利≥(%)</label>
-        <input type="number" id="cfgTier4Threshold" step="0.001" min="0" value="40">
-      </div>
-      <div class="field">
-        <label>第四档 平仓比例(%)</label>
-        <input type="number" id="cfgTier4Close" step="1" min="0" max="100" value="50">
-      </div>
-      <div class="field">
-        <label>第五档 盈利≥(%)</label>
-        <input type="number" id="cfgTier5Threshold" step="0.001" min="0" value="50">
-      </div>
-      <div class="field">
-        <label>第五档 平仓比例(%)</label>
-        <input type="number" id="cfgTier5Close" step="1" min="0" max="100" value="100">
-      </div>
+      <div class="field"><label>第一档 盈利≥(%)</label><input type="number" id="cfgTier1Threshold" step="0.001" min="0" value="0.2"></div>
+      <div class="field"><label>第一档 平仓比例(%)</label><input type="number" id="cfgTier1Close" step="1" min="0" max="100" value="30"></div>
+      <div class="field"><label>第二档 盈利≥(%)</label><input type="number" id="cfgTier2Threshold" step="0.001" min="0" value="1"></div>
+      <div class="field"><label>第二档 平仓比例(%)</label><input type="number" id="cfgTier2Close" step="1" min="0" max="100" value="50"></div>
+      <div class="field"><label>第三档 盈利≥(%)</label><input type="number" id="cfgTier3Threshold" step="0.001" min="0" value="5"></div>
+      <div class="field"><label>第三档 平仓比例(%)</label><input type="number" id="cfgTier3Close" step="1" min="0" max="100" value="100"></div>
+      <div class="field"><label>第四档 盈利≥(%)</label><input type="number" id="cfgTier4Threshold" step="0.001" min="0" value="40"></div>
+      <div class="field"><label>第四档 平仓比例(%)</label><input type="number" id="cfgTier4Close" step="1" min="0" max="100" value="50"></div>
+      <div class="field"><label>第五档 盈利≥(%)</label><input type="number" id="cfgTier5Threshold" step="0.001" min="0" value="50"></div>
+      <div class="field"><label>第五档 平仓比例(%)</label><input type="number" id="cfgTier5Close" step="1" min="0" max="100" value="100"></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">补仓设置</div>
+    <div class="config-group-title"><i class="ph ph-plus-circle"></i> 补仓设置</div>
     <div class="form-grid">
-      <div class="field">
-        <label>停补阈值 (%)</label>
-        <input type="number" id="cfgReplenishStop" step="0.1" min="0" value="10">
-      </div>
-      <div class="field">
-        <label>最高持仓数</label>
-        <input type="number" id="cfgMaxPositionCount" step="1" min="0" value="100">
-      </div>
-      <div class="field" style="justify-content:flex-end">
-        <span style="font-size:11px;color:var(--text-secondary);padding-bottom:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span>
-      </div>
+      <div class="field"><label>停补阈值 (%)</label><input type="number" id="cfgReplenishStop" step="0.1" min="0" value="10"></div>
+      <div class="field"><label>最高持仓数</label><input type="number" id="cfgMaxPositionCount" step="1" min="0" value="100"></div>
+      <div class="field" style="justify-content:flex-end"><span style="font-size:11px;color:var(--text-secondary);padding-bottom:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">账户级全平</div>
+    <div class="config-group-title"><i class="ph ph-x-circle"></i> 账户级全平</div>
     <div class="form-grid">
-      <div class="field">
-        <label>启用全平</label>
-        <div class="switch-wrap">
-          <label class="switch"><input type="checkbox" id="cfgEnableAllClose"><span class="track"></span></label>
-          <span class="switch-label">账户整体盈利达标时全部平仓</span>
-        </div>
-      </div>
-      <div class="field">
-        <label>全平利润率 (%)</label>
-        <input type="number" id="cfgAllClose" step="0.001" min="0" value="0.15">
-      </div>
+      <div class="field"><label>启用全平</label><div class="switch-wrap"><label class="switch"><input type="checkbox" id="cfgEnableAllClose"><span class="track"></span></label><span class="switch-label">账户整体盈利达标时全部平仓</span></div></div>
+      <div class="field"><label>全平利润率 (%)</label><input type="number" id="cfgAllClose" step="0.001" min="0" value="0.15"></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">亏损加仓</div>
+    <div class="config-group-title"><i class="ph ph-warning-circle"></i> 亏损加仓</div>
     <div class="form-grid">
-      <div class="field">
-        <label>启用加仓</label>
-        <div class="switch-wrap">
-          <label class="switch"><input type="checkbox" id="cfgEnableMarginCall"><span class="track"></span></label>
-          <span class="switch-label">亏损达标时自动追加仓位</span>
-        </div>
-      </div>
-      <div class="field">
-        <label>多单亏损加仓阈值 (%)</label>
-        <input type="number" id="cfgMarginCallThresholdLong" step="0.1" min="0" value="25">
-      </div>
-      <div class="field">
-        <label>空单亏损加仓阈值 (%)</label>
-        <input type="number" id="cfgMarginCallThresholdShort" step="0.1" min="0" value="25">
-      </div>
-      <div class="field">
-        <label>加仓倍数</label>
-        <input type="number" id="cfgMarginCallMultiplier" step="0.5" min="0.1" value="2">
-      </div>
+      <div class="field"><label>启用加仓</label><div class="switch-wrap"><label class="switch"><input type="checkbox" id="cfgEnableMarginCall"><span class="track"></span></label><span class="switch-label">亏损达标时自动追加仓位</span></div></div>
+      <div class="field"><label>多单亏损加仓阈值 (%)</label><input type="number" id="cfgMarginCallThresholdLong" step="0.1" min="0" value="25"></div>
+      <div class="field"><label>空单亏损加仓阈值 (%)</label><input type="number" id="cfgMarginCallThresholdShort" step="0.1" min="0" value="25"></div>
+      <div class="field"><label>加仓倍数</label><input type="number" id="cfgMarginCallMultiplier" step="0.5" min="0.1" value="2"></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">多空对平</div>
+    <div class="config-group-title"><i class="ph ph-arrows-in-line-horizontal"></i> 多空对平</div>
     <div class="form-grid">
-      <div class="field">
-        <label>启用对平</label>
-        <div class="switch-wrap">
-          <label class="switch"><input type="checkbox" id="cfgEnableSinglePairClose"><span class="track"></span></label>
-          <span class="switch-label">多空平均盈利达标时双向平仓</span>
-        </div>
-      </div>
-      <div class="field">
-        <label>对平利润率 (%)</label>
-        <input type="number" id="cfgPairClose" step="0.001" min="0" value="0.2">
-      </div>
+      <div class="field"><label>启用对平</label><div class="switch-wrap"><label class="switch"><input type="checkbox" id="cfgEnableSinglePairClose"><span class="track"></span></label><span class="switch-label">多空平均盈利达标时双向平仓</span></div></div>
+      <div class="field"><label>对平利润率 (%)</label><input type="number" id="cfgPairClose" step="0.001" min="0" value="0.2"></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">白名单</div>
+    <div class="config-group-title"><i class="ph ph-shield-check"></i> 白名单</div>
     <div class="form-grid">
-      <div class="field full">
-        <label>跳过平仓的交易对（每行一个）</label>
-        <textarea id="cfgSkip" placeholder="留空表示不跳过任何交易对"></textarea>
-      </div>
+      <div class="field full"><label>跳过平仓的交易对（每行一个）</label><textarea id="cfgSkip" placeholder="留空表示不跳过任何交易对"></textarea></div>
     </div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title">前端显示设置</div>
+    <div class="config-group-title"><i class="ph ph-gear"></i> 前端显示设置</div>
     <div class="form-grid">
-      <div class="field">
-        <label>矩阵格子数</label>
-        <input type="number" id="cfgMatrixSlots" step="1" min="1" value="100">
-      </div>
-      <div class="field">
-        <label>矩阵列数</label>
-        <input type="number" id="cfgMatrixColumns" step="1" min="1" value="10">
-      </div>
+      <div class="field"><label>矩阵格子数</label><input type="number" id="cfgMatrixSlots" step="1" min="1" value="100"></div>
+      <div class="field"><label>矩阵列数</label><input type="number" id="cfgMatrixColumns" step="1" min="1" value="10"></div>
     </div>
   </div>
 
   <div class="btn-row">
-    <button class="btn btn-primary" id="btnSave" onclick="saveConfig()">保存配置</button>
-    <button class="btn btn-danger" onclick="toggleTrading()" id="btnToggle">停止交易</button>
+    <button class="btn btn-primary" id="btnSave" onclick="saveConfig()"><i class="ph ph-floppy-disk"></i> 保存配置</button>
+    <button class="btn btn-danger" onclick="toggleTrading()" id="btnToggle"><i class="ph ph-pause-circle"></i> 停止交易</button>
   </div>
 
 </div>
 
+</div><!-- /app-shell -->
 <script>
 let trading = true;
 let currentTab = 'dashboard';
@@ -781,6 +773,7 @@ function switchTab(tab) {
   document.getElementById('panel-' + tab).classList.add('active');
   if (tab === 'dashboard') { loadAccount(); loadStats(); loadProfitTrend(); }
   else if (tab === 'matrix') { loadMatrixTab(); }
+  else if (tab === 'strategy') { loadStrategyView(); }
 }
 
 async function api(path) {
@@ -835,8 +828,8 @@ async function saveConfig() {
   if (_saving) return;
   _saving = true;
   const btn = document.getElementById('btnSave');
-  const oldText = btn.textContent;
-  btn.textContent = '保存中...';
+  const oldText = btn.innerHTML;
+  btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> 保存中...';
   btn.disabled = true;
 
   try {
@@ -895,7 +888,7 @@ async function saveConfig() {
   } catch (e) {
     showToast('保存失败: ' + (e.message || '网络错误'));
   } finally {
-    btn.textContent = oldText;
+    btn.innerHTML = oldText;
     btn.disabled = false;
     _saving = false;
   }
@@ -903,12 +896,12 @@ async function saveConfig() {
 
 async function refreshSymbolsNow() {
   const btn = document.querySelector('button[onclick="refreshSymbolsNow()"]');
-  const oldText = btn.textContent;
-  btn.textContent = '刷新中...';
+  const oldText = btn.innerHTML;
+  btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> 刷新中...';
   btn.disabled = true;
   const r = await fetch('/api/refresh-symbols', { method: 'POST' });
   const d = await r.json();
-  btn.textContent = oldText;
+  btn.innerHTML = oldText;
   btn.disabled = false;
   if (d.status === 'ok') {
     showToast(`已刷新 ${d.count} 个币种`);
@@ -921,7 +914,9 @@ async function refreshSymbolsNow() {
 function toggleTrading() {
   trading = !trading;
   const btn = document.getElementById('btnToggle');
-  btn.textContent = trading ? '停止交易' : '启动交易';
+  btn.innerHTML = trading
+    ? '<i class="ph ph-pause-circle"></i> 停止交易'
+    : '<i class="ph ph-play-circle"></i> 启动交易';
   btn.className = trading ? 'btn btn-danger' : 'btn btn-primary';
   showToast(trading ? '交易已停止' : '交易已启动');
 }
@@ -929,9 +924,25 @@ function toggleTrading() {
 function clr(v) { return (v || 0) >= 0 ? 'text-green' : 'text-red'; }
 function fmtP(p) { return (p >= 0 ? '+' : '') + p.toFixed(4); }
 function fmtR(r) { return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
-function setText(id, val) {
+
+function _flash(el, isPositive) {
+  el.classList.remove('value-flash-green', 'value-flash-red');
+  void el.offsetWidth;
+  el.classList.add(isPositive ? 'value-flash-green' : 'value-flash-red');
+  setTimeout(() => el.classList.remove('value-flash-green', 'value-flash-red'), 800);
+}
+
+function setText(id, val, opts) {
   const el = document.getElementById(id);
-  if (el && el.textContent !== val) el.textContent = val;
+  if (!el) return;
+  const old = el.textContent;
+  if (old !== val) {
+    el.textContent = val;
+    if (opts && opts.flash) {
+      const num = parseFloat(val);
+      if (!Number.isNaN(num)) _flash(el, num >= 0);
+    }
+  }
 }
 function setClass(id, cls) {
   const el = document.getElementById(id);
@@ -944,7 +955,6 @@ function fmtBytes(b) {
   if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + ' MB';
   return (b / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 }
-
 function fmtSpeed(bps) {
   if (bps < 1024) return bps.toFixed(0) + ' B/s';
   if (bps < 1024 * 1024) return (bps / 1024).toFixed(1) + ' KB/s';
@@ -960,16 +970,15 @@ function showToast(msg) {
 async function loadAccount() {
   const d = await api('/api/account');
   if (!d) return;
-  setText('accBalance', d.balance.toFixed(2));
-  setText('accAvailable', (d.available_balance || 0).toFixed(2));
+  setText('accBalance', d.balance.toFixed(2), { flash: true });
+  setText('accAvailable', (d.available_balance || 0).toFixed(2), { flash: true });
   setClass('accAvailable', 'stat-value ' + clr(d.available_balance || 0));
-  setText('accUnrealized', fmtP(d.unrealized_pnl));
+  setText('accUnrealized', fmtP(d.unrealized_pnl), { flash: true });
   setClass('accUnrealized', 'stat-value ' + clr(d.unrealized_pnl));
   const tr = d.total_position_pnl_rate || 0;
-  setText('accTotalRate', (tr >= 0 ? '+' : '') + (tr * 100).toFixed(2) + '%');
+  setText('accTotalRate', (tr >= 0 ? '+' : '') + (tr * 100).toFixed(2) + '%', { flash: true });
   setClass('accTotalRate', 'stat-value ' + clr(tr));
 
-  // Incremental update for active symbols
   const symEl = document.getElementById('accActiveSymbols');
   const newSymText = d.active_symbols && d.active_symbols.length
     ? '当前筛选币种 (' + d.active_symbols.length + '个): ' + d.active_symbols.join(' ')
@@ -978,10 +987,10 @@ async function loadAccount() {
   if (oldSymText !== newSymText) {
     symEl.dataset.symbols = newSymText;
     if (d.active_symbols && d.active_symbols.length) {
-      symEl.innerHTML = '<span style="color:var(--text-tertiary);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
-        d.active_symbols.map(s => '<span style="display:inline-block;background:var(--surface-card-hover);padding:2px 7px;border-radius:4px;margin:2px;font-size:10px">' + s + '</span>').join(' ');
+      symEl.innerHTML = '<span style="color:var(--text-muted);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
+        d.active_symbols.map(s => '<span class="sym-tag">' + s + '</span>').join(' ');
     } else {
-      symEl.innerHTML = '<span style="color:var(--text-tertiary)">当前无匹配币种 (0个)</span>';
+      symEl.innerHTML = '<span style="color:var(--text-muted)">当前无匹配币种 (0个)</span>';
     }
   }
 
@@ -989,22 +998,22 @@ async function loadAccount() {
   setText('posLongCount', d.long_position_count || 0);
   setText('posShortCount', d.short_position_count || 0);
 
-  setText('lossHistTotalPnl', fmtP(d.hist_total_loss_pnl || 0));
+  setText('lossHistTotalPnl', fmtP(d.hist_total_loss_pnl || 0), { flash: true });
   setClass('lossHistTotalPnl', 'stat-value ' + clr(d.hist_total_loss_pnl || 0));
   const hlr = d.hist_total_loss_rate || 0;
-  setText('lossHistTotalRate', fmtR(hlr));
+  setText('lossHistTotalRate', fmtR(hlr), { flash: true });
   setClass('lossHistTotalRate', 'stat-value ' + clr(hlr));
 
-  setText('lossHistTradePnl', fmtP(d.hist_worst_trade_pnl || 0));
+  setText('lossHistTradePnl', fmtP(d.hist_worst_trade_pnl || 0), { flash: true });
   setClass('lossHistTradePnl', 'stat-value ' + clr(d.hist_worst_trade_pnl || 0));
   const htr = d.hist_worst_trade_rate || 0;
-  setText('lossHistTradeRate', fmtR(htr));
+  setText('lossHistTradeRate', fmtR(htr), { flash: true });
   setClass('lossHistTradeRate', 'stat-value ' + clr(htr));
 
-  setText('posWorstPnl', fmtP(d.worst_position_pnl || 0));
+  setText('posWorstPnl', fmtP(d.worst_position_pnl || 0), { flash: true });
   setClass('posWorstPnl', 'stat-value ' + clr(d.worst_position_pnl));
   const wr = d.worst_position_rate || 0;
-  setText('posWorstRate', fmtR(wr));
+  setText('posWorstRate', fmtR(wr), { flash: true });
   setClass('posWorstRate', 'stat-value ' + clr(wr));
 
   setText('accMarginCall', d.margin_call_count || 0);
@@ -1014,9 +1023,9 @@ async function loadAccount() {
 async function loadStats() {
   const d = await api('/api/stats');
   if (!d) return;
-  setText('stTotalPnl', fmtP(d.total_pnl));
+  setText('stTotalPnl', fmtP(d.total_pnl), { flash: true });
   setClass('stTotalPnl', 'stat-value ' + clr(d.total_pnl));
-  setText('stTotalFee', fmtP(d.total_fee));
+  setText('stTotalFee', fmtP(d.total_fee), { flash: true });
   setClass('stTotalFee', 'stat-value ' + clr(-Math.abs(d.total_fee)));
   setText('stWinRate', (d.win_rate * 100).toFixed(1) + '%');
   setText('stMaxRate', fmtR(d.max_single_profit_rate));
@@ -1028,13 +1037,13 @@ async function loadStats() {
   setText('accPairClose', d.pair_close_count || 0);
   setText('accSingleClose', d.single_count || 0);
 
-  setText('stLongPnl', fmtP(d.long_pnl || 0));
+  setText('stLongPnl', fmtP(d.long_pnl || 0), { flash: true });
   setClass('stLongPnl', 'stat-value ' + clr(d.long_pnl));
-  setText('stLongRate', fmtR(d.long_pnl_rate || 0));
+  setText('stLongRate', fmtR(d.long_pnl_rate || 0), { flash: true });
   setClass('stLongRate', 'stat-value ' + clr(d.long_pnl_rate));
-  setText('stShortPnl', fmtP(d.short_pnl || 0));
+  setText('stShortPnl', fmtP(d.short_pnl || 0), { flash: true });
   setClass('stShortPnl', 'stat-value ' + clr(d.short_pnl));
-  setText('stShortRate', fmtR(d.short_pnl_rate || 0));
+  setText('stShortRate', fmtR(d.short_pnl_rate || 0), { flash: true });
   setClass('stShortRate', 'stat-value ' + clr(d.short_pnl_rate));
   window._lastStats = d;
 }
@@ -1059,7 +1068,6 @@ async function loadPositionsMap(posData) {
   const maxSlots = window.frontendConfig.matrix_slots || 100;
   container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
 
-  // Build once with DocumentFragment
   if (container.children.length !== maxSlots) {
     container.innerHTML = '';
     window._posMapCells = [];
@@ -1077,7 +1085,7 @@ async function loadPositionsMap(posData) {
         const idx = parseInt(cell.dataset.index);
         const slot = window._posMapSlots ? window._posMapSlots[idx] : null;
         if (slot && slot.occupied) {
-          tooltip.innerHTML = '<span style="color:var(--color-primary);font-weight:700">' + slot.symbol + '</span> ' + (slot.side === 'long' ? '多' : '空') + '<br>合约: ' + slot.contracts + '<br>盈亏: ' + fmtP(slot.pnl) + '<br>盈亏率: ' + fmtR(slot.pnl_rate);
+          tooltip.innerHTML = '<span style="color:var(--accent);font-weight:700">' + slot.symbol + '</span> ' + (slot.side === 'long' ? '多' : '空') + '<br>合约: ' + slot.contracts + '<br>盈亏: ' + fmtP(slot.pnl) + '<br>盈亏率: ' + fmtR(slot.pnl_rate);
           tooltip.style.display = 'block';
           const rect = cell.getBoundingClientRect();
           const ttRect = tooltip.getBoundingClientRect();
@@ -1096,10 +1104,8 @@ async function loadPositionsMap(posData) {
     }
     container.appendChild(frag);
   }
-  // Update cells (server now sends only occupied slots)
   window._posMapSlots = [];
   const cells = window._posMapCells || Array.from(container.children);
-  // Reset all to vacant first
   for (let i = 0; i < maxSlots; i++) {
     const cell = cells[i];
     if (!cell) continue;
@@ -1110,7 +1116,6 @@ async function loadPositionsMap(posData) {
     if (isBottomEdge) cls += ' no-bottom';
     cell.className = cls;
   }
-  // Fill occupied
   for (const slot of d.slots) {
     const i = slot.index;
     if (i >= maxSlots) continue;
@@ -1136,7 +1141,6 @@ async function loadFullMatrix(posData) {
   const maxSlots = window.frontendConfig.matrix_slots || 100;
   container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
 
-  // Build once with DocumentFragment + pre-create child elements
   if (container.children.length !== maxSlots) {
     container.innerHTML = '';
     window._fullMatrixCells = [];
@@ -1160,7 +1164,6 @@ async function loadFullMatrix(posData) {
   }
 
   const cells = window._fullMatrixCells || Array.from(container.children).map(c => ({ cell: c }));
-  // Reset all to vacant first
   for (let i = 0; i < maxSlots; i++) {
     const { cell } = cells[i] || { cell: null };
     if (!cell) continue;
@@ -1174,7 +1177,6 @@ async function loadFullMatrix(posData) {
     if (pnl) pnl.textContent = '';
     if (rate) rate.textContent = '';
   }
-  // Fill occupied (server sends sparse list)
   for (const slot of d.slots) {
     const i = slot.index;
     if (i >= maxSlots) continue;
@@ -1198,7 +1200,6 @@ async function loadFullMatrix(posData) {
 }
 
 let trendPeriod = 'hour';
-
 function setTrendPeriod(period) {
   trendPeriod = period;
   document.getElementById('btnHour').classList.toggle('active', period === 'hour');
@@ -1220,155 +1221,204 @@ function drawChart(data) {
     data = _chartData;
     if (!data || data.length === 0) return;
 
-  const canvas = document.getElementById('profitChart');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = Math.max(1, Math.floor(rect.width));
-  const cssH = Math.max(1, Math.floor(rect.height));
+    const canvas = document.getElementById('profitChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = Math.max(1, Math.floor(rect.width));
+    const cssH = Math.max(1, Math.floor(rect.height));
 
-  // Always sync canvas pixel size to CSS size × DPR
-  if (canvas._cssW !== cssW || canvas._cssH !== cssH) {
-    canvas.width = cssW * dpr;
-    canvas.height = cssH * dpr;
-    canvas._cssW = cssW;
-    canvas._cssH = cssH;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  const width = cssW;
-  const height = cssH;
-
-  // Responsive scale based on design width of 600px
-  const scale = Math.max(0.55, Math.min(1.6, width / 600));
-  const fontSize = Math.max(8, Math.round(10 * scale));
-  const dotR = Math.max(1.5, 2.5 * scale);
-  const lineW = Math.max(1, 2 * scale);
-  const pad = {
-    top: Math.round(16 * scale),
-    right: Math.round(10 * scale),
-    bottom: Math.round(40 * scale),
-    left: Math.round(48 * scale)
-  };
-
-  const chartW = Math.max(1, width - pad.left - pad.right);
-  const chartH = Math.max(1, height - pad.top - pad.bottom);
-
-  const rates = data.map(p => p.rate);
-  let minRate = Math.min(...rates, 0);
-  let maxRate = Math.max(...rates, 0);
-  if (minRate === maxRate) { maxRate += 0.001; minRate -= 0.001; }
-  const range = maxRate - minRate;
-
-  const isProfit = rates[rates.length - 1] >= 0;
-  ctx.clearRect(0, 0, width, height);
-
-  // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = Math.max(0.5, 1 * scale);
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.top + chartH * i / 4;
-    ctx.beginPath();
-    ctx.moveTo(pad.left, y);
-    ctx.lineTo(pad.left + chartW, y);
-    ctx.stroke();
-  }
-
-  // Zero line
-  if (minRate < 0 && maxRate > 0) {
-    const zeroY = pad.top + chartH - ((0 - minRate) / range) * chartH;
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.setLineDash([Math.max(3, 4 * scale), Math.max(3, 4 * scale)]);
-    ctx.beginPath();
-    ctx.moveTo(pad.left, zeroY);
-    ctx.lineTo(pad.left + chartW, zeroY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Area
-  ctx.beginPath();
-  data.forEach((point, i) => {
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.lineTo(pad.left + chartW, pad.top + chartH);
-  ctx.lineTo(pad.left, pad.top + chartH);
-  ctx.closePath();
-  ctx.fillStyle = isProfit ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)';
-  ctx.fill();
-
-  // Line
-  ctx.beginPath();
-  ctx.strokeStyle = isProfit ? '#10b981' : '#ef4444';
-  ctx.lineWidth = lineW;
-  ctx.lineJoin = 'round';
-  data.forEach((point, i) => {
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-
-  // Dots
-  ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
-  data.forEach((point, i) => {
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
-    ctx.beginPath();
-    ctx.arc(x, y, dotR, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Value labels — skip some when crowded to avoid overlap
-  const labelW = 42 * scale;
-  const maxLabels = Math.max(1, Math.floor(chartW / labelW));
-  const step = Math.max(1, Math.ceil(data.length / maxLabels));
-  ctx.fillStyle = isProfit ? '#10b981' : '#ef4444';
-  ctx.font = Math.max(7, fontSize - 1) + 'px var(--font-mono)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
-  data.forEach((point, i) => {
-    if (i % step !== 0 && i !== data.length - 1) return;
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    const y = pad.top + chartH - ((point.rate - minRate) / range) * chartH;
-    const val = (point.rate * 100).toFixed(2) + '%';
-    ctx.fillText(val, x, y - dotR - Math.max(2, 2 * scale));
-  });
-
-  // X labels
-  ctx.fillStyle = 'var(--text-tertiary)';
-  ctx.font = fontSize + 'px var(--font-mono)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  data.forEach((point, i) => {
-    const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
-    let lbl = point.label;
-    if (lbl && lbl.includes('-')) {
-      lbl = lbl.split('-').pop();
-    } else if (lbl && lbl.includes(':')) {
-      lbl = lbl.split(':')[0];
+    if (canvas._cssW !== cssW || canvas._cssH !== cssH) {
+      canvas.width = cssW * dpr;
+      canvas.height = cssH * dpr;
+      canvas._cssW = cssW;
+      canvas._cssH = cssH;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-    ctx.fillText(lbl, x, height - pad.bottom + Math.round(6 * scale));
-  });
 
-  // Y labels
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  for (let i = 0; i <= 4; i++) {
-    const rate = minRate + range * (1 - i / 4);
-    const y = pad.top + chartH * i / 4;
-    ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - Math.round(6 * scale), y);
-  }
+    const width = cssW;
+    const height = cssH;
+    const scale = Math.max(0.55, Math.min(1.6, width / 600));
+    const fontSize = Math.max(8, Math.round(10 * scale));
+    const dotR = Math.max(1.5, 2.5 * scale);
+    const lineW = Math.max(1, 2 * scale);
+    const pad = {
+      top: Math.round(18 * scale),
+      right: Math.round(12 * scale),
+      bottom: Math.round(44 * scale),
+      left: Math.round(52 * scale)
+    };
+
+    const chartW = Math.max(1, width - pad.left - pad.right);
+    const chartH = Math.max(1, height - pad.top - pad.bottom);
+
+    const rates = data.map(p => p.rate);
+    let minRate = Math.min(...rates, 0);
+    let maxRate = Math.max(...rates, 0);
+    if (minRate === maxRate) { maxRate += 0.001; minRate -= 0.001; }
+    const range = maxRate - minRate;
+
+    const isProfit = rates[rates.length - 1] >= 0;
+    const accentColor = isProfit ? '#00e5a0' : '#ff4757';
+    const accentGlow = isProfit ? 'rgba(0,229,160,' : 'rgba(255,71,87,';
+    ctx.clearRect(0, 0, width, height);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = Math.max(0.5, 1 * scale);
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + chartH * i / 4;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + chartW, y);
+      ctx.stroke();
+    }
+    const xSteps = Math.min(data.length, 8);
+    for (let i = 0; i < xSteps; i++) {
+      const x = pad.left + chartW * i / (xSteps - 1);
+      ctx.beginPath();
+      ctx.moveTo(x, pad.top);
+      ctx.lineTo(x, pad.top + chartH);
+      ctx.stroke();
+    }
+
+    if (minRate < 0 && maxRate > 0) {
+      const zeroY = pad.top + chartH - ((0 - minRate) / range) * chartH;
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.setLineDash([Math.max(3, 4 * scale), Math.max(3, 4 * scale)]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, zeroY);
+      ctx.lineTo(pad.left + chartW, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    const points = data.map((point, i) => ({
+      x: pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW,
+      y: pad.top + chartH - ((point.rate - minRate) / range) * chartH,
+      rate: point.rate
+    }));
+
+    ctx.beginPath();
+    if (points.length > 0) {
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+        const cpX = (prev.x + curr.x) / 2;
+        ctx.quadraticCurveTo(prev.x, prev.y, cpX, (prev.y + curr.y) / 2);
+      }
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
+      ctx.lineTo(pad.left + chartW, pad.top + chartH);
+      ctx.lineTo(pad.left, pad.top + chartH);
+      ctx.closePath();
+    }
+    ctx.fillStyle = accentGlow + '0.12)';
+    ctx.fill();
+
+    ctx.beginPath();
+    if (points.length > 0) {
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+        const cpX = (prev.x + curr.x) / 2;
+        ctx.quadraticCurveTo(prev.x, prev.y, cpX, (prev.y + curr.y) / 2);
+      }
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
+      ctx.lineTo(pad.left + chartW, pad.top + chartH);
+      ctx.lineTo(pad.left, pad.top + chartH);
+      ctx.closePath();
+    }
+    ctx.fillStyle = accentGlow + '0.06)';
+    ctx.fill();
+
+    ctx.beginPath();
+    if (points.length > 0) {
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+        const cpX = (prev.x + curr.x) / 2;
+        ctx.quadraticCurveTo(prev.x, prev.y, cpX, (prev.y + curr.y) / 2);
+      }
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
+    }
+    ctx.strokeStyle = accentGlow + '0.3)';
+    ctx.lineWidth = lineW * 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    ctx.beginPath();
+    if (points.length > 0) {
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+        const cpX = (prev.x + curr.x) / 2;
+        ctx.quadraticCurveTo(prev.x, prev.y, cpX, (prev.y + curr.y) / 2);
+      }
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
+    }
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = lineW;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    points.forEach((pt, i) => {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, dotR * 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = accentGlow + '0.2)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, dotR, 0, Math.PI * 2);
+      ctx.fillStyle = accentColor;
+      ctx.fill();
+    });
+
+    const labelW = 44 * scale;
+    const maxLabels = Math.max(1, Math.floor(chartW / labelW));
+    const step = Math.max(1, Math.ceil(data.length / maxLabels));
+    ctx.fillStyle = accentColor;
+    ctx.font = Math.max(7, fontSize - 1) + 'px var(--font-mono)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    points.forEach((pt, i) => {
+      if (i % step !== 0 && i !== data.length - 1) return;
+      const val = (pt.rate * 100).toFixed(2) + '%';
+      ctx.fillText(val, pt.x, pt.y - dotR - Math.max(3, 3 * scale));
+    });
+
+    ctx.fillStyle = 'var(--text-tertiary)';
+    ctx.font = fontSize + 'px var(--font-mono)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    data.forEach((point, i) => {
+      const x = pad.left + (data.length <= 1 ? 0 : i / (data.length - 1)) * chartW;
+      let lbl = point.label;
+      if (lbl && lbl.includes('-')) lbl = lbl.split('-').pop();
+      else if (lbl && lbl.includes(':')) lbl = lbl.split(':')[0];
+      ctx.fillText(lbl, x, height - pad.bottom + Math.round(8 * scale));
+    });
+
+    ctx.fillStyle = 'var(--text-tertiary)';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 4; i++) {
+      const rate = minRate + range * (1 - i / 4);
+      const y = pad.top + chartH * i / 4;
+      ctx.fillText((rate * 100).toFixed(2) + '%', pad.left - Math.round(8 * scale), y);
+    }
   } catch (e) {
     console.error('drawChart error', e);
   }
 }
-
 
 async function loadMatrixTab() {
   const posData = await api('/api/positions-map');
@@ -1378,7 +1428,6 @@ async function loadProfitTrend(period) {
   period = period || trendPeriod;
   const d = await api('/api/profit-trend?period=' + period);
   if (!d || !d.data) return;
-  // Ignore stale responses if user switched period while fetching
   if (period !== trendPeriod) return;
   drawChart(d.data);
 }
@@ -1393,6 +1442,9 @@ async function refresh() {
     } else if (currentTab === 'matrix') {
       const posData = await api('/api/positions-map');
       tasks.push(loadPositionsMap(posData), loadFullMatrix(posData));
+    } else if (currentTab === 'strategy') {
+      tasks.push(loadAccount(), loadStats(), loadLogStream());
+      Promise.all(tasks).then(() => updateFlowGraph());
     }
     if (tasks.length) await Promise.all(tasks);
     document.getElementById('statusText').textContent = '运行中 | ' + new Date().toLocaleTimeString();
@@ -1408,12 +1460,15 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (currentTab === 'dashboard') drawChart();
+    if (currentTab === 'strategy') {
+      buildFlowGraph();
+      updateFlowGraph();
+    }
   }, 150);
 });
 
 let refreshTimer = null;
 let systemTimer = null;
-
 function startTimers() {
   if (!refreshTimer) refreshTimer = setInterval(refresh, 10000);
   if (!systemTimer) systemTimer = setInterval(loadSystem, 10000);
@@ -1435,8 +1490,8 @@ document.addEventListener('visibilitychange', () => {
 
 async function generatePoster() {
   const btn = document.getElementById('btnPoster');
-  const oldText = btn.textContent;
-  btn.textContent = '生成中...';
+  const oldText = btn.innerHTML;
+  btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> 生成中...';
   btn.disabled = true;
 
   try {
@@ -1446,7 +1501,7 @@ async function generatePoster() {
     await new Promise(r => setTimeout(r, 50));
 
     const screenshot = await html2canvas(document.body, {
-      backgroundColor: '#0b0f19',
+      backgroundColor: '#070a12',
       scale: 2,
       useCORS: true,
       logging: false,
@@ -1461,21 +1516,19 @@ async function generatePoster() {
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
 
-    // Draw screenshot full-width, top-aligned
     const scW = screenshot.width, scH = screenshot.height;
     const scale = W / scW;
     ctx.drawImage(screenshot, 0, 0, scW, scH, 0, 0, W, scH * scale);
 
-    // Top bar with EvoClaw brand
-    ctx.fillStyle = 'rgba(11,15,25,0.85)';
+    ctx.fillStyle = 'rgba(7,10,18,0.9)';
     ctx.fillRect(0, 0, W, 90);
-    ctx.shadowColor = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur = 12;
+    ctx.shadowColor = 'rgba(0,212,255,0.3)';
+    ctx.shadowBlur = 20;
     ctx.fillStyle = '#e5e7eb';
-    ctx.font = 'bold 44px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.font = 'bold 44px "Geist", "PingFang SC", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('EvoClaw', W / 2, 48);
+    ctx.fillText('EvoClaw Terminal', W / 2, 48);
     ctx.shadowBlur = 0;
 
     const now = new Date();
@@ -1487,7 +1540,7 @@ async function generatePoster() {
     console.error('poster error', err);
     showToast('海报生成失败');
   } finally {
-    btn.textContent = oldText;
+    btn.innerHTML = oldText;
     btn.disabled = false;
   }
 }
@@ -1504,6 +1557,308 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.lineTo(x, y + r);
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
+}
+
+// ===== Strategy Flow Graph =====
+const FLOW_NODES = [
+  { id:'start',      name:'Tick 开始',       icon:'▶',  type:'data', group:'data' },
+  { id:'symbols',    name:'刷新交易对',       icon:'≈',  type:'data', group:'data' },
+  { id:'prices',     name:'刷新价格',         icon:'$',  type:'data', group:'data' },
+  { id:'positions',  name:'获取持仓',         icon:'#',  type:'data', group:'data' },
+  { id:'allCheck',   name:'全仓止盈检查',     icon:'?',  type:'check', group:'all',  checkKey:'enable_all_close' },
+  { id:'allClose',   name:'全仓平仓',         icon:'C',  type:'action', group:'all' },
+  { id:'allReplenish',name:'补开全仓',        icon:'R',  type:'action', group:'all' },
+  { id:'refetch1',   name:'重新获取持仓',     icon:'F',  type:'data', group:'all' },
+  { id:'tierCheck',  name:'分级止盈检查',     icon:'?',  type:'check', group:'tier' },
+  { id:'tierClose',  name:'部分/全部平仓',    icon:'C',  type:'action', group:'tier' },
+  { id:'refetch2',   name:'重新获取持仓',     icon:'F',  type:'data', group:'tier' },
+  { id:'pairCheck',  name:'多空对平检查',     icon:'?',  type:'check', group:'pair', checkKey:'enable_single_pair_close' },
+  { id:'pairClose',  name:'多空对平',         icon:'=',  type:'action', group:'pair' },
+  { id:'refetch3',   name:'重新获取持仓',     icon:'F',  type:'data', group:'pair' },
+  { id:'marginCheck',name:'亏损加仓检查',     icon:'?',  type:'check', group:'margin', checkKey:'enable_margin_call' },
+  { id:'marginAdd',  name:'亏损加仓',         icon:'+',  type:'action', group:'margin' },
+  { id:'refetch4',   name:'重新获取持仓',     icon:'F',  type:'data', group:'margin' },
+  { id:'replenish',  name:'补开仓位',         icon:'R',  type:'check', group:'replenish' },
+  { id:'openPos',    name:'开仓',             icon:'O',  type:'action', group:'replenish' },
+  { id:'checkpoint', name:'数据库持久化',     icon:'D',  type:'data', group:'end' },
+  { id:'end',        name:'Tick 结束',        icon:'■',  type:'data', group:'end' },
+];
+let _flowConfig = null;
+let _prevStats = {};
+let _prevAccount = {};
+let _tickTimer = null;
+let _scanning = false;
+
+function buildFlowGraph() {
+  const container = document.getElementById('flowGraph');
+  if (!container) return;
+  const containerW = Math.max(container.clientWidth || 360, 360);
+  const paddingX = 16;
+  const availableW = containerW - paddingX * 2;
+
+  let cols, gapX, nodeW, nodeH, fontSize, subFontSize;
+  if (containerW < 480) {
+    cols = 2; gapX = 28; nodeH = 50; fontSize = 11; subFontSize = 9;
+  } else if (containerW < 640) {
+    cols = 3; gapX = 32; nodeH = 50; fontSize = 12; subFontSize = 10;
+  } else if (containerW < 860) {
+    cols = 4; gapX = 36; nodeH = 50; fontSize = 12; subFontSize = 10;
+  } else {
+    cols = 5; gapX = 40; nodeH = 50; fontSize = 13; subFontSize = 10;
+  }
+  nodeW = (availableW - (cols - 1) * gapX) / cols;
+
+  const gapY = 56;
+  const startX = paddingX;
+  const startY = 20;
+
+  const rows = Math.ceil(FLOW_NODES.length / cols);
+  const totalW = containerW;
+  const totalH = startY + rows * (nodeH + gapY) + 20;
+
+  let svg = '<svg class="flow-svg" viewBox="0 0 ' + totalW + ' ' + totalH + '" preserveAspectRatio="xMidYMin meet"><defs>';
+  svg += '<marker id="arrow" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 7 2.5, 0 5" fill="#64748b"/></marker>';
+  svg += '<marker id="arrowA" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 7 2.5, 0 5" fill="var(--warning)"/></marker>';
+  svg += '<marker id="arrowG" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 7 2.5, 0 5" fill="var(--success)"/></marker>';
+  svg += '</defs>';
+
+  function getPos(i) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const isEvenRow = row % 2 === 0;
+    const x = isEvenRow
+      ? startX + col * (nodeW + gapX)
+      : startX + (cols - 1 - col) * (nodeW + gapX);
+    const y = startY + row * (nodeH + gapY);
+    return { x, y, cx: x + nodeW/2, cy: y + nodeH/2 };
+  }
+
+  FLOW_NODES.forEach((n, i) => {
+    const pos = getPos(i);
+    const isAction = n.type === 'action';
+    const isCheck = n.type === 'check';
+    const rx = isAction ? 20 : 8;
+    const shapeClass = isAction ? 'flow-node-action' : (isCheck ? 'flow-node-check' : 'flow-node-rect');
+    svg += '<g id="node-' + n.id + '" data-index="' + i + '" >';
+    svg += '<rect id="rect-' + n.id + '" class="' + shapeClass + '" x="' + pos.x + '" y="' + pos.y + '" width="' + nodeW + '" height="' + nodeH + '" rx="' + rx + '"/>';
+    svg += '<text class="flow-node-text" x="' + pos.cx + '" y="' + (pos.cy - 4) + '" style="font-size:' + fontSize + 'px">' + n.icon + ' ' + n.name + '</text>';
+    svg += '<text id="sub-' + n.id + '" class="flow-node-sub" x="' + pos.cx + '" y="' + (pos.cy + 12) + '" style="font-size:' + subFontSize + 'px"></text>';
+    svg += '</g>';
+  });
+
+  const arrowOffset = 1;
+  for (let i = 0; i < FLOW_NODES.length - 1; i++) {
+    const p1 = getPos(i);
+    const p2 = getPos(i + 1);
+    const isRowEnd = (i + 1) % cols === 0;
+    let d;
+    if (isRowEnd) {
+      d = 'M' + p1.cx + ' ' + (p1.y + nodeH) + ' L' + p2.cx + ' ' + (p2.y - arrowOffset);
+    } else {
+      const dir = p1.cx < p2.cx ? 1 : -1;
+      const endX = p2.x + (dir === 1 ? -arrowOffset : nodeW + arrowOffset);
+      d = 'M' + (p1.x + (dir === 1 ? nodeW : 0)) + ' ' + p1.cy + ' L' + endX + ' ' + p2.cy;
+    }
+    svg += '<path id="edge-' + i + '" class="flow-edge" d="' + d + '" marker-end="url(#arrow)"/>';
+  }
+
+  svg += '</svg>';
+  container.innerHTML = svg;
+  container._layout = { cols, nodeW, nodeH, gapX, gapY, startX, startY };
+}
+
+function pulseNode(nodeId, color) {
+  const rect = document.getElementById('rect-' + nodeId);
+  if (!rect) return;
+  rect.classList.remove('active', 'pulsing', 'triggered', 'dimmed');
+  void rect.offsetWidth;
+  if (color) rect.classList.add(color, 'pulsing');
+  setTimeout(() => rect.classList.remove('pulsing'), 1200);
+}
+
+function lightEdge(idx, color) {
+  const edge = document.getElementById('edge-' + idx);
+  if (!edge) return;
+  edge.classList.remove('active', 'triggered');
+  if (color) {
+    edge.classList.add(color);
+    edge.setAttribute('marker-end', color === 'triggered' ? 'url(#arrowG)' : 'url(#arrowA)');
+    setTimeout(() => {
+      edge.classList.remove('active', 'triggered');
+      edge.setAttribute('marker-end', 'url(#arrow)');
+    }, 1200);
+  }
+}
+
+function dimNode(nodeId) {
+  const rect = document.getElementById('rect-' + nodeId);
+  if (rect) rect.classList.add('dimmed');
+}
+
+function runTickPulse(triggeredMap) {
+  if (_scanning) return;
+  _scanning = true;
+  const triggered = triggeredMap || {};
+  function done() { _scanning = false; }
+  FLOW_NODES.forEach(n => {
+    const rect = document.getElementById('rect-' + n.id);
+    if (rect) rect.classList.remove('active', 'pulsing', 'triggered', 'dimmed');
+  });
+
+  let i = 0;
+  function scanNext() {
+    if (i >= FLOW_NODES.length) {
+      setTimeout(done, 800);
+      return;
+    }
+    const n = FLOW_NODES[i];
+    const isTriggered = triggered[n.id] === true;
+    const isDisabled = n.checkKey && _flowConfig && !_flowConfig[n.checkKey];
+
+    if (isDisabled) {
+      dimNode(n.id);
+      const sub = document.getElementById('sub-' + n.id);
+      if (sub) sub.textContent = '已禁用';
+    } else if (n.type === 'action') {
+      if (isTriggered) {
+        pulseNode(n.id, 'triggered');
+      } else {
+        dimNode(n.id);
+      }
+    } else if (n.type === 'check') {
+      pulseNode(n.id, isTriggered ? 'triggered' : 'active');
+    } else {
+      pulseNode(n.id, 'active');
+    }
+
+    if (i > 0) {
+      const prev = FLOW_NODES[i-1];
+      const prevDisabled = prev.checkKey && _flowConfig && !_flowConfig[prev.checkKey];
+      if (!prevDisabled) {
+        const edgeColor = (isTriggered || n.type === 'data' || n.type === 'check') ? (isTriggered ? 'triggered' : 'active') : null;
+        if (edgeColor) lightEdge(i-1, edgeColor);
+      }
+    }
+
+    i++;
+    setTimeout(scanNext, 450);
+  }
+
+  scanNext();
+}
+
+function updateFlowGraph() {
+  if (!_flowConfig) return;
+  const stats = window._lastStats || {};
+  const account = window._lastAccount || {};
+
+  document.getElementById('sub-symbols').textContent = (account.active_symbols||[]).length + ' 个币种';
+  document.getElementById('sub-positions').textContent = (account.position_count||0) + ' 仓';
+  document.getElementById('sub-allCheck').textContent = '阈值 ' + ((_flowConfig.all_close_threshold||0)*100).toFixed(2) + '%';
+  document.getElementById('sub-tierCheck').textContent = (stats.single_count||0) + ' 次';
+  document.getElementById('sub-pairCheck').textContent = '阈值 ' + ((_flowConfig.pair_close_threshold||(_flowConfig.profit_threshold||0))*100).toFixed(2) + '%';
+  document.getElementById('sub-marginCheck').textContent = '倍率 x' + (_flowConfig.margin_call_multiplier||2);
+  document.getElementById('sub-replenish').textContent = '上限 ' + (_flowConfig.max_position_count||0) + ' 仓';
+
+  FLOW_NODES.forEach(n => {
+    const rect = document.getElementById('rect-' + n.id);
+    if (!rect) return;
+    if (n.checkKey && !_flowConfig[n.checkKey]) {
+      rect.classList.add('disabled');
+    } else {
+      rect.classList.remove('disabled');
+    }
+  });
+
+  const triggered = {};
+  if ((stats.all_close_count||0) > (_prevStats.all_close_count||0)) {
+    triggered['allCheck'] = true;
+    triggered['allClose'] = true;
+    triggered['allReplenish'] = true;
+  }
+  if ((stats.single_count||0) > (_prevStats.single_count||0)) {
+    triggered['tierCheck'] = true;
+    triggered['tierClose'] = true;
+  }
+  if ((stats.pair_close_count||0) > (_prevStats.pair_close_count||0)) {
+    triggered['pairCheck'] = true;
+    triggered['pairClose'] = true;
+  }
+  if ((account.margin_call_count||0) > (_prevAccount.margin_call_count||0)) {
+    triggered['marginCheck'] = true;
+    triggered['marginAdd'] = true;
+  }
+  const posIncreased = (account.position_count||0) > (_prevAccount.position_count||0);
+  if (posIncreased && !triggered['marginAdd']) {
+    triggered['replenish'] = true;
+    triggered['openPos'] = true;
+  }
+
+  _prevStats = JSON.parse(JSON.stringify(stats));
+  _prevAccount = JSON.parse(JSON.stringify(account));
+
+  if (currentTab === 'strategy') {
+    runTickPulse(triggered);
+  }
+}
+
+function startTickSimulation() {
+  if (_tickTimer) return;
+  const interval = parseInt(document.getElementById('tickInterval')?.textContent || '3');
+  _tickTimer = setInterval(() => {
+    if (currentTab !== 'strategy') return;
+    refresh();
+  }, interval * 1000);
+}
+
+async function loadStrategyView() {
+  if (!document.getElementById('flowGraph').querySelector('svg')) {
+    buildFlowGraph();
+  }
+  const cfg = await api('/api/config');
+  if (cfg) {
+    _flowConfig = cfg;
+    document.getElementById('tickInterval').textContent = cfg.position_check_interval || 3;
+  }
+  await loadAccount();
+  await loadStats();
+  _prevStats = JSON.parse(JSON.stringify(window._lastStats || {}));
+  _prevAccount = JSON.parse(JSON.stringify(window._lastAccount || {}));
+  updateFlowGraph();
+  startTickSimulation();
+  await loadLogStream();
+}
+
+let _logOffset = 0;
+const _logMaxEntries = 100;
+
+function formatLogEntry(t) {
+  const typeColors = {
+    'all_close': 'log-type-all',
+    'single': 'log-type-close',
+    'pair_close': 'log-type-pair',
+    'margin_call': 'log-type-margin',
+  };
+  let msg = '';
+  if (t.type === 'all_close') msg = `全仓平仓 ${t.symbol} 盈亏: ${(t.pnl||0).toFixed(4)} USDT`;
+  else if (t.type === 'single') msg = `分级止盈 ${t.symbol} ${t.side==='long'?'多':'空'} 盈亏: ${(t.pnl||0).toFixed(4)} 率: ${((t.pnl_rate||0)*100).toFixed(2)}%`;
+  else if (t.type === 'pair_close') msg = `多空对平 ${t.symbol} 盈亏: ${(t.pnl||0).toFixed(4)} USDT`;
+  else if (t.type === 'margin_call') msg = `亏损加仓 ${t.symbol} ${t.side==='long'?'多':'空'} 数量: ${(t.amount||0).toFixed(2)}`;
+  else msg = `${t.symbol} ${t.side==='long'?'多':'空'} 平仓 盈亏: ${(t.pnl||0).toFixed(4)}`;
+
+  const time = t.close_time ? t.close_time.slice(11,19) : '--:--:--';
+  const cls = typeColors[t.type] || 'log-type-close';
+  return `<div class="log-entry"><span class="log-time">${time}</span><span class="log-msg ${cls}">${msg}</span></div>`;
+}
+
+async function loadLogStream() {
+  const d = await api('/api/trades?limit=30');
+  if (!d || !d.trades) return;
+  const container = document.getElementById('logStream');
+  const entries = d.trades.map(formatLogEntry).join('');
+  container.innerHTML = entries || '<div style="color:var(--text-muted);text-align:center;padding:20px 0">暂无交易记录</div>';
+  document.getElementById('logCount').textContent = `${d.trades.length} 条记录 / 共 ${d.total||0} 笔`;
+  container.scrollTop = container.scrollHeight;
 }
 
 loadConfig();
