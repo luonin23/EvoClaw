@@ -430,7 +430,7 @@ body::after{
 }
 .flow-node-action{
   fill:rgba(255,255,255,.03);stroke:#64748b;stroke-width:1.5;
-  rx:8;ry:8;transition:all .35s ease;
+  rx:6;ry:6;transition:all .35s ease;
 }
 .flow-node-rect.active,.flow-node-check.active{
   stroke:var(--warning);stroke-width:2.5;
@@ -1572,11 +1572,11 @@ const FLOW_NODES = [
   { id:'positions',  name:'获取持仓',         type:'data',    x:265, y:114, w:110, h:26 },
 
   // Decision diamonds — center
-  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:158, w:110, h:26, checkKey:'enable_all_close' },
-  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:236, w:110, h:26 },
-  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:314, w:110, h:26, checkKey:'enable_single_pair_close' },
-  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:392, w:110, h:26, checkKey:'enable_margin_call' },
-  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:470, w:110, h:26 },
+  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:158, w:124, h:30, checkKey:'enable_all_close' },
+  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:236, w:124, h:30 },
+  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:314, w:124, h:30, checkKey:'enable_single_pair_close' },
+  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:392, w:124, h:30, checkKey:'enable_margin_call' },
+  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:470, w:124, h:30 },
 
   // Left action branches
   { id:'allClose',   name:'全仓平仓',         type:'action',  x:40,  y:158, w:100, h:24 },
@@ -1589,8 +1589,8 @@ const FLOW_NODES = [
   { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:500, y:392, w:100, h:24 },
 
   // End of trunk
-  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:530, w:110, h:26 },
-  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:564, w:110, h:26 },
+  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:540, w:110, h:26 },
+  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:574, w:110, h:26 },
 ];
 
 const FLOW_EDGES = [
@@ -1677,7 +1677,7 @@ function buildFlowGraph() {
   const containerW = Math.max(container.clientWidth || 360, 360);
   const scale = containerW / 640;
   const totalW = 640;
-  const totalH = 620;
+  const totalH = 640;
 
   let svg = `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMin meet"><defs>`;
   svg += '<marker id="arrow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#475569"/></marker>';
@@ -1732,7 +1732,7 @@ function buildFlowGraph() {
       const dx = n.w/2, dy = n.h/2;
       svg += `<polygon id="rect-${n.id}" class="${shapeClass}" points="${cx(n)},${n.y} ${n.x+n.w},${cy(n)} ${cx(n)},${n.y+n.h} ${n.x},${cy(n)}"/>`;
     } else {
-      const rx = isAction ? 10 : 3;
+      const rx = isAction ? 6 : 3;
       svg += `<rect id="rect-${n.id}" class="${shapeClass}" x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${rx}"/>`;
     }
     svg += `<text class="flow-node-text" x="${cx(n)}" y="${cy(n)-1}">${n.name}</text>`;
