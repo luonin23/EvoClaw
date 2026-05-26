@@ -382,12 +382,12 @@ class Database:
             __import__("logging").getLogger(__name__).warning(f"WAL checkpoint failed: {e}")
 
     def checkpoint_restart(self):
-        """Force WAL checkpoint (RESTART) to reclaim disk space. Run periodically."""
+        """Force WAL checkpoint (PASSIVE) to reduce WAL size. PASSIVE never blocks or deadlocks."""
         try:
             with self.lock:
-                self.conn.execute("PRAGMA wal_checkpoint(RESTART)")
+                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
-            __import__("logging").getLogger(__name__).warning(f"WAL restart checkpoint failed: {e}")
+            __import__("logging").getLogger(__name__).warning(f"WAL checkpoint failed: {e}")
 
     def close(self):
         self.conn.close()
