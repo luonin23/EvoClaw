@@ -422,7 +422,7 @@ body::after{
 /* Nodes */
 .flow-node-rect{
   fill:var(--bg-surface);stroke:var(--border-medium);stroke-width:1.5;
-  rx:6;ry:6;transition:all .35s ease;
+  rx:3;ry:3;transition:all .35s ease;
 }
 .flow-node-check{
   fill:var(--bg-surface);stroke:var(--accent);stroke-width:1.8;
@@ -430,7 +430,7 @@ body::after{
 }
 .flow-node-action{
   fill:rgba(255,255,255,.03);stroke:#64748b;stroke-width:1.5;
-  rx:14;ry:14;transition:all .35s ease;
+  rx:8;ry:8;transition:all .35s ease;
 }
 .flow-node-rect.active,.flow-node-check.active{
   stroke:var(--warning);stroke-width:2.5;
@@ -1732,7 +1732,7 @@ function buildFlowGraph() {
       const dx = n.w/2, dy = n.h/2;
       svg += `<polygon id="rect-${n.id}" class="${shapeClass}" points="${cx(n)},${n.y} ${n.x+n.w},${cy(n)} ${cx(n)},${n.y+n.h} ${n.x},${cy(n)}"/>`;
     } else {
-      const rx = isAction ? 16 : 6;
+      const rx = isAction ? 10 : 3;
       svg += `<rect id="rect-${n.id}" class="${shapeClass}" x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${rx}"/>`;
     }
     svg += `<text class="flow-node-text" x="${cx(n)}" y="${cy(n)-1}">${n.name}</text>`;
