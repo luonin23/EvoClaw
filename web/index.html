@@ -419,13 +419,10 @@ body::after{
 .flow-graph{width:100%;position:relative}
 .flow-svg{width:100%;height:auto;display:block;max-height:580px}
 
-/* Nodes — unified neutral style, NO neon glows */
+/* Nodes — completely identical size & style */
 .flow-node-rect,.flow-node-check,.flow-node-action{
   fill:var(--bg-surface);stroke:var(--border-medium);stroke-width:1.5;
   transition:stroke .3s ease,stroke-width .3s ease,fill .3s ease;
-}
-.flow-node-check{
-  stroke:var(--border-subtle);stroke-width:1.6;
 }
 .flow-node-rect.active,.flow-node-check.active,.flow-node-action.active{
   stroke:var(--warning);stroke-width:2.2;
@@ -1556,31 +1553,31 @@ function roundRect(ctx, x, y, w, h, r) {
 // ===== Strategy Flow Graph (v3: Layout C center trunk + symmetric branches) =====
 const FLOW_NODES = [
   // Center trunk — data flow
-  { id:'start',      name:'Tick 开始',       type:'data',    x:265, y:15,  w:110, h:26 },
-  { id:'symbols',    name:'刷新交易对',       type:'data',    x:265, y:48,  w:110, h:26 },
-  { id:'prices',     name:'刷新价格',         type:'data',    x:265, y:81,  w:110, h:26 },
-  { id:'positions',  name:'获取持仓',         type:'data',    x:265, y:114, w:110, h:26 },
+  { id:'start',      name:'Tick 开始',       type:'data',    x:265, y:15,  w:120, h:32 },
+  { id:'symbols',    name:'刷新交易对',       type:'data',    x:265, y:50,  w:120, h:32 },
+  { id:'prices',     name:'刷新价格',         type:'data',    x:265, y:85,  w:120, h:32 },
+  { id:'positions',  name:'获取持仓',         type:'data',    x:265, y:120, w:120, h:32 },
 
-  // Decision diamonds — center
-  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:158, w:124, h:36, checkKey:'enable_all_close' },
-  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:236, w:124, h:36 },
-  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:314, w:124, h:36, checkKey:'enable_single_pair_close' },
-  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:392, w:124, h:36, checkKey:'enable_margin_call' },
-  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:470, w:124, h:36 },
+  // Decision nodes — center
+  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:170, w:120, h:32, checkKey:'enable_all_close' },
+  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:252, w:120, h:32 },
+  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:334, w:120, h:32, checkKey:'enable_single_pair_close' },
+  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:416, w:120, h:32, checkKey:'enable_margin_call' },
+  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:498, w:120, h:32 },
 
   // Left action branches
-  { id:'allClose',   name:'全仓平仓',         type:'action',  x:40,  y:158, w:100, h:24 },
-  { id:'allReplenish',name:'补开全仓',        type:'action',  x:40,  y:196, w:100, h:24 },
-  { id:'pairClose',  name:'多空对平',         type:'action',  x:40,  y:314, w:100, h:24 },
-  { id:'openPos',    name:'开仓',             type:'action',  x:40,  y:470, w:100, h:24 },
+  { id:'allClose',   name:'全仓平仓',         type:'action',  x:30,  y:170, w:120, h:32 },
+  { id:'allReplenish',name:'补开全仓',        type:'action',  x:30,  y:214, w:120, h:32 },
+  { id:'pairClose',  name:'多空对平',         type:'action',  x:30,  y:334, w:120, h:32 },
+  { id:'openPos',    name:'开仓',             type:'action',  x:30,  y:498, w:120, h:32 },
 
   // Right action branches
-  { id:'tierClose',  name:'部分/全部平仓',    type:'action',  x:500, y:236, w:100, h:24 },
-  { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:500, y:392, w:100, h:24 },
+  { id:'tierClose',  name:'部分/全部平仓',    type:'action',  x:490, y:252, w:120, h:32 },
+  { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:490, y:416, w:120, h:32 },
 
   // End of trunk
-  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:570, w:110, h:26 },
-  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:604, w:110, h:26 },
+  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:560, w:120, h:32 },
+  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:598, w:120, h:32 },
 ];
 
 const FLOW_EDGES = [
@@ -1667,7 +1664,7 @@ function buildFlowGraph() {
   const containerW = Math.max(container.clientWidth || 360, 360);
   const scale = containerW / 640;
   const totalW = 640;
-  const totalH = 670;
+  const totalH = 650;
 
   let svg = `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMin meet"><defs>`;
   svg += '<marker id="arrow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#475569"/></marker>';
