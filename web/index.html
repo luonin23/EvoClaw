@@ -419,33 +419,21 @@ body::after{
 .flow-graph{width:100%;position:relative}
 .flow-svg{width:100%;height:auto;display:block;max-height:580px}
 
-/* Nodes */
-.flow-node-rect{
+/* Nodes — unified neutral style, NO neon glows */
+.flow-node-rect,.flow-node-check,.flow-node-action{
   fill:var(--bg-surface);stroke:var(--border-medium);stroke-width:1.5;
-  rx:3;ry:3;transition:all .35s ease;
+  transition:stroke .3s ease,stroke-width .3s ease,fill .3s ease;
 }
 .flow-node-check{
-  fill:var(--bg-surface);stroke:var(--accent);stroke-width:1.8;
-  rx:3;ry:3;stroke-dasharray:3 2;
-  transition:all .35s ease;
+  stroke:var(--border-subtle);stroke-width:1.6;
 }
-.flow-node-action{
-  fill:rgba(255,255,255,.03);stroke:#64748b;stroke-width:1.5;
-  rx:6;ry:6;transition:all .35s ease;
-}
-.flow-node-rect.active,.flow-node-check.active{
-  stroke:var(--warning);stroke-width:2.5;
-  filter:drop-shadow(0 0 10px rgba(245,158,11,.45));
+.flow-node-rect.active,.flow-node-check.active,.flow-node-action.active{
+  stroke:var(--warning);stroke-width:2.2;
 }
 .flow-node-rect.triggered,.flow-node-check.triggered,.flow-node-action.triggered{
-  stroke:var(--success);stroke-width:2.5;
-  filter:drop-shadow(0 0 10px rgba(0,229,160,.5));
+  stroke:var(--success);stroke-width:2.2;
 }
-.flow-node-action.active{
-  stroke:var(--warning);stroke-width:2.5;
-  filter:drop-shadow(0 0 10px rgba(245,158,11,.45));
-}
-.flow-node-rect.error,.flow-node-check.error{
+.flow-node-rect.error,.flow-node-check.error,.flow-node-action.error{
   stroke:var(--error);stroke-width:2;
 }
 .flow-node-rect.disabled,.flow-node-check.disabled,.flow-node-action.disabled{
@@ -479,13 +467,13 @@ body::after{
 
 /* Particles */
 .flow-particle{
-  fill:var(--accent);filter:drop-shadow(0 0 3px var(--accent));
+  fill:var(--accent);
 }
 .flow-particle.green{
-  fill:var(--success);filter:drop-shadow(0 0 3px var(--success));
+  fill:var(--success);
 }
 .flow-particle.amber{
-  fill:var(--warning);filter:drop-shadow(0 0 3px var(--warning));
+  fill:var(--warning);
 }
 .flow-particle.dimmed{
   opacity:.2;
@@ -502,10 +490,11 @@ body::after{
 }
 
 @keyframes nodePulse{
-  0%,100%{filter:drop-shadow(0 0 6px rgba(245,158,11,.5)); stroke-width:2.5;}
-  50%{filter:drop-shadow(0 0 22px rgba(245,158,11,.95)); stroke-width:3.5;}
+  0%,100%{stroke-width:2;}
+  50%{stroke-width:3;}
 }
 .flow-node-rect.pulsing,.flow-node-check.pulsing,.flow-node-action.pulsing{
+  stroke:var(--warning);
   animation:nodePulse 1.2s ease-in-out infinite;
 }
 .log-time{color:var(--text-muted);white-space:nowrap}
@@ -1573,11 +1562,11 @@ const FLOW_NODES = [
   { id:'positions',  name:'获取持仓',         type:'data',    x:265, y:114, w:110, h:26 },
 
   // Decision diamonds — center
-  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:158, w:124, h:30, checkKey:'enable_all_close' },
-  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:236, w:124, h:30 },
-  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:314, w:124, h:30, checkKey:'enable_single_pair_close' },
-  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:392, w:124, h:30, checkKey:'enable_margin_call' },
-  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:470, w:124, h:30 },
+  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:158, w:124, h:36, checkKey:'enable_all_close' },
+  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:236, w:124, h:36 },
+  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:314, w:124, h:36, checkKey:'enable_single_pair_close' },
+  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:392, w:124, h:36, checkKey:'enable_margin_call' },
+  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:470, w:124, h:36 },
 
   // Left action branches
   { id:'allClose',   name:'全仓平仓',         type:'action',  x:40,  y:158, w:100, h:24 },
@@ -1590,8 +1579,8 @@ const FLOW_NODES = [
   { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:500, y:392, w:100, h:24 },
 
   // End of trunk
-  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:540, w:110, h:26 },
-  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:574, w:110, h:26 },
+  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:570, w:110, h:26 },
+  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:604, w:110, h:26 },
 ];
 
 const FLOW_EDGES = [
@@ -1678,7 +1667,7 @@ function buildFlowGraph() {
   const containerW = Math.max(container.clientWidth || 360, 360);
   const scale = containerW / 640;
   const totalW = 640;
-  const totalH = 640;
+  const totalH = 670;
 
   let svg = `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMin meet"><defs>`;
   svg += '<marker id="arrow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#475569"/></marker>';
@@ -1729,7 +1718,7 @@ function buildFlowGraph() {
     const isCheck = n.type === 'check';
     const shapeClass = isAction ? 'flow-node-action' : (isCheck ? 'flow-node-check' : 'flow-node-rect');
     svg += `<g id="node-${n.id}">`;
-    const rx = isAction ? 6 : 3;
+    const rx = 2;
     svg += `<rect id="rect-${n.id}" class="${shapeClass}" x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${rx}"/>`;
     svg += `<text class="flow-node-text" x="${cx(n)}" y="${cy(n)-1}">${n.name}</text>`;
     svg += `<text id="sub-${n.id}" class="flow-node-sub" x="${cx(n)}" y="${cy(n)+11}"></text>`;
