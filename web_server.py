@@ -37,6 +37,7 @@ class WebServer:
         # Response cache to reduce Binance API calls
         self._api_cache = {}
         self._api_cache_ttl = 15  # seconds: reduce request frequency
+        self._api_cache_max = 20   # max entries to prevent unbounded growth
         self._balance_cache = (0, 0.0)  # (timestamp, balance)
         self._cache_lock = __import__('asyncio').Lock()
         self._system_cache = (0, None)  # (timestamp, data)
@@ -76,6 +77,10 @@ class WebServer:
                     cached_data = resp
             except Exception:
                 cached_data = resp
+            # Evict oldest entries if cache exceeds max size
+            if len(self._api_cache) >= self._api_cache_max:
+                oldest = min(self._api_cache, key=lambda k: self._api_cache[k][0])
+                del self._api_cache[oldest]
             self._api_cache[key] = (now, cached_data)
             return resp
 

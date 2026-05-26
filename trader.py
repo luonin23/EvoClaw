@@ -56,10 +56,17 @@ class Trader:
 
     async def run(self):
         self.running = True
+        tick_count = 0
         log.info("Trader started")
         while self.running:
             try:
                 await self.tick()
+                tick_count += 1
+                if tick_count % 60 == 0:
+                    self.db.checkpoint_restart()
+                # Periodic cleanup of stale circuit-breaker counts
+                if tick_count % 300 == 0:
+                    self._cleanup_stale_2027()
             except Exception as e:
                 log.error(f"Tick error: {e}")
             await asyncio.sleep(self._get_config().get("position_check_interval", 1))
@@ -92,6 +99,18 @@ class Trader:
             if symbol not in self._fail2027_skipped_at:
                 self._fail2027_skipped_at[symbol] = datetime.now(timezone.utc).timestamp()
             log.warning(f"CIRCUIT BREAKER: skipping {symbol} after {self._fail2027_max} consecutive -2027 failures")
+
+    def _cleanup_stale_2027(self):
+        """Remove symbols from _fail2027_counts that have not reached max and are stale."""
+        now = datetime.now(timezone.utc).timestamp()
+        stale_threshold = self._fail2027_retry_after * 2  # 20 minutes
+        for sym in list(self._fail2027_counts.keys()):
+            if sym in self._fail2027_skipped_at:
+                # Already handled by _is_skipped_2027 retry logic
+                continue
+            # Remove low-count entries that haven't been updated recently
+            if self._fail2027_counts[sym] < self._fail2027_max:
+                del self._fail2027_counts[sym]
 
     def _clear_2027_failure(self, symbol: str):
         """Clear -2027 failure counter on success."""

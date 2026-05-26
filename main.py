@@ -33,21 +33,35 @@ def setup_logging():
     _cleanup_stale_logs()
 
 def _cleanup_stale_logs():
-    """Remove old .bak log files that accumulated before proper rotation was fixed."""
+    """Remove oversized and stale log files. Enforce backupCount limit."""
     import glob
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    max_bytes = 5 * 1024 * 1024
+    max_keep = 5
+
+    # Remove legacy .bak files
     for f in sorted(glob.glob(os.path.join(data_dir, "trader.log.*.bak"))):
         try:
             os.remove(f)
             logging.getLogger(__name__).info(f"Cleaned stale log: {os.path.basename(f)}")
         except Exception:
             pass
-    # Also limit numbered rotation files to backupCount
+
+    # Remove numbered rotation files exceeding backupCount
     numbered = sorted(glob.glob(os.path.join(data_dir, "trader.log.[0-9]*")))
-    max_keep = 3
     for f in numbered[:-max_keep] if len(numbered) > max_keep else []:
         try:
             os.remove(f)
+            logging.getLogger(__name__).info(f"Cleaned excess log: {os.path.basename(f)}")
+        except Exception:
+            pass
+
+    # Remove any remaining oversized log files (> 2x maxBytes, legacy pre-fix files)
+    for f in sorted(glob.glob(os.path.join(data_dir, "trader.log*"))):
+        try:
+            if os.path.getsize(f) > max_bytes * 2:
+                os.remove(f)
+                logging.getLogger(__name__).info(f"Cleaned oversized log: {os.path.basename(f)}")
         except Exception:
             pass
 

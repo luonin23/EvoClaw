@@ -68,9 +68,68 @@ class Database:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Incremental trade stats table (O(1) lookup, rebuilt from trades on init)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_stats (
+                key TEXT PRIMARY KEY,
+                value REAL NOT NULL DEFAULT 0
+            )
+        """)
         self.conn.commit()
+        # Ensure stats are consistent with existing trades
+        self._rebuild_stats()
+
+    def _rebuild_stats(self):
+        """Rebuild trade_stats from trades table. Called once at init."""
+        with self.lock:
+            # Clear existing stats
+            self.conn.execute("DELETE FROM trade_stats")
+            # Aggregate from trades
+            row = self.conn.execute("""
+                SELECT
+                    COALESCE(SUM(pnl), 0),
+                    COALESCE(SUM(fee), 0),
+                    COALESCE(MAX(pnl_rate), 0),
+                    COUNT(CASE WHEN pnl > 0 THEN 1 END),
+                    COUNT(CASE WHEN pnl <= 0 THEN 1 END),
+                    COUNT(*),
+                    COUNT(CASE WHEN type = 'all_close' THEN 1 END),
+                    COUNT(CASE WHEN type = 'pair_close' THEN 1 END),
+                    COUNT(CASE WHEN type = 'single' THEN 1 END),
+                    COALESCE(SUM(CASE WHEN side = 'long' THEN pnl END), 0),
+                    COUNT(CASE WHEN side = 'long' THEN 1 END),
+                    COALESCE(SUM(CASE WHEN side = 'short' THEN pnl END), 0),
+                    COUNT(CASE WHEN side = 'short' THEN 1 END)
+                FROM trades
+            """).fetchone()
+            keys = [
+                "total_pnl", "total_fee", "max_pnl_rate",
+                "win_count", "loss_count", "total_count",
+                "all_close_count", "pair_close_count", "single_count",
+                "long_pnl", "long_count", "short_pnl", "short_count"
+            ]
+            for k, v in zip(keys, row):
+                self.conn.execute(
+                    "INSERT INTO trade_stats (key, value) VALUES (?, ?)",
+                    (k, v)
+                )
+            self.conn.commit()
+
+    def _inc_stat(self, key: str, delta: float):
+        """Atomically increment a trade_stats value."""
+        with self.lock:
+            self.conn.execute(
+                "INSERT INTO trade_stats (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
+                (key, delta)
+            )
 
     def insert_trade(self, trade: dict):
+        pnl = trade["pnl"]
+        fee = trade.get("fee", 0)
+        pnl_rate = trade["pnl_rate"]
+        side = trade["side"]
+        ttype = trade.get("type", "single")
         with self.lock:
             self.conn.execute(
                 """INSERT INTO trades
@@ -79,18 +138,46 @@ class Database:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     trade["symbol"],
-                    trade["side"],
-                    trade.get("type", "single"),
+                    side,
+                    ttype,
                     trade.get("open_time", ""),
                     trade["close_time"],
                     trade["entry_price"],
                     trade["exit_price"],
                     trade["amount"],
-                    trade["pnl"],
-                    trade["pnl_rate"],
-                    trade.get("fee", 0),
+                    pnl,
+                    pnl_rate,
+                    fee,
                 ),
             )
+            # Incremental stat updates (O(1) instead of full table scan later)
+            self._inc_stat("total_pnl", pnl)
+            self._inc_stat("total_fee", fee)
+            self._inc_stat("total_count", 1)
+            if pnl > 0:
+                self._inc_stat("win_count", 1)
+            else:
+                self._inc_stat("loss_count", 1)
+            if ttype == "all_close":
+                self._inc_stat("all_close_count", 1)
+            elif ttype == "pair_close":
+                self._inc_stat("pair_close_count", 1)
+            else:
+                self._inc_stat("single_count", 1)
+            if side == "long":
+                self._inc_stat("long_pnl", pnl)
+                self._inc_stat("long_count", 1)
+            else:
+                self._inc_stat("short_pnl", pnl)
+                self._inc_stat("short_count", 1)
+            # Update max_pnl_rate if this trade sets a new record
+            cur_max = self.conn.execute("SELECT value FROM trade_stats WHERE key='max_pnl_rate'").fetchone()
+            if cur_max is None or pnl_rate > cur_max[0]:
+                self.conn.execute(
+                    "INSERT INTO trade_stats (key, value) VALUES ('max_pnl_rate', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (pnl_rate,)
+                )
             self.conn.commit()
 
     # ===== Open positions tracking =====
@@ -196,47 +283,37 @@ class Database:
 
     def get_stats(self, account_balance: float = 0) -> dict:
         with self.lock:
-            row = self.conn.execute("""
-                SELECT
-                    COALESCE(SUM(pnl), 0) AS total_pnl,
-                    COALESCE(SUM(fee), 0) AS total_fee,
-                    COALESCE(MAX(pnl_rate), 0) AS max_single_profit_rate,
-                    CASE WHEN COUNT(*) > 0
-                        THEN CAST(COUNT(CASE WHEN pnl > 0 THEN 1 END) AS REAL) / COUNT(*)
-                        ELSE 0 END AS win_rate,
-                    COUNT(CASE WHEN side = 'long' THEN 1 END) AS long_count,
-                    COUNT(CASE WHEN side = 'short' THEN 1 END) AS short_count,
-                    COUNT(*) AS total_count,
-                    COUNT(CASE WHEN type = 'all_close' THEN 1 END) AS all_close_count,
-                    COUNT(CASE WHEN type = 'pair_close' THEN 1 END) AS pair_close_count,
-                    COUNT(CASE WHEN type = 'single' THEN 1 END) AS single_count,
-                    COALESCE(SUM(CASE WHEN side = 'long' THEN pnl END), 0) AS long_pnl,
-                    COALESCE(AVG(CASE WHEN side = 'long' THEN pnl_rate END), 0) AS long_pnl_rate,
-                    COALESCE(SUM(CASE WHEN side = 'short' THEN pnl END), 0) AS short_pnl,
-                    COALESCE(AVG(CASE WHEN side = 'short' THEN pnl_rate END), 0) AS short_pnl_rate
-                FROM trades
-            """).fetchone()
-
-        total_pnl = row[0]
-        total_fee = row[1]
+            rows = self.conn.execute(
+                "SELECT key, value FROM trade_stats"
+            ).fetchall()
+        stats = {k: v for k, v in rows}
+        total_pnl = stats.get("total_pnl", 0)
+        total_fee = stats.get("total_fee", 0)
+        total_count = int(stats.get("total_count", 0))
+        win_count = stats.get("win_count", 0)
+        long_count = int(stats.get("long_count", 0))
+        short_count = int(stats.get("short_count", 0))
         account_profit_rate = total_pnl / account_balance if account_balance > 0 else 0
+        win_rate = win_count / total_count if total_count > 0 else 0
+        long_pnl_rate = stats.get("long_pnl", 0) / long_count if long_count > 0 else 0
+        short_pnl_rate = stats.get("short_pnl", 0) / short_count if short_count > 0 else 0
 
         return {
             "total_pnl": round(total_pnl, 4),
             "total_fee": round(total_fee, 4),
-            "max_single_profit_rate": round(row[2], 6),
+            "max_single_profit_rate": round(stats.get("max_pnl_rate", 0), 6),
             "account_profit_rate": round(account_profit_rate, 6),
-            "win_rate": round(row[3], 4),
-            "long_count": row[4],
-            "short_count": row[5],
-            "total_count": row[6],
-            "all_close_count": row[7],
-            "pair_close_count": row[8],
-            "single_count": row[9],
-            "long_pnl": round(row[10], 4),
-            "long_pnl_rate": round(row[11], 6),
-            "short_pnl": round(row[12], 4),
-            "short_pnl_rate": round(row[13], 6),
+            "win_rate": round(win_rate, 4),
+            "long_count": long_count,
+            "short_count": short_count,
+            "total_count": total_count,
+            "all_close_count": int(stats.get("all_close_count", 0)),
+            "pair_close_count": int(stats.get("pair_close_count", 0)),
+            "single_count": int(stats.get("single_count", 0)),
+            "long_pnl": round(stats.get("long_pnl", 0), 4),
+            "long_pnl_rate": round(long_pnl_rate, 6),
+            "short_pnl": round(stats.get("short_pnl", 0), 4),
+            "short_pnl_rate": round(short_pnl_rate, 6),
         }
 
     def get_recent_trades(self, limit: int = 50, offset: int = 0) -> list[dict]:
@@ -303,6 +380,14 @@ class Database:
                 self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
             __import__("logging").getLogger(__name__).warning(f"WAL checkpoint failed: {e}")
+
+    def checkpoint_restart(self):
+        """Force WAL checkpoint (RESTART) to reclaim disk space. Run periodically."""
+        try:
+            with self.lock:
+                self.conn.execute("PRAGMA wal_checkpoint(RESTART)")
+        except Exception as e:
+            __import__("logging").getLogger(__name__).warning(f"WAL restart checkpoint failed: {e}")
 
     def close(self):
         self.conn.close()
