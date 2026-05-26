@@ -104,11 +104,23 @@ class WebServer:
 
     async def handle_index(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
-        return web.FileResponse(web_path)
+        with open(web_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="text/html", headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
 
     async def handle_intro(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "intro.html")
-        return web.FileResponse(web_path)
+        with open(web_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="text/html", headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
 
     async def handle_web_config(self, request):
         config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
