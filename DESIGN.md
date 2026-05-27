@@ -882,4 +882,5 @@ sudo systemctl start evoclaw
 | v1.5 | — | 持仓矩阵全屏首页、亏损统计重构、系统监控面板、动态持仓数量与矩阵大小 |
 | v1.6 | — | 矩阵去掉 USDT 后缀、文字自适应、盈利趋势图表、API 响应缓存、排除 USDC 市场、矩阵格子数修复 |
 | v1.9 | — | web_server api_account 单次循环、消除多余 get_positions、circuit breaker 自动重试 |
-| v2.0 | 2026-05-27 | **稳定性与性能大修**：错误日志独立分离（errors.log）、API 缓存存 dict 防内存泄露、tick 按需 re-fetch positions（5次→1-3次）、静态 HTML 内存缓存、database 消除 __import__ 开销、close_position 精简双try、restart.sh --watch 看门狗 + --status、log.maxBytes 3MB、启动 GC
+| v2.0 | 2026-05-27 | **稳定性与性能大修**：错误日志独立分离（errors.log）、API 缓存存 dict 防内存泄露、tick 按需 re-fetch positions（5次→1-3次）、静态 HTML 内存缓存、database 消除 __import__ 开销、close_position 精简双try、restart.sh --watch 看门狗 + --status、log.maxBytes 3MB、启动 GC |
+| v2.1 | 2026-05-27 | **进程与日志修复**：PID 文件锁防双进程（fcntl.flock）、restart.sh SIGTERM 优雅关闭（8s 等待再 SIGKILL）、stdout 重定向 /dev/null 消除日志重复、exchange_client.close() 先关 aiohttp session 防 Unclosed connector |
