@@ -884,3 +884,4 @@ sudo systemctl start evoclaw
 | v1.9 | — | web_server api_account 单次循环、消除多余 get_positions、circuit breaker 自动重试 |
 | v2.0 | 2026-05-27 | **稳定性与性能大修**：错误日志独立分离（errors.log）、API 缓存存 dict 防内存泄露、tick 按需 re-fetch positions（5次→1-3次）、静态 HTML 内存缓存、database 消除 __import__ 开销、close_position 精简双try、restart.sh --watch 看门狗 + --status、log.maxBytes 3MB、启动 GC |
 | v2.1 | 2026-05-27 | **进程与日志修复**：PID 文件锁防双进程（fcntl.flock）、restart.sh SIGTERM 优雅关闭（8s 等待再 SIGKILL）、stdout 重定向 /dev/null 消除日志重复、exchange_client.close() 先关 aiohttp session 防 Unclosed connector |
+| v2.2 | 2026-05-27 | **移除所有应用级锁**：database.py threading.Lock、trader.py _refresh_lock、web_server.py _cache_lock 全部移除，SQLite WAL 模式自带并发控制；修复 web_server.py 残留 self.db.lock 引用导致 /api/profit-trend 500；修复 web/config.json root 所有权导致 /api/web-config 400 |
