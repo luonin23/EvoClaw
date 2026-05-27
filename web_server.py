@@ -474,11 +474,10 @@ class WebServer:
                 start_iso = (now - timedelta(days=30)).isoformat()
 
             def _fetch_trades():
-                with self.db.lock:
-                    return self.db.conn.execute(
-                        "SELECT close_time, pnl FROM trades WHERE close_time >= ? ORDER BY close_time",
-                        (start_iso,),
-                    ).fetchall()
+                return self.db.conn.execute(
+                    "SELECT close_time, pnl FROM trades WHERE close_time >= ? ORDER BY close_time",
+                    (start_iso,),
+                ).fetchall()
             rows = await self._db_sync(_fetch_trades)
 
             bucket_pnls = defaultdict(float)
