@@ -750,12 +750,12 @@ async function loadFrontendConfig() {
     const r = await fetch('/web/config.json', { cache: 'no-store' });
     if (r.ok) {
       const cfg = await r.json();
-      if (cfg.matrix_slots) window.frontendConfig.matrix_slots = cfg.matrix_slots;
-      if (cfg.matrix_columns) window.frontendConfig.matrix_columns = cfg.matrix_columns;
+      if (cfg.matrix_slots != null) window.frontendConfig.matrix_slots = cfg.matrix_slots;
+      if (cfg.matrix_columns != null) window.frontendConfig.matrix_columns = cfg.matrix_columns;
     }
   } catch (e) { /* use defaults */ }
-  document.getElementById('cfgMatrixSlots').value = window.frontendConfig.matrix_slots || 100;
-  document.getElementById('cfgMatrixColumns').value = window.frontendConfig.matrix_columns || 10;
+  document.getElementById('cfgMatrixSlots').value = window.frontendConfig.matrix_slots;
+  document.getElementById('cfgMatrixColumns').value = window.frontendConfig.matrix_columns;
 }
 
 function switchTab(tab) {
@@ -780,39 +780,53 @@ async function api(path) {
   } catch { return null }
 }
 
+function _val(v, fallback) {
+  return v != null ? v : fallback;
+}
+function _valNum(v, fallback) {
+  return (v != null && Number.isFinite(v)) ? v : fallback;
+}
+function _valStr(v, fallback) {
+  return v != null && v !== '' ? v : fallback;
+}
+
 async function loadConfig() {
   const d = await api('/api/config');
   if (!d) return;
-  document.getElementById('cfgVolumeThreshold').value = d.volume_threshold || 0;
-  document.getElementById('cfgPriceThreshold').value = d.price_threshold || 0;
-  document.getElementById('cfgSymbolRefreshInterval').value = d.symbol_refresh_interval || 86400;
+  document.getElementById('cfgVolumeThreshold').value = _val(d.volume_threshold, 0);
+  document.getElementById('cfgPriceThreshold').value = _val(d.price_threshold, 0);
+  document.getElementById('cfgSymbolRefreshInterval').value = _val(d.symbol_refresh_interval, 86400);
   const tiers = d.profit_tiers || [];
-  document.getElementById('cfgTier1Threshold').value = (tiers[0] && tiers[0].threshold || 0.002) * 100;
-  document.getElementById('cfgTier1Close').value = (tiers[0] && tiers[0].close_pct || 0.3) * 100;
-  document.getElementById('cfgTier2Threshold').value = (tiers[1] && tiers[1].threshold || 0.01) * 100;
-  document.getElementById('cfgTier2Close').value = (tiers[1] && tiers[1].close_pct || 0.5) * 100;
-  document.getElementById('cfgTier3Threshold').value = (tiers[2] && tiers[2].threshold || 0.05) * 100;
-  document.getElementById('cfgTier3Close').value = (tiers[2] && tiers[2].close_pct || 1.0) * 100;
-  document.getElementById('cfgTier4Threshold').value = (tiers[3] && tiers[3].threshold || 0.4) * 100;
-  document.getElementById('cfgTier4Close').value = (tiers[3] && tiers[3].close_pct || 0.5) * 100;
-  document.getElementById('cfgTier5Threshold').value = (tiers[4] && tiers[4].threshold || 0.5) * 100;
-  document.getElementById('cfgTier5Close').value = (tiers[4] && tiers[4].close_pct || 1.0) * 100;
-  document.getElementById('cfgReplenishStop').value = (d.replenish_stop_threshold || 0) * 100;
-  document.getElementById('cfgMaxPositionCount').value = d.max_position_count || 100;
+  document.getElementById('cfgTier1Threshold').value = _val(tiers[0] && tiers[0].threshold, 0.002) * 100;
+  document.getElementById('cfgTier1Close').value = _val(tiers[0] && tiers[0].close_pct, 0.3) * 100;
+  document.getElementById('cfgTier2Threshold').value = _val(tiers[1] && tiers[1].threshold, 0.01) * 100;
+  document.getElementById('cfgTier2Close').value = _val(tiers[1] && tiers[1].close_pct, 0.5) * 100;
+  document.getElementById('cfgTier3Threshold').value = _val(tiers[2] && tiers[2].threshold, 0.05) * 100;
+  document.getElementById('cfgTier3Close').value = _val(tiers[2] && tiers[2].close_pct, 1.0) * 100;
+  document.getElementById('cfgTier4Threshold').value = _val(tiers[3] && tiers[3].threshold, 0.4) * 100;
+  document.getElementById('cfgTier4Close').value = _val(tiers[3] && tiers[3].close_pct, 0.5) * 100;
+  document.getElementById('cfgTier5Threshold').value = _val(tiers[4] && tiers[4].threshold, 0.5) * 100;
+  document.getElementById('cfgTier5Close').value = _val(tiers[4] && tiers[4].close_pct, 1.0) * 100;
+  document.getElementById('cfgReplenishStop').value = _val(d.replenish_stop_threshold, 0) * 100;
+  document.getElementById('cfgMaxPositionCount').value = _val(d.max_position_count, 100);
   document.getElementById('cfgEnableAllClose').checked = d.enable_all_close !== false;
-  document.getElementById('cfgAllClose').value = (d.all_close_threshold || 0) * 100;
+  document.getElementById('cfgAllClose').value = _val(d.all_close_threshold, 0) * 100;
   document.getElementById('cfgEnableMarginCall').checked = d.enable_margin_call !== false;
-  document.getElementById('cfgMarginCallThresholdLong').value = (d.margin_call_threshold_long || d.margin_call_threshold || 0) * 100;
-  document.getElementById('cfgMarginCallThresholdShort').value = (d.margin_call_threshold_short || d.margin_call_threshold || 0) * 100;
-  document.getElementById('cfgMarginCallMultiplier').value = d.margin_call_multiplier || 2;
+  document.getElementById('cfgMarginCallThresholdLong').value = _val(d.margin_call_threshold_long, _val(d.margin_call_threshold, 0)) * 100;
+  document.getElementById('cfgMarginCallThresholdShort').value = _val(d.margin_call_threshold_short, _val(d.margin_call_threshold, 0)) * 100;
+  document.getElementById('cfgMarginCallMultiplier').value = _val(d.margin_call_multiplier, 2);
   document.getElementById('cfgEnableSinglePairClose').checked = d.enable_single_pair_close !== false;
-  document.getElementById('cfgPairClose').value = (d.pair_close_threshold || d.profit_threshold || 0) * 100;
-  document.getElementById('cfgSkip').value = (d.skip_symbols || []).join('\n');
-  document.getElementById('cfgSide').value = d.side || 'both';
+  document.getElementById('cfgPairClose').value = _val(d.pair_close_threshold, _val(d.profit_threshold, 0)) * 100;
+  document.getElementById('cfgSkip').value = (_val(d.skip_symbols, [])).join('\n');
+  document.getElementById('cfgSide').value = _valStr(d.side, 'both');
 }
 
 function parseNum(id, fallback) {
   const v = parseFloat(document.getElementById(id).value);
+  return Number.isFinite(v) ? v : fallback;
+}
+function parseIntVal(id, fallback) {
+  const v = parseInt(document.getElementById(id).value);
   return Number.isFinite(v) ? v : fallback;
 }
 
@@ -830,7 +844,7 @@ async function saveConfig() {
     const body = {
       volume_threshold: parseNum('cfgVolumeThreshold', 0),
       price_threshold: parseNum('cfgPriceThreshold', 0),
-      symbol_refresh_interval: parseInt(document.getElementById('cfgSymbolRefreshInterval').value) || 86400,
+      symbol_refresh_interval: parseIntVal('cfgSymbolRefreshInterval', 86400),
       side: document.getElementById('cfgSide').value,
       profit_tiers: [
         { threshold: parseNum('cfgTier1Threshold', 0.2) / 100, close_pct: parseNum('cfgTier1Close', 30) / 100 },
@@ -840,7 +854,7 @@ async function saveConfig() {
         { threshold: parseNum('cfgTier5Threshold', 50) / 100, close_pct: parseNum('cfgTier5Close', 100) / 100 },
       ],
       replenish_stop_threshold: parseNum('cfgReplenishStop', 10) / 100,
-      max_position_count: parseInt(document.getElementById('cfgMaxPositionCount').value) || 100,
+      max_position_count: parseIntVal('cfgMaxPositionCount', 100),
       enable_all_close: document.getElementById('cfgEnableAllClose').checked,
       all_close_threshold: parseNum('cfgAllClose', 0.15) / 100,
       enable_margin_call: document.getElementById('cfgEnableMarginCall').checked,
@@ -860,8 +874,8 @@ async function saveConfig() {
     const d = await r.json().catch(() => ({}));
 
     const webBody = {
-      matrix_slots: parseInt(document.getElementById('cfgMatrixSlots').value) || 100,
-      matrix_columns: parseInt(document.getElementById('cfgMatrixColumns').value) || 10,
+      matrix_slots: parseIntVal('cfgMatrixSlots', 100),
+      matrix_columns: parseIntVal('cfgMatrixColumns', 10),
     };
     const wr = await fetch('/api/web-config', {
       method: 'POST',
@@ -873,6 +887,9 @@ async function saveConfig() {
     if (r.ok && d.status === 'ok' && wr.ok && wd.status === 'ok') {
       window.frontendConfig.matrix_slots = webBody.matrix_slots;
       window.frontendConfig.matrix_columns = webBody.matrix_columns;
+      // Re-load config from server to confirm saved values in UI
+      await loadConfig();
+      await loadFrontendConfig();
       showToast('配置已保存');
     } else {
       const msg = d.message || wd.message || '服务器错误';

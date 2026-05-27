@@ -1,8 +1,10 @@
 import asyncio
+import gc
 import logging
 import signal
 import os
 import json
+import glob
 import logging.handlers
 from aiohttp import web
 
@@ -15,53 +17,80 @@ from trader import Trader
 from web_server import WebServer
 
 
+class ErrorLogFilter(logging.Filter):
+    """Only allow WARNING and above (errors) to pass through."""
+    def filter(self, record):
+        return record.levelno >= logging.WARNING
+
+
 def setup_logging():
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+
+    # Remove any pre-existing handlers (avoid duplicates on restart)
+    root.handlers.clear()
+
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    # --- stdout (all levels) ---
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)
     root.addHandler(ch)
-    # Use absolute path so RotatingFileHandler rotation works correctly
+
+    # --- Main trader log (INFO+, rotating by size) ---
     log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "trader.log")
     fh = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        log_path, maxBytes=3 * 1024 * 1024, backupCount=5, encoding="utf-8"
     )
     fh.setFormatter(fmt)
     root.addHandler(fh)
-    # Clean up stale .bak files from before the fix
+
+    # --- Error-only log (WARNING+, rotating by size) ---
+    err_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "errors.log")
+    eh = logging.handlers.RotatingFileHandler(
+        err_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    eh.setFormatter(fmt)
+    eh.addFilter(ErrorLogFilter())
+    root.addHandler(eh)
+
     _cleanup_stale_logs()
 
+
 def _cleanup_stale_logs():
-    """Remove oversized and stale log files. Enforce backupCount limit."""
-    import glob
+    """Remove stale/oversized log files beyond backup limits."""
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-    max_bytes = 5 * 1024 * 1024
+    max_bytes = 3 * 1024 * 1024
     max_keep = 5
 
-    # Remove legacy .bak files
+    # Legacy .bak files
     for f in sorted(glob.glob(os.path.join(data_dir, "trader.log.*.bak"))):
         try:
             os.remove(f)
-            logging.getLogger(__name__).info(f"Cleaned stale log: {os.path.basename(f)}")
         except Exception:
             pass
 
-    # Remove numbered rotation files exceeding backupCount
+    # Numbered rotation files exceeding backupCount
     numbered = sorted(glob.glob(os.path.join(data_dir, "trader.log.[0-9]*")))
     for f in numbered[:-max_keep] if len(numbered) > max_keep else []:
         try:
             os.remove(f)
-            logging.getLogger(__name__).info(f"Cleaned excess log: {os.path.basename(f)}")
         except Exception:
             pass
 
-    # Remove any remaining oversized log files (> 2x maxBytes, legacy pre-fix files)
-    for f in sorted(glob.glob(os.path.join(data_dir, "trader.log*"))):
+    # Numbered error logs exceeding backupCount
+    err_numbered = sorted(glob.glob(os.path.join(data_dir, "errors.log.[0-9]*")))
+    for f in err_numbered[:-3] if len(err_numbered) > 3 else []:
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
+    # Any remaining oversized log files (> 2x maxBytes)
+    for f in sorted(glob.glob(os.path.join(data_dir, "*.log*"))):
         try:
             if os.path.getsize(f) > max_bytes * 2:
                 os.remove(f)
-                logging.getLogger(__name__).info(f"Cleaned oversized log: {os.path.basename(f)}")
         except Exception:
             pass
 
@@ -81,6 +110,9 @@ def get_sides(side: str) -> list[str]:
 
 
 async def main():
+    # --- Startup GC to clean import residue ---
+    gc.collect()
+
     setup_logging()
     log = logging.getLogger(__name__)
     cfg = load_config()
@@ -95,7 +127,6 @@ async def main():
     # Dynamic symbol selection based on volume & price thresholds
     volume_threshold = cfg.get("volume_threshold", 0)
     price_threshold = cfg.get("price_threshold", 0)
-    # Fallback to legacy symbols if thresholds not configured
     if volume_threshold == 0 and price_threshold == 0:
         symbols = cfg.get("symbols", [])
     else:
@@ -108,10 +139,8 @@ async def main():
     # Open initial positions - track existing ones, open missing ones
     sides = get_sides(cfg.get("side", "both"))
     if symbols:
-        # Get current exchange positions
         positions = await client.get_positions()
 
-        # Track existing exchange positions in DB so system can manage them
         for p in positions:
             sym = client.user_symbol(p["symbol"])
             pos_side = p.get("side", "")
@@ -129,12 +158,10 @@ async def main():
                     )
                     log.info(f"Tracking existing position: {sym} {pos_side} {contracts} @ {entry_price}")
 
-        # Get DB-tracked positions to avoid duplicates
         tracked = set()
         for sp in db.get_open_positions():
             tracked.add(f"{sp['symbol']}:{sp['side']}")
 
-        # Build position map for replenish stop-check
         position_map = {}
         for p in positions:
             sym = client.user_symbol(p["symbol"])
@@ -144,12 +171,10 @@ async def main():
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
         max_count = cfg.get("max_position_count", 0)
 
-        # Check position count limit before any open
         if max_count > 0 and len(positions) >= max_count:
             log.info(f"STARTUP OPEN SKIP: total positions {len(positions)} >= limit {max_count}")
             open_tasks = []
         else:
-            # Open only missing positions and record them
             max_new = max_count - len(positions) if max_count > 0 else None
             open_tasks = []
             for sym in symbols:

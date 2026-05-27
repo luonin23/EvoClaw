@@ -11,17 +11,25 @@ class ExchangeClient:
         exchange_class = getattr(ccxt, "binanceusdm")
         kwargs = config.get("exchange_kwargs", {}).copy()
         kwargs.setdefault("enableRateLimit", True)
+        kwargs.setdefault("timeout", 10000)
         self.exchange = exchange_class(kwargs)
         self.market_info = {}
         self.symbol_map = {}
-        self._reverse_map = {}  # ccxt symbol -> user symbol (e.g. ENA/USDT:USDT -> ENAUSDT)
+        self._reverse_map = {}
         self._prices = {}
-        # Throttle REPLENISH STOP logs: max 1 log per symbol per 30s
-        self._replenish_stop_cache: dict[str, float] = {}
-        self._replenish_stop_interval = 30
+
+    async def _safe_call(self, coro, timeout=10):
+        """Wrap ccxt call with hard timeout to prevent event loop blocking."""
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            log.warning("CCXT call timed out")
+            raise
+        except Exception:
+            raise
 
     async def load_markets(self):
-        markets = await self.exchange.load_markets()
+        markets = await self._safe_call(self.exchange.load_markets(), timeout=20)
         for symbol in self.exchange.symbols:
             m = markets.get(symbol)
             if m and m.get("swap") and m.get("quote") == "USDT":
@@ -32,7 +40,6 @@ class ExchangeClient:
                 base = symbol.replace(":", "").replace("/", "")
                 if base and base not in self.market_info:
                     self.symbol_map[base] = symbol
-                # Reverse map: ccxt symbol -> user symbol (prefer exchange_id form)
                 eid = m.get("id", "")
                 self._reverse_map[symbol] = eid if eid else base
         log.info(f"Loaded {len(self.market_info)} USDT swap markets, {len(self.symbol_map)} aliases")
@@ -40,7 +47,7 @@ class ExchangeClient:
     async def refresh_prices(self, symbols: list):
         resolved = [self.resolve_symbol(s) for s in symbols]
         try:
-            tickers = await self.exchange.fetch_tickers(resolved)
+            tickers = await self._safe_call(self.exchange.fetch_tickers(resolved), timeout=15)
             for sym, ticker in tickers.items():
                 if ticker and ticker.get("last"):
                     self._prices[sym] = float(ticker["last"])
@@ -50,9 +57,8 @@ class ExchangeClient:
             log.warning(f"refresh_prices failed: {e}")
 
     async def get_candidate_symbols(self, volume_threshold: float, price_threshold: float) -> list[str]:
-        """Return user-format symbols (e.g. ENAUSDT) filtered by 24h volume and last price."""
         try:
-            tickers = await self.exchange.fetch_tickers()
+            tickers = await self._safe_call(self.exchange.fetch_tickers(), timeout=15)
             candidates = []
             for ccxt_sym, ticker in tickers.items():
                 if ccxt_sym not in self.market_info:
@@ -71,7 +77,6 @@ class ExchangeClient:
             return []
 
     def resolve_symbol(self, symbol: str) -> str:
-        """Resolve user symbol (ENAUSDT) to ccxt swap symbol (ENA/USDT:USDT)."""
         if symbol in self.market_info:
             return symbol
         if symbol in self.symbol_map:
@@ -80,7 +85,6 @@ class ExchangeClient:
         return symbol
 
     def user_symbol(self, ccxt_symbol: str) -> str:
-        """Convert ccxt symbol (ENA/USDT:USDT) back to user form (ENAUSDT)."""
         if ccxt_symbol in self._reverse_map:
             return self._reverse_map[ccxt_symbol]
         return ccxt_symbol
@@ -90,10 +94,6 @@ class ExchangeClient:
         return self.market_info.get(resolved, {})
 
     def should_stop_replenish(self, sym: str, side: str, stop_threshold: float, position_map: dict) -> bool:
-        """Return True if opening `side` for `sym` should be stopped because the opposite
-        position's entry price deviates from current market price by >= stop_threshold.
-        Safe default: returns True (stop) if price cannot be determined.
-        """
         if stop_threshold <= 0:
             return False
         opposite_side = "short" if side == "long" else "long"
@@ -123,9 +123,8 @@ class ExchangeClient:
         return False
 
     async def get_balance(self) -> dict:
-        balance = await self.exchange.fetch_balance()
+        balance = await self._safe_call(self.exchange.fetch_balance(), timeout=10)
         usdt_total = balance.get("total", {}).get("USDT", 0)
-        # For swap accounts, availableBalance is mapped to "free" by ccxt parse_balance_custom
         usdt_free = balance.get("free", {}).get("USDT", 0)
         return {
             "balance": float(usdt_total) if usdt_total else 0,
@@ -134,7 +133,7 @@ class ExchangeClient:
 
     async def get_positions(self, symbols: list = None) -> list[dict]:
         resolved = [self.resolve_symbol(s) for s in symbols] if symbols else None
-        positions = await self.exchange.fetch_positions(resolved or None)
+        positions = await self._safe_call(self.exchange.fetch_positions(resolved or None), timeout=15)
         result = []
         for p in positions:
             contracts = float(p.get("contracts", 0) or 0)
@@ -158,15 +157,12 @@ class ExchangeClient:
             if min_amount > 0:
                 raw = max(raw, int(math.ceil(min_amount / contract_size)))
             if min_notional > 0:
-                # Try cache first
                 price = self._prices.get(resolved)
                 if not price or price <= 0:
-                    # Fallback: from market_info
                     price_str = market.get("info", {}).get("lastPrice") or market.get("last", None)
                     if price_str:
                         price = float(price_str)
                 if not price or price <= 0:
-                    # Fallback: use min_notional / contract_size as rough estimate (e.g. 5 USDT at $1)
                     price = min_notional / (contract_size * 10) if contract_size > 0 else 1
                 raw = max(raw, int(math.ceil(min_notional / (price * contract_size))))
             return float(round(raw, amount_precision))
@@ -175,24 +171,16 @@ class ExchangeClient:
             return 1
 
     async def open_position(self, symbol: str, side: str) -> dict | None:
-        """
-        Open a market position.
-        Returns dict with: order_id, average (entry price), amount (contracts)
-        or None on failure.
-        """
         resolved = self.resolve_symbol(symbol)
         amount = self.calc_min_contracts(resolved)
         if amount <= 0:
             return None
         for attempt in range(3):
             try:
-                order = await self.exchange.create_order(
-                    symbol=resolved,
-                    type="market",
-                    side=side,
-                    amount=amount,
+                order = await self._safe_call(self.exchange.create_order(
+                    symbol=resolved, type="market", side=side, amount=amount,
                     params={"positionSide": "LONG" if side == "buy" else "SHORT"},
-                )
+                ), timeout=15)
                 log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
                 return {
                     "order_id": str(order.get("id", "")),
@@ -224,22 +212,15 @@ class ExchangeClient:
         return None
 
     async def add_position(self, symbol: str, side: str, amount: float) -> dict | None:
-        """Add contracts to existing position (margin call / 加仓).
-        side: "long" or "short" (position direction)
-        Returns order info or None.
-        """
         resolved = self.resolve_symbol(symbol)
         if amount <= 0:
             return None
         try:
             open_side = "buy" if side == "long" else "sell"
-            order = await self.exchange.create_order(
-                symbol=resolved,
-                type="market",
-                side=open_side,
-                amount=amount,
+            order = await self._safe_call(self.exchange.create_order(
+                symbol=resolved, type="market", side=open_side, amount=amount,
                 params={"positionSide": side.upper()},
-            )
+            ), timeout=15)
             log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
             return {
                 "order_id": str(order.get("id", "")),
@@ -255,7 +236,6 @@ class ExchangeClient:
             return None
 
     async def close_position(self, symbol: str, side: str, contracts: float | None = None) -> dict | None:
-        """Close position for symbol+side. Returns order info or None."""
         resolved = self.resolve_symbol(symbol)
         if contracts is None:
             positions = await self.get_positions([resolved])
@@ -268,42 +248,31 @@ class ExchangeClient:
             if not target:
                 return None
             contracts = float(target.get("contracts", 0) or 0)
-        try:
-            close_side = "sell" if side == "long" else "buy"
-            order = await self.exchange.create_order(
-                symbol=resolved,
-                type="market",
-                side=close_side,
-                amount=contracts,
-                params={"positionSide": side.upper()},
-            )
-            log.info(f"Close {side} {resolved} {contracts} -> {order.get('id')}")
-            return {
-                "order_id": str(order.get("id", "")),
-                "average": float(order.get("average", 0) or 0),
-                "closedPnL": order.get("closedPnL", 0),
-                "contracts": contracts,
-            }
-        except Exception as e:
-            error_msg = str(e)
-            # Fallback: some accounts need no params at all
+
+        close_side = "sell" if side == "long" else "buy"
+        # Try with positionSide first, fallback to bare params
+        for attempt, params in enumerate([
+            {"positionSide": side.upper()},
+            None,
+        ]):
             try:
-                close_side = "sell" if side == "long" else "buy"
-                order = await self.exchange.create_order(
-                    symbol=resolved,
-                    type="market",
-                    side=close_side,
-                    amount=contracts,
-                )
-                log.info(f"Close (no params) {side} {resolved} {contracts} -> {order.get('id')}")
+                kwargs = dict(symbol=resolved, type="market", side=close_side, amount=contracts)
+                if params is not None:
+                    kwargs["params"] = params
+                order = await self._safe_call(self.exchange.create_order(**kwargs), timeout=15)
+                tag = "no params" if params is None else side
+                log.info(f"Close {tag} {resolved} {contracts} -> {order.get('id')}")
                 return {
                     "order_id": str(order.get("id", "")),
                     "average": float(order.get("average", 0) or 0),
                     "closedPnL": order.get("closedPnL", 0),
                     "contracts": contracts,
                 }
-            except Exception as e2:
-                log.error(f"Close fallback failed {resolved} {side}: {e2}")
+            except Exception as e:
+                if attempt == 0:
+                    log.warning(f"Close with positionSide failed {resolved} {side}, trying fallback: {e}")
+                    continue
+                log.error(f"Close failed {resolved} {side}: {e}")
                 return None
 
     async def close_all_positions(self, positions: list[dict]) -> list[dict]:
@@ -318,10 +287,10 @@ class ExchangeClient:
 
             async def _close(sym=symbol, cs=close_side, amt=contracts, ps=pos_side):
                 try:
-                    order = await self.exchange.create_order(
-                        symbol=sym, type="market", side=cs,
-                        amount=amt, params={"reduceOnly": True, "positionSide": ps.upper()},
-                    )
+                    order = await self._safe_call(self.exchange.create_order(
+                        symbol=sym, type="market", side=cs, amount=amt,
+                        params={"reduceOnly": True, "positionSide": ps.upper()},
+                    ), timeout=15)
                     log.info(f"All-close {ps} {sym} {amt} -> {order.get('id')}")
                     return {
                         "symbol": sym, "side": ps, "amount": amt,

@@ -98,7 +98,7 @@ main.py
 
 ```
 1. main.py 读取 config.json
-2. setup_logging() → 控制台 + RotatingFileHandler（5MB × 5 备份）
+2. setup_logging() → 控制台 + trader.log（3MB × 5 备份）+ errors.log（2MB × 3 备份，仅 WARNING+）
 3. Database("data/evoclaw.db") → 建表 + 零停机迁移（ALTER TABLE）
 4. ExchangeClient(config) → load_markets() 缓存市场信息 + 符号映射
 5. ExchangeClient.get_candidate_symbols() → 动态选币
@@ -634,12 +634,14 @@ T0+0:  replenish_missing()
 T0+0:  db.checkpoint() → 防止 WAL 无限增长
 ```
 
-**性能特征**：
-- 单次 tick 最少 4 次 `get_positions` 调用
+**性能特征（v2.0 优化后）**：
+- 单次 tick **1 次** `get_positions`（仅在发生交易后 re-fetch，最多 3 次）
 - 币种筛选使用缓存，不再每秒请求交易所
 - 价格刷新使用批量 `fetch_tickers`
 - 开仓/平仓使用 `asyncio.gather` 并发
-- 目标单次 tick 耗时 < 500ms
+- 静态 HTML 内存缓存，避免重复磁盘读取
+- 数据库使用顶级 import，消除 `__import__` 热路径开销
+- API 缓存只存纯 dict 数据，防止 Response 对象内存泄露
 
 ### 5.3 精度计算
 
@@ -827,19 +829,32 @@ sudo systemctl start evoclaw
 
 ### 8.3 restart.sh 流程
 
+```bash
+# 正常重启
+./restart.sh
+
+# 看门狗模式（30s 检测 + 自动重启 + crash 日志）
+./restart.sh --watch
+
+# 状态查询
+./restart.sh --status
 ```
+
+核心流程：
 1. 停止现有进程（优雅终止 → 强制 kill）
 2. 清理端口 8080
-3. 备份并清空日志（trader.log → trader.log.{timestamp}.bak）
-4. 启动 EvoClaw（python3 main.py）
-5. 验证服务状态
-```
+3. 启动 EvoClaw（python3 main.py）
+4. 验证服务状态
+
+看门狗模式：每 30 秒检测进程存活，若挂掉自动重启并将 crash 前最后 10 行日志写入 `data/crash.log`。
 
 ### 8.4 日志管理
 
-- `RotatingFileHandler`：5MB 轮转，保留 5 个备份
-- 启动时自动清理过期的 `.bak` 日志文件（最多保留 3 个）
-- 日志级别：INFO 及以上写入文件
+- **trader.log**：`RotatingFileHandler`，3MB 轮转，保留 5 个备份
+- **errors.log**：独立错误日志，仅记录 WARNING 及以上级别，2MB 轮转，保留 3 个备份
+- **crash.log**：看门狗模式下记录崩溃时间和 crash 前日志
+- 启动时自动清理超出备份数量的旧日志文件
+- 日志级别：INFO 及以上写入 trader.log，WARNING+ 同时写入 errors.log
 
 ### 8.5 信号处理
 
@@ -867,3 +882,4 @@ sudo systemctl start evoclaw
 | v1.5 | — | 持仓矩阵全屏首页、亏损统计重构、系统监控面板、动态持仓数量与矩阵大小 |
 | v1.6 | — | 矩阵去掉 USDT 后缀、文字自适应、盈利趋势图表、API 响应缓存、排除 USDC 市场、矩阵格子数修复 |
 | v1.9 | — | web_server api_account 单次循环、消除多余 get_positions、circuit breaker 自动重试 |
+| v2.0 | 2026-05-27 | **稳定性与性能大修**：错误日志独立分离（errors.log）、API 缓存存 dict 防内存泄露、tick 按需 re-fetch positions（5次→1-3次）、静态 HTML 内存缓存、database 消除 __import__ 开销、close_position 精简双try、restart.sh --watch 看门狗 + --status、log.maxBytes 3MB、启动 GC

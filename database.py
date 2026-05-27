@@ -1,6 +1,10 @@
 import sqlite3
 import os
 import threading
+import logging
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
 
 
 class Database:
@@ -32,7 +36,6 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(close_time);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 
-            -- Track system-managed open positions
             CREATE TABLE IF NOT EXISTS open_positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
@@ -58,9 +61,8 @@ class Database:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
                 self.conn.commit()
             except Exception:
-                pass  # column already exists
+                pass
 
-        # Runtime stats table (for persistent runtime metrics)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS runtime_stats (
                 key TEXT PRIMARY KEY,
@@ -68,7 +70,6 @@ class Database:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Incremental trade stats table (O(1) lookup, rebuilt from trades on init)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS trade_stats (
                 key TEXT PRIMARY KEY,
@@ -76,15 +77,11 @@ class Database:
             )
         """)
         self.conn.commit()
-        # Ensure stats are consistent with existing trades
         self._rebuild_stats()
 
     def _rebuild_stats(self):
-        """Rebuild trade_stats from trades table. Called once at init."""
         with self.lock:
-            # Clear existing stats
             self.conn.execute("DELETE FROM trade_stats")
-            # Aggregate from trades
             row = self.conn.execute("""
                 SELECT
                     COALESCE(SUM(pnl), 0),
@@ -116,7 +113,6 @@ class Database:
             self.conn.commit()
 
     def _inc_stat(self, key: str, delta: float):
-        """Atomically increment a trade_stats value."""
         with self.lock:
             self.conn.execute(
                 "INSERT INTO trade_stats (key, value) VALUES (?, ?) "
@@ -137,20 +133,12 @@ class Database:
                     entry_price, exit_price, amount, pnl, pnl_rate, fee)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    trade["symbol"],
-                    side,
-                    ttype,
-                    trade.get("open_time", ""),
-                    trade["close_time"],
-                    trade["entry_price"],
-                    trade["exit_price"],
-                    trade["amount"],
-                    pnl,
-                    pnl_rate,
-                    fee,
+                    trade["symbol"], side, ttype,
+                    trade.get("open_time", ""), trade["close_time"],
+                    trade["entry_price"], trade["exit_price"],
+                    trade["amount"], pnl, pnl_rate, fee,
                 ),
             )
-            # Incremental stat updates (O(1) instead of full table scan later)
             self._inc_stat("total_pnl", pnl)
             self._inc_stat("total_fee", fee)
             self._inc_stat("total_count", 1)
@@ -170,7 +158,6 @@ class Database:
             else:
                 self._inc_stat("short_pnl", pnl)
                 self._inc_stat("short_count", 1)
-            # Update max_pnl_rate if this trade sets a new record
             cur_max = self.conn.execute("SELECT value FROM trade_stats WHERE key='max_pnl_rate'").fetchone()
             if cur_max is None or pnl_rate > cur_max[0]:
                 self.conn.execute(
@@ -183,7 +170,6 @@ class Database:
     # ===== Open positions tracking =====
 
     def get_slot(self, symbol: str, side: str) -> int | None:
-        """Get assigned slot index for a symbol+side. Returns None if not assigned."""
         with self.lock:
             row = self.conn.execute(
                 "SELECT slot_index FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
@@ -191,7 +177,6 @@ class Database:
         return row[0] if row and row[0] >= 0 else None
 
     def get_used_slots(self) -> set[int]:
-        """Get all currently assigned slot indices."""
         with self.lock:
             rows = self.conn.execute(
                 "SELECT slot_index FROM open_positions WHERE slot_index >= 0"
@@ -199,18 +184,12 @@ class Database:
         return {r[0] for r in rows}
 
     def _allocate_slot(self, symbol: str, side: str) -> int | None:
-        """Allocate a slot index (0-99) for symbol+side.
-        Same-symbol long/short are placed adjacent when possible.
-        Returns None if no slot available.
-        """
-        # Check if already allocated
         existing = self.get_slot(symbol, side)
         if existing is not None:
             return existing
 
         used = self.get_used_slots()
 
-        # Try to place adjacent to opposite side of same symbol
         opposite = "short" if side == "long" else "long"
         opp_slot = self.get_slot(symbol, opposite)
         if opp_slot is not None:
@@ -218,13 +197,11 @@ class Database:
             if 0 <= neighbor < 100 and neighbor not in used:
                 return neighbor
 
-        # Find smallest slot of preferred parity (even for long, odd for short)
         start = 0 if side == "long" else 1
         for i in range(start, 100, 2):
             if i not in used:
                 return i
 
-        # Fallback: any available slot
         for i in range(100):
             if i not in used:
                 return i
@@ -232,13 +209,11 @@ class Database:
         return None
 
     def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None):
-        """Record a system-opened position. Auto-allocates slot_index."""
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         if open_fee is None:
             open_fee = entry_price * amount * 0.0005
         slot = self._allocate_slot(symbol, side)
         with self.lock:
-            # Remove any stale entry for this symbol+side
             self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
             self.conn.execute(
                 """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee, slot_index)
@@ -248,13 +223,11 @@ class Database:
             self.conn.commit()
 
     def remove_open(self, symbol: str, side: str):
-        """Remove a closed position from tracking. Slot is implicitly released by DELETE."""
         with self.lock:
             self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
             self.conn.commit()
 
     def get_open_positions(self) -> list[dict]:
-        """Get all system-tracked open positions."""
         with self.lock:
             rows = self.conn.execute(
                 "SELECT symbol, side, order_id, entry_time, entry_price, amount, margin_called, open_fee, slot_index FROM open_positions"
@@ -263,7 +236,6 @@ class Database:
         return [dict(zip(columns, r)) for r in rows]
 
     def mark_margin_called(self, symbol: str, side: str, new_amount: float, added_fee: float = 0):
-        """Mark position as margin-called and update amount."""
         with self.lock:
             self.conn.execute(
                 "UPDATE open_positions SET margin_called=1, amount=?, open_fee = open_fee + ? WHERE symbol=? AND side=?",
@@ -272,7 +244,6 @@ class Database:
             self.conn.commit()
 
     def has_open(self, symbol: str, side: str) -> bool:
-        """Check if system has a tracked open position for symbol+side."""
         with self.lock:
             row = self.conn.execute(
                 "SELECT 1 FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
@@ -283,9 +254,7 @@ class Database:
 
     def get_stats(self, account_balance: float = 0) -> dict:
         with self.lock:
-            rows = self.conn.execute(
-                "SELECT key, value FROM trade_stats"
-            ).fetchall()
+            rows = self.conn.execute("SELECT key, value FROM trade_stats").fetchall()
         stats = {k: v for k, v in rows}
         total_pnl = stats.get("total_pnl", 0)
         total_fee = stats.get("total_fee", 0)
@@ -324,7 +293,6 @@ class Database:
                    FROM trades ORDER BY id DESC LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
-
         columns = [
             "id", "symbol", "side", "type", "open_time", "close_time",
             "entry_price", "exit_price", "amount", "pnl", "pnl_rate", "fee",
@@ -337,7 +305,6 @@ class Database:
         return row[0] if row else 0
 
     def get_historical_worst_trade(self) -> dict | None:
-        """Return the worst (most negative) single trade from history."""
         with self.lock:
             row = self.conn.execute(
                 "SELECT symbol, side, pnl, pnl_rate FROM trades WHERE pnl < 0 ORDER BY pnl ASC LIMIT 1"
@@ -351,7 +318,7 @@ class Database:
             self.conn.execute(
                 "INSERT INTO runtime_stats (key, value, updated_at) VALUES ('margin_call_count', ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=value+excluded.value, updated_at=excluded.updated_at",
-                (increment, __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()),
+                (increment, datetime.now(timezone.utc).isoformat()),
             )
             self.conn.commit()
 
@@ -369,25 +336,23 @@ class Database:
             self.conn.execute(
                 "INSERT INTO runtime_stats (key, value, updated_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (key, value, __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()),
+                (key, value, datetime.now(timezone.utc).isoformat()),
             )
             self.conn.commit()
 
     def checkpoint(self):
-        """Checkpoint WAL to prevent unbounded growth."""
         try:
             with self.lock:
                 self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
-            __import__("logging").getLogger(__name__).warning(f"WAL checkpoint failed: {e}")
+            log.warning(f"WAL checkpoint failed: {e}")
 
     def checkpoint_restart(self):
-        """Force WAL checkpoint (PASSIVE) to reduce WAL size. PASSIVE never blocks or deadlocks."""
         try:
             with self.lock:
                 self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
-            __import__("logging").getLogger(__name__).warning(f"WAL checkpoint failed: {e}")
+            log.warning(f"WAL checkpoint failed: {e}")
 
     def close(self):
         self.conn.close()

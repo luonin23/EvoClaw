@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -6,6 +7,17 @@ import time
 from aiohttp import web
 
 log = logging.getLogger(__name__)
+
+# ---- Static file cache (loaded once, never changes while running) ----
+_static_cache = {}
+
+
+def _get_static(path):
+    """Read a static file once and cache it in memory."""
+    if path not in _static_cache:
+        with open(path, "r", encoding="utf-8") as f:
+            _static_cache[path] = f.read()
+    return _static_cache[path]
 
 
 class WebServer:
@@ -30,17 +42,16 @@ class WebServer:
         self.app.router.add_get("/web/config.json", self.handle_web_config)
         self.app.router.add_get("/api/web-config", self.api_web_config_get)
         self.app.router.add_post("/api/web-config", self.api_web_config_set)
-        # System metrics cache for rate calculations
         self._last_cpu = None
         self._last_net = None
         self._last_system_time = None
-        # Response cache to reduce Binance API calls
-        self._api_cache = {}
-        self._api_cache_ttl = 15  # seconds: reduce request frequency
-        self._api_cache_max = 20   # max entries to prevent unbounded growth
-        self._balance_cache = (0, 0.0)  # (timestamp, balance)
-        self._cache_lock = __import__('asyncio').Lock()
-        self._system_cache = (0, None)  # (timestamp, data)
+        # Response cache: stores only pure dict data, never Response objects
+        self._api_cache: dict[str, tuple[float, dict]] = {}
+        self._api_cache_ttl = 15
+        self._api_cache_max = 20
+        self._balance_cache = (0, 0.0)
+        self._cache_lock = asyncio.Lock()
+        self._system_cache = (0, None)
 
     def _load_config(self):
         try:
@@ -51,45 +62,40 @@ class WebServer:
 
     async def _cached_response(self, key, handler, request):
         """Return cached response if within TTL, otherwise call handler and cache.
-        Uses a lock to prevent thundering herd on cache miss.
-        Caches parsed JSON data instead of Response objects to avoid aiohttp reuse issues."""
+        Caches only pure dict data to prevent memory leaks from Response objects."""
         now = time.monotonic()
         cached = self._api_cache.get(key)
         if cached and now - cached[0] < self._api_cache_ttl:
-            data = cached[1]
-            if isinstance(data, dict):
-                return web.json_response(data)
-            return data
-        async with self._cache_lock:
-            # Double-check after acquiring lock
-            cached = self._api_cache.get(key)
-            if cached and now - cached[0] < self._api_cache_ttl:
-                data = cached[1]
-                if isinstance(data, dict):
-                    return web.json_response(data)
-                return data
-            resp = await handler(request)
-            # Extract JSON data from response body to avoid caching Response objects
-            try:
-                if hasattr(resp, 'body') and resp.body:
-                    cached_data = json.loads(resp.body)
-                else:
-                    cached_data = resp
-            except Exception:
-                cached_data = resp
-            # Evict oldest entries if cache exceeds max size
-            if len(self._api_cache) >= self._api_cache_max:
-                oldest = min(self._api_cache, key=lambda k: self._api_cache[k][0])
-                del self._api_cache[oldest]
-            self._api_cache[key] = (now, cached_data)
-            return resp
+            return web.json_response(cached[1])
 
+        try:
+            resp = await asyncio.wait_for(handler(request), timeout=15)
+        except asyncio.TimeoutError:
+            log.warning(f"Handler timeout for {key}")
+            return web.json_response({"status": "error", "message": "Request timeout"}, status=504)
+
+        # Extract pure dict data from response to avoid caching Response objects
+        try:
+            if hasattr(resp, 'body') and resp.body:
+                data = json.loads(resp.body)
+            else:
+                data = resp
+        except Exception:
+            data = resp
+
+        # Only cache dict data (not Response objects)
+        if isinstance(data, dict):
+            async with self._cache_lock:
+                if len(self._api_cache) >= self._api_cache_max:
+                    oldest = min(self._api_cache, key=lambda k: self._api_cache[k][0])
+                    del self._api_cache[oldest]
+                self._api_cache[key] = (now, data)
+
+        return resp
 
     async def _db_sync(self, fn, *args, **kwargs):
         """Run a synchronous DB call in a thread pool to avoid blocking the event loop."""
-        import asyncio
         return await asyncio.to_thread(fn, *args, **kwargs)
-
 
     async def api_account_cached(self, request):
         return await self._cached_response("account", self.api_account, request)
@@ -109,8 +115,7 @@ class WebServer:
 
     async def handle_index(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
-        with open(web_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        content = _get_static(web_path)
         return web.Response(text=content, content_type="text/html", headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
@@ -119,8 +124,7 @@ class WebServer:
 
     async def handle_intro(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "intro.html")
-        with open(web_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        content = _get_static(web_path)
         return web.Response(text=content, content_type="text/html", headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
@@ -194,7 +198,6 @@ class WebServer:
             balance = await self.client.get_balance()
             all_positions = await self.client.get_positions()
 
-            # Single pass: compute all metrics together
             unrealized = 0.0
             long_pos_count = 0
             short_pos_count = 0
@@ -208,7 +211,6 @@ class WebServer:
             sym_total_pnl = 0.0
             sym_total_value = 0.0
 
-            # Use trader cached symbols; fallback to config
             if self.trader and self.trader._candidate_symbols:
                 symbols = self.trader._candidate_symbols
                 sym_set = set(symbols)
@@ -249,7 +251,6 @@ class WebServer:
                 if rate < worst_rate:
                     worst_rate = rate
 
-                # Filter for active symbol subset (reuse same loop, no extra API call)
                 if sym_set:
                     user_sym = self.client.user_symbol(p["symbol"])
                     if user_sym in sym_set:
@@ -259,7 +260,6 @@ class WebServer:
             total_pnl_rate = total_pnl / total_value if total_value > 0 else 0
             realtime_rate = sym_total_pnl / sym_total_value if sym_total_value > 0 else 0
 
-            # Update historical stats (offload to thread pool)
             hist_max_loss_rate = await self._db_sync(self.db.get_runtime_stat, "max_position_loss_rate", 0)
             if current_max_loss_rate < hist_max_loss_rate:
                 hist_max_loss_rate = current_max_loss_rate
@@ -331,11 +331,8 @@ class WebServer:
 
     async def api_positions_map(self, request):
         try:
-            cfg = self._load_config()
-
             all_positions = await self.client.get_positions()
 
-            # Compute pnl_rate for each position
             position_items = []
             for p in all_positions:
                 sym = self.client.user_symbol(p["symbol"])
@@ -356,10 +353,8 @@ class WebServer:
                     "pnl_rate": round(rate, 6),
                 })
 
-            # Sort by pnl_rate ascending (worst loss first, profit last)
             position_items.sort(key=lambda x: x["pnl_rate"])
 
-            # Only send occupied slots; client fills empty ones
             result = []
             for i, item in enumerate(position_items):
                 result.append({"index": i, **item, "occupied": True})
@@ -380,11 +375,9 @@ class WebServer:
     async def api_system(self, request):
         try:
             now = time.time()
-            # Use in-memory cache for 5s to avoid repeated file reads
             if self._system_cache[1] and now - self._system_cache[0] < 5:
                 return web.json_response(self._system_cache[1])
 
-            # CPU usage from /proc/stat
             cpu_percent = 0.0
             with open("/proc/stat") as f:
                 line = f.readline()
@@ -398,7 +391,6 @@ class WebServer:
                     cpu_percent = (dt_total - dt_idle) / dt_total * 100
             self._last_cpu = (total, idle)
 
-            # Memory from /proc/meminfo
             mem_total = mem_free = 0
             with open("/proc/meminfo") as f:
                 for line in f:
@@ -408,10 +400,8 @@ class WebServer:
                         mem_free = int(line.split()[1]) * 1024
             mem_used = mem_total - mem_free if mem_total else 0
 
-            # Disk usage
             du = shutil.disk_usage("/")
 
-            # Network from /proc/net/dev
             rx_bytes = tx_bytes = 0
             with open("/proc/net/dev") as f:
                 for line in f.readlines()[2:]:
@@ -457,9 +447,9 @@ class WebServer:
     async def api_profit_trend(self, request):
         try:
             from datetime import datetime, timezone, timedelta
-            t0 = time.monotonic()
-            period = request.query.get("period", "hour")  # 'hour' or 'day'
-            # Use cached balance from api_account to avoid extra network request
+            from collections import defaultdict
+
+            period = request.query.get("period", "hour")
             cached_ts, cached_bal = self._balance_cache
             if cached_bal > 0 and time.monotonic() - cached_ts < 300:
                 balance = cached_bal
@@ -467,13 +457,11 @@ class WebServer:
                 balance_data = await self.client.get_balance()
                 balance = balance_data.get("balance", 0)
                 self._balance_cache = (time.monotonic(), float(balance) if balance else 0.0)
-            t1 = time.monotonic()
             if balance <= 0:
-                balance = 1  # avoid division by zero
+                balance = 1
 
             now = datetime.now(timezone.utc)
 
-            # Build bucket list and query recent trades
             if period == "hour":
                 buckets = []
                 for i in range(24):
@@ -494,19 +482,15 @@ class WebServer:
                         (start_iso,),
                     ).fetchall()
             rows = await self._db_sync(_fetch_trades)
-            t2 = time.monotonic()
 
-            # Aggregate pnl by bucket
-            from collections import defaultdict
             bucket_pnls = defaultdict(float)
             for close_time, pnl in rows:
                 if period == "hour":
-                    bucket_key = close_time[:13]  # '2026-05-16T22'
+                    bucket_key = close_time[:13]
                 else:
-                    bucket_key = close_time[:10]  # '2026-05-16'
+                    bucket_key = close_time[:10]
                 bucket_pnls[bucket_key] += float(pnl)
 
-            # Build cumulative series
             cumulative = 0.0
             result = []
             for bucket_key, label in buckets:

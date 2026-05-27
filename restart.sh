@@ -1,6 +1,9 @@
 #!/bin/bash
 # EvoClaw 重启脚本
-# Usage: ./restart.sh
+# Usage:
+#   ./restart.sh           正常重启
+#   ./restart.sh --watch   看门狗模式（自动检测并重启）
+#   ./restart.sh --status  查看进程状态
 
 set -e
 
@@ -9,115 +12,164 @@ LOG_DIR="$PROJECT_DIR/data"
 PORT=8080
 MAX_WAIT=10
 
-echo "=== EvoClaw Restart ==="
+# ---- 颜色输出 ----
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# 1. 进入项目目录
-cd "$PROJECT_DIR"
-echo "[1/5] Entered $PROJECT_DIR"
-
-# 2. 杀掉所有 EvoClaw 相关 Python 进程
-echo "[2/5] Stopping existing processes..."
-# 先优雅终止（匹配更宽松）
-pkill -f "python.*main\\.py" 2>/dev/null || true
-sleep 1
-
-# 强制清理残留，循环直到进程消失或超时
-waited=0
-while [ $waited -lt $MAX_WAIT ]; do
+# ---- 状态查询 ----
+do_status() {
     pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
     if [ -z "$pids" ]; then
-        echo "  All processes stopped"
-        break
+        echo -e "${RED}EvoClaw: NOT RUNNING${NC}"
+        if [ -f "$LOG_DIR/crash.log" ]; then
+            echo "Recent crashes:"
+            tail -5 "$LOG_DIR/crash.log"
+        fi
+    else
+        for pid in $pids; do
+            uptime_sec=$(ps -p "$pid" -o etimes= 2>/dev/null | tr -d ' ' || echo 0)
+            hours=$((uptime_sec / 3600))
+            mins=$(((uptime_sec % 3600) / 60))
+            mem=$(ps -p "$pid" -o rss= 2>/dev/null | tr -d ' ' || echo 0)
+            mem_mb=$((mem / 1024))
+            echo -e "${GREEN}EvoClaw: RUNNING${NC}  PID=$pid  Uptime=${hours}h${mins}m  RSS=${mem_mb}MB  Port=$PORT"
+        done
+        echo ""
+        echo "Recent logs:"
+        tail -3 "$LOG_DIR/trader.log" 2>/dev/null | sed 's/^/  /'
     fi
-    for pid in $pids; do
-        echo "  Force killing PID $pid"
-        kill -9 "$pid" 2>/dev/null || {
-            owner=$(ps -p "$pid" -o user= 2>/dev/null || echo "unknown")
-            echo "  WARNING: Cannot kill PID $pid (owner: $owner). Permission denied."
-        }
-    done
+}
+
+# ---- 杀进程 ----
+kill_all() {
+    pkill -f "python.*main\\.py" 2>/dev/null || true
     sleep 1
-    waited=$((waited + 1))
-done
-
-# 如果进程仍存在，报错退出
-remaining=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
-if [ -n "$remaining" ]; then
-    echo "  ERROR: Failed to kill processes after ${MAX_WAIT}s: $remaining"
-    ps aux | grep -E "PID|python.*main\\.py" | grep -v grep | sed 's/^/    /'
-    echo "  If owner is root, run as root or configure sudo."
-    exit 1
-fi
-
-# 3. 清理端口占用
-echo "[3/5] Cleaning port $PORT..."
-# 使用 fuser 强制清理端口（如果可用）
-if command -v fuser >/dev/null 2>&1; then
-    fuser -k "${PORT}/tcp" 2>/dev/null || true
-fi
-
-# 循环检查端口释放
-waited=0
-while [ $waited -lt $MAX_WAIT ]; do
-    occupiers=$(lsof -ti :$PORT 2>/dev/null || true)
-    if [ -z "$occupiers" ]; then
-        echo "  Port $PORT is free"
-        break
+    waited=0
+    while [ $waited -lt $MAX_WAIT ]; do
+        pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+        if [ -z "$pids" ]; then
+            echo "  All processes stopped"
+            break
+        fi
+        for pid in $pids; do
+            kill -9 "$pid" 2>/dev/null || true
+        done
+        sleep 1
+        waited=$((waited + 1))
+    done
+    remaining=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+    if [ -n "$remaining" ]; then
+        echo -e "  ${RED}ERROR: Failed to kill processes after ${MAX_WAIT}s: $remaining${NC}"
+        exit 1
     fi
-    for pid in $occupiers; do
-        echo "  Killing port occupier PID $pid"
-        kill -9 "$pid" 2>/dev/null || {
-            owner=$(ps -p "$pid" -o user= 2>/dev/null || echo "unknown")
-            echo "  WARNING: Cannot kill PID $pid (owner: $owner). Permission denied."
-        }
+}
+
+# ---- 清理端口 ----
+clean_port() {
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k "${PORT}/tcp" 2>/dev/null || true
+    fi
+    waited=0
+    while [ $waited -lt $MAX_WAIT ]; do
+        occupiers=$(lsof -ti :$PORT 2>/dev/null || true)
+        if [ -z "$occupiers" ]; then
+            echo "  Port $PORT is free"
+            break
+        fi
+        for pid in $occupiers; do
+            kill -9 "$pid" 2>/dev/null || true
+        done
+        sleep 1
+        waited=$((waited + 1))
     done
-    sleep 1
-    waited=$((waited + 1))
-done
+    if lsof -ti :$PORT >/dev/null 2>&1; then
+        echo -e "  ${RED}ERROR: Port $PORT is still occupied after ${MAX_WAIT}s${NC}"
+        exit 1
+    fi
+}
 
-# 如果端口仍被占用，报错退出
-if lsof -ti :$PORT >/dev/null 2>&1; then
-    echo "  ERROR: Port $PORT is still occupied after ${MAX_WAIT}s"
-    lsof -i :$PORT | sed 's/^/    /'
-    exit 1
-fi
+# ---- 启动服务 ----
+start_service() {
+    cd "$PROJECT_DIR"
+    mkdir -p "$LOG_DIR"
+    export PYTHONPATH=/home/claudeuser/.local/lib/python3.12/site-packages:$PYTHONPATH
+    nohup python3 main.py >> "$LOG_DIR/trader.log" 2>&1 &
+    PID=$!
+    echo "  Started with PID $PID"
+    sleep 3
+    if ps -p "$PID" > /dev/null 2>&1; then
+        echo -e "  ${GREEN}Service is running (PID $PID)${NC}"
+        echo "  Web UI: http://localhost:8080"
+        tail -3 "$LOG_DIR/trader.log" 2>/dev/null | sed 's/^/    /'
+    else
+        echo -e "  ${RED}ERROR: Service failed to start!${NC}"
+        tail -20 "$LOG_DIR/trader.log" 2>/dev/null | sed 's/^/    /'
+        return 1
+    fi
+}
 
-# 4. 清理日志（备份当前主日志，清空 trader.log）
-echo "[4/5] Cleaning logs..."
-if [ -f "$LOG_DIR/trader.log" ]; then
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    mv "$LOG_DIR/trader.log" "$LOG_DIR/trader.log.$TIMESTAMP.bak"
-    echo "  Backed up trader.log -> trader.log.$TIMESTAMP.bak"
-fi
-# 清空 stdout.log
-if [ -f "$LOG_DIR/stdout.log" ]; then
-    > "$LOG_DIR/stdout.log"
-    echo "  Cleared stdout.log"
-fi
-
-# 确保日志目录存在
-mkdir -p "$LOG_DIR"
-
-# 5. 启动服务
-echo "[5/5] Starting EvoClaw..."
-export PYTHONPATH=/home/claudeuser/.local/lib/python3.12/site-packages:$PYTHONPATH
-nohup python3 main.py > "$LOG_DIR/trader.log" 2>&1 &
-PID=$!
-echo "  Started with PID $PID"
-
-# 等待启动完成
-sleep 3
-
-# 检查是否正常运行
-if ps -p "$PID" > /dev/null 2>&1; then
-    echo "  Service is running (PID $PID)"
-    echo "  Web UI: http://localhost:8080"
-    echo "  Latest logs:"
-    tail -5 "$LOG_DIR/trader.log" | sed 's/^/    /'
+# ---- 正常重启 ----
+do_restart() {
+    echo "=== EvoClaw Restart ==="
+    cd "$PROJECT_DIR"
+    echo "[1/4] Stopping existing processes..."
+    kill_all
+    echo "[2/4] Cleaning port $PORT..."
+    clean_port
+    echo "[3/4] Starting EvoClaw..."
+    start_service
     echo "=== Restart complete ==="
-else
-    echo "  ERROR: Service failed to start!"
-    echo "  Last 20 lines of log:"
-    tail -20 "$LOG_DIR/trader.log" | sed 's/^/    /'
-    exit 1
-fi
+}
+
+# ---- 看门狗模式 ----
+do_watchdog() {
+    echo -e "${YELLOW}=== EvoClaw Watchdog Started ===${NC}"
+    echo "  Check interval: 30s"
+    echo "  Crash log: $LOG_DIR/crash.log"
+    echo ""
+
+    mkdir -p "$LOG_DIR"
+
+    while true; do
+        pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+
+        if [ -z "$pids" ]; then
+            TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+            echo -e "${RED}[$TIMESTAMP] Process died! Restarting...${NC}"
+            echo "[$TIMESTAMP] CRASH: process not found, restarting" >> "$LOG_DIR/crash.log"
+
+            kill_all 2>/dev/null || true
+            clean_port 2>/dev/null || true
+
+            # 备份 crash 前的最后日志
+            if [ -f "$LOG_DIR/trader.log" ]; then
+                echo "  Last 10 lines before crash:" >> "$LOG_DIR/crash.log"
+                tail -10 "$LOG_DIR/trader.log" 2>/dev/null | sed 's/^/    /' >> "$LOG_DIR/crash.log"
+                echo "" >> "$LOG_DIR/crash.log"
+            fi
+
+            if start_service; then
+                echo -e "${GREEN}[$TIMESTAMP] Service restarted successfully${NC}"
+            else
+                echo -e "${RED}[$TIMESTAMP] Restart failed, retrying in 30s...${NC}"
+            fi
+        fi
+
+        sleep 30
+    done
+}
+
+# ---- 入口 ----
+case "${1:-}" in
+    --status|-s)
+        do_status
+        ;;
+    --watch|-w)
+        do_watchdog
+        ;;
+    *)
+        do_restart
+        ;;
+esac
