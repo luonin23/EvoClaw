@@ -1,6 +1,5 @@
 import sqlite3
 import os
-import threading
 import logging
 from datetime import datetime, timezone
 
@@ -13,7 +12,6 @@ class Database:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.lock = threading.Lock()
         self._init_tables()
 
     def _init_tables(self):
@@ -80,45 +78,43 @@ class Database:
         self._rebuild_stats()
 
     def _rebuild_stats(self):
-        with self.lock:
-            self.conn.execute("DELETE FROM trade_stats")
-            row = self.conn.execute("""
-                SELECT
-                    COALESCE(SUM(pnl), 0),
-                    COALESCE(SUM(fee), 0),
-                    COALESCE(MAX(pnl_rate), 0),
-                    COUNT(CASE WHEN pnl > 0 THEN 1 END),
-                    COUNT(CASE WHEN pnl <= 0 THEN 1 END),
-                    COUNT(*),
-                    COUNT(CASE WHEN type = 'all_close' THEN 1 END),
-                    COUNT(CASE WHEN type = 'pair_close' THEN 1 END),
-                    COUNT(CASE WHEN type = 'single' THEN 1 END),
-                    COALESCE(SUM(CASE WHEN side = 'long' THEN pnl END), 0),
-                    COUNT(CASE WHEN side = 'long' THEN 1 END),
-                    COALESCE(SUM(CASE WHEN side = 'short' THEN pnl END), 0),
-                    COUNT(CASE WHEN side = 'short' THEN 1 END)
-                FROM trades
-            """).fetchone()
-            keys = [
-                "total_pnl", "total_fee", "max_pnl_rate",
-                "win_count", "loss_count", "total_count",
-                "all_close_count", "pair_close_count", "single_count",
-                "long_pnl", "long_count", "short_pnl", "short_count"
-            ]
-            for k, v in zip(keys, row):
-                self.conn.execute(
-                    "INSERT INTO trade_stats (key, value) VALUES (?, ?)",
-                    (k, v)
-                )
-            self.conn.commit()
+        self.conn.execute("DELETE FROM trade_stats")
+        row = self.conn.execute("""
+            SELECT
+                COALESCE(SUM(pnl), 0),
+                COALESCE(SUM(fee), 0),
+                COALESCE(MAX(pnl_rate), 0),
+                COUNT(CASE WHEN pnl > 0 THEN 1 END),
+                COUNT(CASE WHEN pnl <= 0 THEN 1 END),
+                COUNT(*),
+                COUNT(CASE WHEN type = 'all_close' THEN 1 END),
+                COUNT(CASE WHEN type = 'pair_close' THEN 1 END),
+                COUNT(CASE WHEN type = 'single' THEN 1 END),
+                COALESCE(SUM(CASE WHEN side = 'long' THEN pnl END), 0),
+                COUNT(CASE WHEN side = 'long' THEN 1 END),
+                COALESCE(SUM(CASE WHEN side = 'short' THEN pnl END), 0),
+                COUNT(CASE WHEN side = 'short' THEN 1 END)
+            FROM trades
+        """).fetchone()
+        keys = [
+            "total_pnl", "total_fee", "max_pnl_rate",
+            "win_count", "loss_count", "total_count",
+            "all_close_count", "pair_close_count", "single_count",
+            "long_pnl", "long_count", "short_pnl", "short_count"
+        ]
+        for k, v in zip(keys, row):
+            self.conn.execute(
+                "INSERT INTO trade_stats (key, value) VALUES (?, ?)",
+                (k, v)
+            )
+        self.conn.commit()
 
     def _inc_stat(self, key: str, delta: float):
-        with self.lock:
-            self.conn.execute(
-                "INSERT INTO trade_stats (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
-                (key, delta)
-            )
+        self.conn.execute(
+            "INSERT INTO trade_stats (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
+            (key, delta)
+        )
 
     def insert_trade(self, trade: dict):
         pnl = trade["pnl"]
@@ -126,61 +122,58 @@ class Database:
         pnl_rate = trade["pnl_rate"]
         side = trade["side"]
         ttype = trade.get("type", "single")
-        with self.lock:
+        self.conn.execute(
+            """INSERT INTO trades
+               (symbol, side, type, open_time, close_time,
+                entry_price, exit_price, amount, pnl, pnl_rate, fee)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trade["symbol"], side, ttype,
+                trade.get("open_time", ""), trade["close_time"],
+                trade["entry_price"], trade["exit_price"],
+                trade["amount"], pnl, pnl_rate, fee,
+            ),
+        )
+        self._inc_stat("total_pnl", pnl)
+        self._inc_stat("total_fee", fee)
+        self._inc_stat("total_count", 1)
+        if pnl > 0:
+            self._inc_stat("win_count", 1)
+        else:
+            self._inc_stat("loss_count", 1)
+        if ttype == "all_close":
+            self._inc_stat("all_close_count", 1)
+        elif ttype == "pair_close":
+            self._inc_stat("pair_close_count", 1)
+        else:
+            self._inc_stat("single_count", 1)
+        if side == "long":
+            self._inc_stat("long_pnl", pnl)
+            self._inc_stat("long_count", 1)
+        else:
+            self._inc_stat("short_pnl", pnl)
+            self._inc_stat("short_count", 1)
+        cur_max = self.conn.execute("SELECT value FROM trade_stats WHERE key='max_pnl_rate'").fetchone()
+        if cur_max is None or pnl_rate > cur_max[0]:
             self.conn.execute(
-                """INSERT INTO trades
-                   (symbol, side, type, open_time, close_time,
-                    entry_price, exit_price, amount, pnl, pnl_rate, fee)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    trade["symbol"], side, ttype,
-                    trade.get("open_time", ""), trade["close_time"],
-                    trade["entry_price"], trade["exit_price"],
-                    trade["amount"], pnl, pnl_rate, fee,
-                ),
+                "INSERT INTO trade_stats (key, value) VALUES ('max_pnl_rate', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (pnl_rate,)
             )
-            self._inc_stat("total_pnl", pnl)
-            self._inc_stat("total_fee", fee)
-            self._inc_stat("total_count", 1)
-            if pnl > 0:
-                self._inc_stat("win_count", 1)
-            else:
-                self._inc_stat("loss_count", 1)
-            if ttype == "all_close":
-                self._inc_stat("all_close_count", 1)
-            elif ttype == "pair_close":
-                self._inc_stat("pair_close_count", 1)
-            else:
-                self._inc_stat("single_count", 1)
-            if side == "long":
-                self._inc_stat("long_pnl", pnl)
-                self._inc_stat("long_count", 1)
-            else:
-                self._inc_stat("short_pnl", pnl)
-                self._inc_stat("short_count", 1)
-            cur_max = self.conn.execute("SELECT value FROM trade_stats WHERE key='max_pnl_rate'").fetchone()
-            if cur_max is None or pnl_rate > cur_max[0]:
-                self.conn.execute(
-                    "INSERT INTO trade_stats (key, value) VALUES ('max_pnl_rate', ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                    (pnl_rate,)
-                )
-            self.conn.commit()
+        self.conn.commit()
 
     # ===== Open positions tracking =====
 
     def get_slot(self, symbol: str, side: str) -> int | None:
-        with self.lock:
-            row = self.conn.execute(
-                "SELECT slot_index FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
-            ).fetchone()
+        row = self.conn.execute(
+            "SELECT slot_index FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
+        ).fetchone()
         return row[0] if row and row[0] >= 0 else None
 
     def get_used_slots(self) -> set[int]:
-        with self.lock:
-            rows = self.conn.execute(
-                "SELECT slot_index FROM open_positions WHERE slot_index >= 0"
-            ).fetchall()
+        rows = self.conn.execute(
+            "SELECT slot_index FROM open_positions WHERE slot_index >= 0"
+        ).fetchall()
         return {r[0] for r in rows}
 
     def _allocate_slot(self, symbol: str, side: str) -> int | None:
@@ -213,48 +206,42 @@ class Database:
         if open_fee is None:
             open_fee = entry_price * amount * 0.0005
         slot = self._allocate_slot(symbol, side)
-        with self.lock:
-            self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
-            self.conn.execute(
-                """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee, slot_index)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (symbol, side, order_id, now, entry_price, amount, open_fee, slot if slot is not None else -1),
-            )
-            self.conn.commit()
+        self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
+        self.conn.execute(
+            """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee, slot_index)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, side, order_id, now, entry_price, amount, open_fee, slot if slot is not None else -1),
+        )
+        self.conn.commit()
 
     def remove_open(self, symbol: str, side: str):
-        with self.lock:
-            self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
-            self.conn.commit()
+        self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
+        self.conn.commit()
 
     def get_open_positions(self) -> list[dict]:
-        with self.lock:
-            rows = self.conn.execute(
-                "SELECT symbol, side, order_id, entry_time, entry_price, amount, margin_called, open_fee, slot_index FROM open_positions"
-            ).fetchall()
+        rows = self.conn.execute(
+            "SELECT symbol, side, order_id, entry_time, entry_price, amount, margin_called, open_fee, slot_index FROM open_positions"
+        ).fetchall()
         columns = ["symbol", "side", "order_id", "entry_time", "entry_price", "amount", "margin_called", "open_fee", "slot_index"]
         return [dict(zip(columns, r)) for r in rows]
 
     def mark_margin_called(self, symbol: str, side: str, new_amount: float, added_fee: float = 0):
-        with self.lock:
-            self.conn.execute(
-                "UPDATE open_positions SET margin_called=1, amount=?, open_fee = open_fee + ? WHERE symbol=? AND side=?",
-                (new_amount, added_fee, symbol, side),
-            )
-            self.conn.commit()
+        self.conn.execute(
+            "UPDATE open_positions SET margin_called=1, amount=?, open_fee = open_fee + ? WHERE symbol=? AND side=?",
+            (new_amount, added_fee, symbol, side),
+        )
+        self.conn.commit()
 
     def has_open(self, symbol: str, side: str) -> bool:
-        with self.lock:
-            row = self.conn.execute(
-                "SELECT 1 FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
-            ).fetchone()
-            return row is not None
+        row = self.conn.execute(
+            "SELECT 1 FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
+        ).fetchone()
+        return row is not None
 
     # ===== Stats =====
 
     def get_stats(self, account_balance: float = 0) -> dict:
-        with self.lock:
-            rows = self.conn.execute("SELECT key, value FROM trade_stats").fetchall()
+        rows = self.conn.execute("SELECT key, value FROM trade_stats").fetchall()
         stats = {k: v for k, v in rows}
         total_pnl = stats.get("total_pnl", 0)
         total_fee = stats.get("total_fee", 0)
@@ -286,13 +273,12 @@ class Database:
         }
 
     def get_recent_trades(self, limit: int = 50, offset: int = 0) -> list[dict]:
-        with self.lock:
-            rows = self.conn.execute(
-                """SELECT id, symbol, side, type, open_time, close_time,
-                          entry_price, exit_price, amount, pnl, pnl_rate, fee
-                   FROM trades ORDER BY id DESC LIMIT ? OFFSET ?""",
-                (limit, offset),
-            ).fetchall()
+        rows = self.conn.execute(
+            """SELECT id, symbol, side, type, open_time, close_time,
+                      entry_price, exit_price, amount, pnl, pnl_rate, fee
+               FROM trades ORDER BY id DESC LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
         columns = [
             "id", "symbol", "side", "type", "open_time", "close_time",
             "entry_price", "exit_price", "amount", "pnl", "pnl_rate", "fee",
@@ -300,57 +286,50 @@ class Database:
         return [dict(zip(columns, r)) for r in rows]
 
     def get_total_trades(self) -> int:
-        with self.lock:
-            row = self.conn.execute("SELECT COUNT(*) FROM trades").fetchone()
+        row = self.conn.execute("SELECT COUNT(*) FROM trades").fetchone()
         return row[0] if row else 0
 
     def get_historical_worst_trade(self) -> dict | None:
-        with self.lock:
-            row = self.conn.execute(
-                "SELECT symbol, side, pnl, pnl_rate FROM trades WHERE pnl < 0 ORDER BY pnl ASC LIMIT 1"
-            ).fetchone()
+        row = self.conn.execute(
+            "SELECT symbol, side, pnl, pnl_rate FROM trades WHERE pnl < 0 ORDER BY pnl ASC LIMIT 1"
+        ).fetchone()
         if row:
             return {"symbol": row[0], "side": row[1], "pnl": round(row[2], 4), "pnl_rate": round(row[3], 6)}
         return None
 
     def increment_margin_call_count(self, increment: int = 1):
-        with self.lock:
-            self.conn.execute(
-                "INSERT INTO runtime_stats (key, value, updated_at) VALUES ('margin_call_count', ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=value+excluded.value, updated_at=excluded.updated_at",
-                (increment, datetime.now(timezone.utc).isoformat()),
-            )
-            self.conn.commit()
+        self.conn.execute(
+            "INSERT INTO runtime_stats (key, value, updated_at) VALUES ('margin_call_count', ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=value+excluded.value, updated_at=excluded.updated_at",
+            (increment, datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
 
     # ===== Runtime stats =====
 
     def get_runtime_stat(self, key: str, default: float = 0) -> float:
-        with self.lock:
-            row = self.conn.execute(
-                "SELECT value FROM runtime_stats WHERE key=?", (key,)
-            ).fetchone()
+        row = self.conn.execute(
+            "SELECT value FROM runtime_stats WHERE key=?", (key,)
+        ).fetchone()
         return row[0] if row else default
 
     def set_runtime_stat(self, key: str, value: float):
-        with self.lock:
-            self.conn.execute(
-                "INSERT INTO runtime_stats (key, value, updated_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (key, value, datetime.now(timezone.utc).isoformat()),
-            )
-            self.conn.commit()
+        self.conn.execute(
+            "INSERT INTO runtime_stats (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
 
     def checkpoint(self):
         try:
-            with self.lock:
-                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
             log.warning(f"WAL checkpoint failed: {e}")
 
     def checkpoint_restart(self):
         try:
-            with self.lock:
-                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception as e:
             log.warning(f"WAL checkpoint failed: {e}")
 

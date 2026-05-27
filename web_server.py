@@ -50,7 +50,6 @@ class WebServer:
         self._api_cache_ttl = 15
         self._api_cache_max = 20
         self._balance_cache = (0, 0.0)
-        self._cache_lock = asyncio.Lock()
         self._system_cache = (0, None)
 
     def _load_config(self):
@@ -85,11 +84,10 @@ class WebServer:
 
         # Only cache dict data (not Response objects)
         if isinstance(data, dict):
-            async with self._cache_lock:
-                if len(self._api_cache) >= self._api_cache_max:
-                    oldest = min(self._api_cache, key=lambda k: self._api_cache[k][0])
-                    del self._api_cache[oldest]
-                self._api_cache[key] = (now, data)
+            if len(self._api_cache) >= self._api_cache_max:
+                oldest = min(self._api_cache, key=lambda k: self._api_cache[k][0])
+                del self._api_cache[oldest]
+            self._api_cache[key] = (now, data)
 
         return resp
 

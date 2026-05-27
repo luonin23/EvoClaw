@@ -18,7 +18,6 @@ class Trader:
         self._config_mtime = os.path.getmtime(self.config_path) if os.path.exists(self.config_path) else 0
         self._candidate_symbols = []
         self._last_symbol_refresh = 0
-        self._refresh_lock = asyncio.Lock()
         self._fail2027_counts: dict[str, int] = {}
         self._fail2027_max = 5
         self._fail2027_skipped_at: dict[str, float] = {}
@@ -112,28 +111,26 @@ class Trader:
         cfg = self._get_config()
         interval = cfg.get("symbol_refresh_interval", 86400)
         now = datetime.now(timezone.utc).timestamp()
-        async with self._refresh_lock:
-            if not self._candidate_symbols or (now - self._last_symbol_refresh) >= interval:
-                volume_threshold = cfg.get("volume_threshold", 0)
-                price_threshold = cfg.get("price_threshold", 0)
-                if volume_threshold == 0 and price_threshold == 0:
-                    self._candidate_symbols = cfg.get("symbols", [])
-                else:
-                    self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
-                self._last_symbol_refresh = now
-                log.info(f"Symbols refreshed: {len(self._candidate_symbols)} (interval={interval}s)")
-
-    async def refresh_symbols_now(self):
-        async with self._refresh_lock:
-            cfg = self._get_config()
+        if not self._candidate_symbols or (now - self._last_symbol_refresh) >= interval:
             volume_threshold = cfg.get("volume_threshold", 0)
             price_threshold = cfg.get("price_threshold", 0)
             if volume_threshold == 0 and price_threshold == 0:
                 self._candidate_symbols = cfg.get("symbols", [])
             else:
                 self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
-            self._last_symbol_refresh = datetime.now(timezone.utc).timestamp()
-            log.info(f"Symbols manually refreshed: {len(self._candidate_symbols)}")
+            self._last_symbol_refresh = now
+            log.info(f"Symbols refreshed: {len(self._candidate_symbols)} (interval={interval}s)")
+
+    async def refresh_symbols_now(self):
+        cfg = self._get_config()
+        volume_threshold = cfg.get("volume_threshold", 0)
+        price_threshold = cfg.get("price_threshold", 0)
+        if volume_threshold == 0 and price_threshold == 0:
+            self._candidate_symbols = cfg.get("symbols", [])
+        else:
+            self._candidate_symbols = await self.client.get_candidate_symbols(volume_threshold, price_threshold)
+        self._last_symbol_refresh = datetime.now(timezone.utc).timestamp()
+        log.info(f"Symbols manually refreshed: {len(self._candidate_symbols)}")
         return self._candidate_symbols
 
     # ====================================================================
