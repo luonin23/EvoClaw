@@ -221,6 +221,9 @@ async def main():
         loop.add_signal_handler(sig, trader.stop)
 
     await trader.run()
+    # Graceful shutdown: close exchange connections to prevent Unclosed connector errors
+    await client.close()
+    await runner.cleanup()
     db.close()
     log.info("Shutdown complete")
 

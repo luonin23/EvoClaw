@@ -12,14 +12,19 @@ class ExchangeClient:
         kwargs = config.get("exchange_kwargs", {}).copy()
         kwargs.setdefault("enableRateLimit", True)
         kwargs.setdefault("timeout", 10000)
+        # Close any stale aiohttp sessions inside ccxt (prevents Unclosed connector)
+        kwargs.setdefault("http_proxy", None)
         self.exchange = exchange_class(kwargs)
         self.market_info = {}
         self.symbol_map = {}
         self._reverse_map = {}
         self._prices = {}
+        self._closed = False
 
     async def _safe_call(self, coro, timeout=10):
         """Wrap ccxt call with hard timeout to prevent event loop blocking."""
+        if self._closed:
+            raise RuntimeError("ExchangeClient already closed")
         try:
             return await asyncio.wait_for(coro, timeout=timeout)
         except asyncio.TimeoutError:
@@ -27,6 +32,17 @@ class ExchangeClient:
             raise
         except Exception:
             raise
+
+    async def close(self):
+        """Close the ccxt exchange and release all aiohttp connections."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await asyncio.wait_for(self.exchange.close(), timeout=5)
+            log.info("Exchange client closed cleanly")
+        except Exception as e:
+            log.warning(f"Exchange close warning: {e}")
 
     async def load_markets(self):
         markets = await self._safe_call(self.exchange.load_markets(), timeout=20)
