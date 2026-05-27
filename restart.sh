@@ -44,21 +44,37 @@ do_status() {
 
 # ---- 杀进程 ----
 kill_all() {
-    pkill -f "python.*main\\.py" 2>/dev/null || true
-    sleep 1
+    # Step 1: graceful shutdown with SIGTERM
+    pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "  Sending SIGTERM to $pids"
+        for pid in $pids; do
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+    fi
+
+    # Step 2: wait up to 8s for graceful exit
     waited=0
-    while [ $waited -lt $MAX_WAIT ]; do
+    while [ $waited -lt 8 ]; do
         pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
         if [ -z "$pids" ]; then
-            echo "  All processes stopped"
-            break
+            echo "  All processes stopped gracefully"
+            return 0
         fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    # Step 3: force kill remaining
+    pids=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "  Force killing remaining: $pids"
         for pid in $pids; do
             kill -9 "$pid" 2>/dev/null || true
         done
         sleep 1
-        waited=$((waited + 1))
-    done
+    fi
+
     remaining=$(pgrep -f "python.*main\\.py" 2>/dev/null || true)
     if [ -n "$remaining" ]; then
         echo -e "  ${RED}ERROR: Failed to kill processes after ${MAX_WAIT}s: $remaining${NC}"
@@ -95,7 +111,9 @@ start_service() {
     cd "$PROJECT_DIR"
     mkdir -p "$LOG_DIR"
     export PYTHONPATH=/home/claudeuser/.local/lib/python3.12/site-packages:$PYTHONPATH
-    nohup python3 main.py >> "$LOG_DIR/trader.log" 2>&1 &
+    # Redirect stdout/stderr to /dev/null because main.py uses RotatingFileHandler
+    # for trader.log. If we redirect stdout to trader.log too, every log appears twice.
+    nohup python3 main.py > /dev/null 2>&1 &
     PID=$!
     echo "  Started with PID $PID"
     sleep 3

@@ -3,9 +3,11 @@ import gc
 import logging
 import signal
 import os
+import sys
 import json
 import glob
 import logging.handlers
+import fcntl
 from aiohttp import web
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -15,6 +17,32 @@ from exchange_client import ExchangeClient
 from database import Database
 from trader import Trader
 from web_server import WebServer
+
+
+PID_FILE = "data/evoclaw.pid"
+
+
+def _acquire_pid_lock():
+    """Prevent multiple EvoClaw processes from running simultaneously."""
+    try:
+        fd = os.open(PID_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+        os.fsync(fd)
+        return fd
+    except (OSError, IOError):
+        print("ERROR: Another EvoClaw instance is already running. Exiting.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _release_pid_lock(fd):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+        os.remove(PID_FILE)
+    except Exception:
+        pass
 
 
 class ErrorLogFilter(logging.Filter):
@@ -229,4 +257,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    pid_fd = _acquire_pid_lock()
+    try:
+        asyncio.run(main())
+    finally:
+        _release_pid_lock(pid_fd)

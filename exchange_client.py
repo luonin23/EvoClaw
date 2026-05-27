@@ -39,6 +39,10 @@ class ExchangeClient:
             return
         self._closed = True
         try:
+            # Close the underlying aiohttp session first to prevent leaks
+            session = getattr(self.exchange, 'session', None)
+            if session and hasattr(session, 'close'):
+                await asyncio.wait_for(session.close(), timeout=3)
             await asyncio.wait_for(self.exchange.close(), timeout=5)
             log.info("Exchange client closed cleanly")
         except Exception as e:
