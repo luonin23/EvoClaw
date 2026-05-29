@@ -513,6 +513,18 @@ body::after{
 .log-type-margin{color:var(--error)}
 .log-type-all{color:var(--warning)}
 .log-type-pair{color:#a78bfa}
+.config-panel-locked{position:relative;filter:blur(8px);pointer-events:none;user-select:none;min-height:300px}
+#panel-config{position:relative}
+#panel-config.config-locked #configFormBody{filter:blur(12px);pointer-events:none;user-select:none}
+.config-lock-overlay{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:100;background:var(--bg)}
+.config-lock-box{text-align:center;padding:40px 48px;background:var(--bg-main);border:1px solid var(--border);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.config-lock-icon{font-size:48px;color:var(--accent);margin-bottom:12px}
+.config-lock-title{font-size:20px;font-weight:700;margin-bottom:6px}
+.config-lock-desc{font-size:13px;color:var(--text-muted);margin-bottom:20px}
+.config-lock-input-wrap{margin-bottom:12px}
+.config-lock-input-wrap input{padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);color:var(--text);font-size:16px;width:220px;text-align:center;outline:none}
+.config-lock-input-wrap input:focus{border-color:var(--accent)}
+.config-lock-error{font-size:12px;color:var(--error);min-height:18px;margin-bottom:6px}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
@@ -673,6 +685,21 @@ body::after{
 <!-- Tab 3: Config -->
 <div id="panel-config" class="tab-panel">
 
+  <!-- 密码验证遮罩 -->
+  <div id="configLockOverlay" class="config-lock-overlay">
+    <div class="config-lock-box">
+      <div class="config-lock-icon"><i class="ph ph-lock"></i></div>
+      <div class="config-lock-title">交易配置已锁定</div>
+      <div class="config-lock-desc">请输入密码查看交易配置</div>
+      <div class="config-lock-input-wrap">
+        <input type="password" id="configPasswordInput" placeholder="请输入密码" onkeydown="if(event.key==='Enter')unlockConfig()" autocomplete="off">
+      </div>
+      <div id="configLockError" class="config-lock-error"></div>
+      <button class="btn btn-primary" onclick="unlockConfig()"><i class="ph ph-unlock"></i> 解锁</button>
+    </div>
+  </div>
+
+  <div id="configFormBody">
   <div class="config-group">
     <div class="config-group-title"><i class="ph ph-funnel"></i> 币种筛选</div>
     <div class="form-grid">
@@ -765,6 +792,9 @@ body::after{
 
 </div><!-- /app-shell -->
 <script>
+const CONFIG_PASSWORD = "19830422";
+let _configUnlocked = false;
+
 let trading = true;
 let currentTab = 'dashboard';
 window.frontendConfig = { matrix_slots: 100, matrix_columns: 10 };
@@ -790,7 +820,28 @@ function switchTab(tab) {
   document.getElementById('panel-' + tab).classList.add('active');
   if (tab === 'dashboard') { loadDashboardView(); }
   else if (tab === 'matrix') { loadMatrixTab(); }
-  else if (tab === 'config') { loadConfig(); }
+  else if (tab === 'config') {
+    _configUnlocked = false;
+    document.getElementById('panel-config').classList.add('config-locked');
+    document.getElementById('configLockOverlay').style.display = 'flex';
+    document.getElementById('configPasswordInput').value = '';
+    document.getElementById('configLockError').textContent = '';
+    document.getElementById('configPasswordInput').focus();
+    loadConfig();
+  }
+}
+
+function unlockConfig() {
+  const pwd = document.getElementById('configPasswordInput').value;
+  if (pwd === CONFIG_PASSWORD) {
+    _configUnlocked = true;
+    document.getElementById('panel-config').classList.remove('config-locked');
+    document.getElementById('configLockOverlay').style.display = 'none';
+  } else {
+    document.getElementById('configLockError').textContent = '密码错误，请重试';
+    document.getElementById('configPasswordInput').value = '';
+    document.getElementById('configPasswordInput').focus();
+  }
 }
 
 async function api(path) {
@@ -856,6 +907,7 @@ function parseIntVal(id, fallback) {
 
 let _saving = false;
 async function saveConfig() {
+  if (!_configUnlocked) { alert('请先解锁交易配置页面'); return; }
   if (_saving) return;
   _saving = true;
   const btn = document.getElementById('btnSave');
