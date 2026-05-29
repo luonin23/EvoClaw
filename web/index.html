@@ -349,39 +349,51 @@ body::after{
 .pos-cell.no-right::after{display:none}
 .pos-cell.no-bottom::before{display:none}
 
-#panel-matrix{position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;width:100vw;padding:12px;max-width:none}
-.matrix-toolbar{display:flex;justify-content:center;gap:8px;margin-bottom:12px}
-.matrix-toolbar .btn{height:32px;padding:0 14px;font-size:12px}
-.full-matrix{contain:layout;display:grid;grid-template-columns:repeat(10,1fr);gap:6px;width:100%;max-width:100%}
-.full-cell{
-  aspect-ratio:1;border-radius:var(--radius-sm);display:flex;flex-direction:column;
-  align-items:center;justify-content:center;padding:3px;font-family:var(--font-mono);
-  color:#fff;cursor:pointer;transition:all 0.15s;position:relative;
-  border:2px solid transparent;overflow:hidden;text-align:center;line-height:1.2;background:transparent;
-}
-.full-cell:hover{transform:scale(1.05);z-index:2;border-color:rgba(255,255,255,0.4)}
-.full-cell.vacant{background:transparent;border:1px solid var(--border-subtle);color:var(--text-tertiary)}
-.full-cell.side-long .fc-sym,.full-cell.side-long .fc-dir{color:var(--success)}
-.full-cell.side-short .fc-sym,.full-cell.side-short .fc-dir{color:var(--error)}
-.full-cell.pnl-profit{border-color:var(--success);box-shadow:inset 0 0 8px var(--success-glow)}
-.full-cell.pnl-loss{border-color:var(--error);box-shadow:inset 0 0 8px var(--error-glow)}
-.full-cell .fc-sym{font-size:10px;font-weight:700;word-break:break-all;line-height:1.1;width:100%}
-.full-cell .fc-dir{font-size:9px;opacity:0.9}
-.full-cell .fc-price{font-size:9px;opacity:0.85}
-.full-cell .fc-amt{font-size:9px;opacity:0.85}
-.full-cell .fc-pnl{font-size:10px;font-weight:700}
-.full-cell .fc-rate{font-size:9px;opacity:0.9}
-@media(max-width:900px){.full-cell .fc-price,.full-cell .fc-amt{display:none}.full-cell .fc-sym{font-size:10px}.full-cell .fc-pnl{font-size:9px}}
-@media(max-width:640px){.full-cell .fc-dir,.full-cell .fc-rate{display:none}.full-cell .fc-sym{font-size:9px}.full-cell .fc-pnl{font-size:8px}}
-@media(max-width:400px){.full-cell{padding:2px}.full-cell .fc-sym{font-size:8px}.full-cell .fc-pnl{font-size:7px}}
+#panel-matrix{position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;width:100vw;padding:12px 12px 0;max-width:none}
 
-.pos-tooltip{
-  position:fixed;background:rgba(7,10,18,0.95);border:1px solid var(--border-medium);
-  border-radius:var(--radius-md);padding:10px 14px;font-size:11px;color:var(--text-primary);
-  z-index:9999;pointer-events:none;white-space:nowrap;display:none;line-height:1.7;
-  box-shadow:var(--shadow-md), 0 0 40px rgba(0,0,0,0.4);
-  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);font-family:var(--font-mono);
+/* 矩阵统计栏 */
+.matrix-header{display:flex;align-items:center;gap:16px;padding:10px 16px 14px;flex-wrap:wrap}
+.matrix-title{font-size:15px;font-weight:700;color:var(--text-primary);letter-spacing:.5px}
+.matrix-title i{color:var(--accent);margin-right:6px}
+.matrix-stats{display:flex;gap:14px;font-size:12px;color:var(--text-secondary);flex-wrap:wrap}
+.matrix-stats .stat-item{display:flex;align-items:center;gap:4px}
+.matrix-stats .stat-item .num{font-family:var(--font-mono);font-weight:600}
+.matrix-stats .stat-profit .num{color:var(--success)}
+.matrix-stats .stat-loss .num{color:var(--error)}
+.matrix-stats .stat-total .num{font-weight:700;font-size:13px}
+.matrix-stats .stat-total .num.positive{color:var(--success)}
+.matrix-stats .stat-total .num.negative{color:var(--error)}
+.matrix-stats .divider{width:1px;background:var(--border-subtle);align-self:stretch}
+
+/* 全量矩阵网格 — USDT市值决定列宽 */
+.full-matrix{display:grid;grid-template-columns:repeat(14,1fr);gap:6px;width:100%;max-width:100%}
+.full-cell{
+  border-radius:6px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:3px 2px;font-family:var(--font-mono);
+  color:#fff;cursor:pointer;position:relative;overflow:hidden;text-align:center;line-height:1.15;
+  border:1.5px solid transparent;transition:all 0.15s ease;
 }
+/* span=1 保持正方形，多列格子拉伸填满行高（与同行的1列格子等高，变成长方形） */
+.full-cell[data-span="1"]{aspect-ratio:1}
+.full-cell:not([data-span="1"]){align-self:stretch}
+.full-cell:hover{z-index:2;border-color:rgba(255,255,255,0.5);box-shadow:0 4px 20px rgba(0,0,0,0.6);transform:scale(1.05)}
+.full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary)}
+.full-cell .fc-sym{font-size:clamp(7px,0.9vw,12px);font-weight:500;word-break:break-all;line-height:1.2;width:100%;opacity:0.85;margin-bottom:1px}
+.full-cell .fc-rate{font-size:clamp(9px,1.3vw,17px);font-weight:700;line-height:1.1}
+/* 小格子(span=1)用较小字体 */
+.full-cell[data-span="1"] .fc-sym{font-size:clamp(6px,0.7vw,10px)}
+.full-cell[data-span="1"] .fc-rate{font-size:clamp(8px,1vw,13px)}
+
+/* tooltip 毛玻璃升级 */
+.pos-tooltip{
+  position:fixed;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  background:rgba(7,10,18,0.85);border:1px solid rgba(255,255,255,0.1);
+  border-radius:10px;padding:10px 14px;font-size:12px;line-height:1.6;
+  color:var(--text-primary);font-family:var(--font-mono);
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);pointer-events:none;z-index:999;
+  transition:opacity 0.15s;display:none;
+}
+
 
 .tile{opacity:0;animation:tileEnter 0.5s cubic-bezier(0.16,1,0.3,1) forwards}
 .tile:nth-child(1){animation-delay:0.05s}
@@ -643,6 +655,18 @@ body::after{
 
 <!-- Tab 2: Matrix -->
 <div id="panel-matrix" class="tab-panel">
+  <!-- 矩阵统计栏 -->
+  <div class="matrix-header" id="matrixHeader">
+    <div class="matrix-title"><i class="ph ph-grid-nine"></i>持仓矩阵</div>
+    <div class="matrix-stats" id="matrixStats">
+      <span class="stat-item">总持仓: <strong class="num" id="msTotalCount">--</strong></span>
+      <span class="divider"></span>
+      <span class="stat-item stat-profit">盈利: <strong class="num" id="msProfitCount">--</strong></span>
+      <span class="stat-item stat-loss">亏损: <strong class="num" id="msLossCount">--</strong></span>
+      <span class="divider"></span>
+      <span class="stat-item stat-total">总盈亏: <strong class="num" id="msTotalPnl">--</strong></span>
+    </div>
+  </div>
   <div id="fullMatrix" class="full-matrix"></div>
 </div>
 
@@ -1095,7 +1119,9 @@ async function loadPositionsMap(posData) {
         const idx = parseInt(cell.dataset.index);
         const slot = window._posMapSlots ? window._posMapSlots[idx] : null;
         if (slot && slot.occupied) {
-          tooltip.innerHTML = '<span style="color:var(--accent);font-weight:700">' + slot.symbol + '</span> ' + (slot.side === 'long' ? '多' : '空') + '<br>合约: ' + slot.contracts + '<br>盈亏: ' + fmtP(slot.pnl) + '<br>盈亏率: ' + fmtR(slot.pnl_rate);
+          const pnlCls = (slot.pnl_rate || 0) >= 0 ? 'text-green' : 'text-red';
+          const sideCls = slot.side === 'long' ? 'text-green' : 'text-red';
+          tooltip.innerHTML = '<span style="color:var(--accent);font-weight:700">' + slot.symbol + '</span> <span class="' + sideCls + '">' + (slot.side === 'long' ? '多' : '空') + '</span><br>合约: ' + slot.contracts + '<br>盈亏: <span class="' + pnlCls + '">' + fmtP(slot.pnl) + '</span><br>盈亏率: <span class="' + pnlCls + '">' + fmtR(slot.pnl_rate) + '</span>';
           tooltip.style.display = 'block';
           const rect = cell.getBoundingClientRect();
           const ttRect = tooltip.getBoundingClientRect();
@@ -1142,71 +1168,141 @@ async function loadPositionsMap(posData) {
   }
 }
 
+function pnlToHeatBg(rate) {
+  // 映射 -50%~+50% 范围
+  const clamped = Math.max(-0.5, Math.min(0.5, rate));
+  // 饱和度: 幅度越大越饱和
+  const sat = Math.min(75, Math.abs(clamped) * 150);
+  // 亮度: 中性时暗(24%)，极端时亮(46%)
+  const lit = 24 + Math.abs(clamped) * 44;
+  if (rate >= 0) {
+    // 盈利: 绿色系 hsl(120~140)
+    const hue = 120 + (1 - Math.abs(clamped) * 2) * 20;
+    return 'hsl(' + hue + ', ' + sat + '%, ' + lit + '%)';
+  } else {
+    // 亏损: 红色系 hsl(0~20)
+    const hue = Math.abs(clamped) * 20;
+    return 'hsl(' + hue + ', ' + sat + '%, ' + lit + '%)';
+  }
+}
+
+function pnlToBorder(rate) {
+  const clamped = Math.max(-0.5, Math.min(0.5, rate));
+  const opacity = 0.15 + Math.abs(clamped) * 0.85;
+  if (rate >= 0) return 'hsla(140, 80%, 55%, ' + opacity.toFixed(2) + ')';
+  return 'hsla(0, 80%, 55%, ' + opacity.toFixed(2) + ')';
+}
+
 async function loadFullMatrix(posData) {
   const d = posData || await api('/api/positions-map');
   if (!d || !d.slots) return;
   const container = document.getElementById('fullMatrix');
   if (!container) return;
-  const cols = window.frontendConfig.matrix_columns || 10;
-  const maxSlots = window.frontendConfig.matrix_slots || 100;
-  container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+  const slots = d.slots;
+  const maxSlots = window.frontendConfig.matrix_slots || 200;
+  const gridCols = window.frontendConfig.matrix_columns || 14;
+  const cols = gridCols;
 
-  if (container.children.length !== maxSlots) {
-    container.innerHTML = '';
-    window._fullMatrixCells = [];
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < maxSlots; i++) {
+  // 按 pnl_rate 升序排列（左上=亏最多，右下=赚最多），截断超过显示上限的
+  const occupied = slots.filter(s => s.occupied).sort((a, b) => a.pnl_rate - b.pnl_rate).slice(0, maxSlots);
+  const totalPos = occupied.length;
+
+  // 计算每格的 USDT 市值
+  const slotValues = occupied.map(s => ({
+    slot: s,
+    usdt: (s.contracts || 0) * (s.entry_price || 0)
+  }));
+  const maxUsdt = Math.max(...slotValues.map(v => v.usdt), 1);
+
+  // 分配列跨度：USDT 市值占比越大，span 越大
+  // span: 1~4 列，对应权重 0~1
+  for (const v of slotValues) {
+    const ratio = v.usdt / maxUsdt;
+    // 1列(轻) ~ 4列(重)
+    v.span = ratio < 0.15 ? 1 : ratio < 0.35 ? 2 : ratio < 0.6 ? 3 : 4;
+  }
+
+  // 贪心行分配：从左到右填充，放不下就换行
+  let row = 1, col = 1;
+  for (const v of slotValues) {
+    if (col + v.span - 1 > gridCols) {
+      row++;
+      col = 1;
+    }
+    v.row = row;
+    v.colStart = col;
+    col += v.span;
+  }
+  const totalRows = row;
+  const displayRows = Math.max(totalRows, Math.ceil(maxSlots / gridCols));
+
+  container.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
+
+  // 重建 DOM
+  container.innerHTML = '';
+  const frag = document.createDocumentFragment();
+
+  // 标记被持仓占用的位置
+  const occSet = new Set();
+  for (const v of slotValues) {
+    for (let c = v.colStart; c < v.colStart + v.span; c++) {
+      occSet.add(v.row + ',' + c);
+    }
+  }
+
+  // 创建空格子
+  for (let r = 1; r <= displayRows; r++) {
+    for (let c = 1; c <= gridCols; c++) {
+      if (occSet.has(r + ',' + c)) continue;
       const cell = document.createElement('div');
       cell.className = 'full-cell vacant';
-      cell.dataset.index = i;
-      const sym = document.createElement('div'); sym.className = 'fc-sym';
-      const dir = document.createElement('div'); dir.className = 'fc-dir';
-      const price = document.createElement('div'); price.className = 'fc-price';
-      const amt = document.createElement('div'); amt.className = 'fc-amt';
-      const pnl = document.createElement('div'); pnl.className = 'fc-pnl';
-      const rate = document.createElement('div'); rate.className = 'fc-rate';
-      cell.appendChild(sym); cell.appendChild(dir); cell.appendChild(price);
-      cell.appendChild(amt); cell.appendChild(pnl); cell.appendChild(rate);
+      cell.style.gridColumn = c;
+      cell.style.gridRow = r;
       frag.appendChild(cell);
-      window._fullMatrixCells.push({ cell, sym, dir, price, amt, pnl, rate });
     }
-    container.appendChild(frag);
   }
 
-  const cells = window._fullMatrixCells || Array.from(container.children).map(c => ({ cell: c }));
-  for (let i = 0; i < maxSlots; i++) {
-    const { cell } = cells[i] || { cell: null };
-    if (!cell) continue;
-    cell.className = 'full-cell vacant';
-    cell.title = '';
-    const { sym, dir, price, amt, pnl, rate } = cells[i];
-    if (sym) sym.textContent = '';
-    if (dir) dir.textContent = '';
-    if (price) price.textContent = '';
-    if (amt) amt.textContent = '';
-    if (pnl) pnl.textContent = '';
-    if (rate) rate.textContent = '';
+  // 创建持仓格子（盖在空格子上面，dom 靠后层级高）
+  let totalPnl = 0, profitCount = 0, lossCount = 0;
+
+  for (const v of slotValues) {
+    const s = v.slot;
+    const isProfit = (s.pnl_rate || 0) >= 0;
+    const isLong = s.side === 'long';
+    const pnlRate = s.pnl_rate || 0;
+
+    const cell = document.createElement('div');
+    cell.className = 'full-cell';
+    cell.style.background = pnlToHeatBg(pnlRate);
+    // 边框由多/空决定：多=绿框，空=红框
+    cell.style.borderColor = isLong ? 'hsla(140, 70%, 50%, 0.6)' : 'hsla(0, 70%, 55%, 0.6)';
+    cell.style.gridColumn = v.colStart + ' / span ' + v.span;
+    cell.style.gridRow = v.row;
+    cell.dataset.span = v.span;
+
+    const displaySym = s.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
+    cell.title = displaySym + '\n' + (isLong ? '多' : '空') + '\n' + (s.entry_price || 0).toFixed(4) + '\n' + (s.contracts || 0).toFixed(2) + '\n' + fmtP(s.pnl) + '\n' + fmtR(s.pnl_rate);
+
+    // 格子内只显示币名（小）和盈亏率（最大）
+    const sym = document.createElement('div'); sym.className = 'fc-sym'; sym.textContent = displaySym;
+    const rate = document.createElement('div'); rate.className = 'fc-rate'; rate.textContent = fmtR(s.pnl_rate);
+    cell.appendChild(sym); cell.appendChild(rate);
+    frag.appendChild(cell);
+
+    totalPnl += s.pnl || 0;
+    if (isProfit) profitCount++; else lossCount++;
   }
-  for (const slot of d.slots) {
-    const i = slot.index;
-    if (i >= maxSlots) continue;
-    const { cell, sym, dir, price, amt, pnl, rate } = cells[i] || { cell: null };
-    if (!cell) continue;
-    const isProfit = (slot.pnl_rate || 0) >= 0;
-    const isLong = slot.side === 'long';
-    let cls = 'full-cell';
-    cls += isLong ? ' side-long' : ' side-short';
-    cls += isProfit ? ' pnl-profit' : ' pnl-loss';
-    cell.className = cls;
-    const displaySym = slot.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
-    cell.title = displaySym + ' ' + (isLong ? '多' : '空') + ' 盈亏:' + fmtP(slot.pnl) + ' 率:' + fmtR(slot.pnl_rate);
-    if (sym) sym.textContent = displaySym;
-    if (dir) dir.textContent = isLong ? '多' : '空';
-    if (price) price.textContent = (slot.entry_price || 0).toFixed(4);
-    if (amt) amt.textContent = (slot.contracts || 0).toFixed(2);
-    if (pnl) pnl.textContent = fmtP(slot.pnl);
-    if (rate) rate.textContent = fmtR(slot.pnl_rate);
-  }
+
+  container.appendChild(frag);
+
+  // 更新统计栏
+  document.getElementById('msTotalCount').textContent = totalPos;
+  document.getElementById('msProfitCount').textContent = profitCount;
+  document.getElementById('msLossCount').textContent = lossCount;
+  const elTotal = document.getElementById('msTotalPnl');
+  const pnlStr = (totalPnl >= 0 ? '+' : '') + fmtP(totalPnl);
+  elTotal.textContent = pnlStr;
+  elTotal.className = 'num ' + (totalPnl >= 0 ? 'positive' : 'negative');
 }
 
 let trendPeriod = 'hour';
