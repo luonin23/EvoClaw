@@ -483,7 +483,7 @@ class Trader:
 
         all_positions = await self.client.get_positions()
         if max_count > 0 and len(all_positions) >= max_count:
-            log.info(f"REPLENISH ALL SKIP: total positions {len(all_positions)} >= limit {max_count}")
+            log.debug(f"REPLENISH ALL SKIP: total positions {len(all_positions)} >= limit {max_count}")
             return
 
         position_map = {}
