@@ -442,7 +442,7 @@ class Trader:
         max_count = cfg.get("max_position_count", 0)
 
         if max_count > 0 and len(all_positions) >= max_count:
-            log.info(f"REPLENISH SKIP: total positions {len(all_positions)} >= limit {max_count}")
+            log.debug(f"REPLENISH SKIP: total positions {len(all_positions)} >= limit {max_count}")
             return
 
         position_map = {}
