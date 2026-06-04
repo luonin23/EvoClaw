@@ -206,6 +206,16 @@ class Trader:
 
         self.db.checkpoint()
 
+    # ========== Helpers ==========
+
+    @staticmethod
+    def _position_value(entry: float, contracts: float, contract_size: float) -> float:
+        return entry * contracts * contract_size
+
+    @staticmethod
+    def _pnl_rate(pnl: float, position_value: float) -> float:
+        return pnl / position_value if position_value > 0 else 0
+
     # ========== All-close ==========
 
     async def check_all_close(self, symbols, sides, all_positions) -> bool:
@@ -232,7 +242,7 @@ class Trader:
             contracts = float(p.get("contracts", 0) or 0)
             market = self.client.get_market_info(sym)
             contract_size = market.get("contractSize", 1) or 1
-            value = entry_price * contracts * contract_size
+            value = self._position_value(entry_price, contracts, contract_size)
 
             if value > 0:
                 total_pnl += pnl
@@ -287,12 +297,12 @@ class Trader:
         contracts = float(position.get("contracts", 0) or 0)
         market = self.client.get_market_info(symbol)
         contract_size = market.get("contractSize", 1) or 1
-        position_value = entry_price * contracts * contract_size
+        position_value = self._position_value(entry_price, contracts, contract_size)
 
         if position_value <= 0:
             return False
 
-        profit_rate = unrealized_pnl / position_value
+        profit_rate = self._pnl_rate(unrealized_pnl, position_value)
         pos_key = f"{symbol}:{pos_side}"
         executed = self._tier_executed.get(pos_key, -1)
 
@@ -346,23 +356,27 @@ class Trader:
             rates = []
             entry_map = {}
             contracts_map = {}
+            market = self.client.get_market_info(sym)
+            cs = market.get("contractSize", 1) or 1
+            total_pnl = 0
+            total_val = 0
             for side in ("long", "short"):
                 p = pair[side]
                 pnl = float(p.get("unrealizedPnl", 0) or 0)
                 entry = float(p.get("entryPrice", 0) or 0)
                 contracts = float(p.get("contracts", 0) or 0)
-                market = self.client.get_market_info(sym)
-                cs = market.get("contractSize", 1) or 1
-                val = entry * contracts * cs
+                val = self._position_value(entry, contracts, cs)
                 if val > 0:
                     rates.append(pnl / val)
+                    total_pnl += pnl
+                    total_val += val
                     entry_map[side] = entry
                     contracts_map[side] = contracts
 
-            if len(rates) < 2:
+            if len(rates) < 2 or total_val <= 0:
                 continue
 
-            avg_rate = sum(rates) / len(rates)
+            avg_rate = total_pnl / total_val
             if avg_rate >= threshold:
                 log.info(f"SINGLE PAIR CLOSE {sym}: avg_rate={avg_rate:.4%} rates={[f'{r:.4%}' for r in rates]}")
                 for side in ("long", "short"):
@@ -406,7 +420,7 @@ class Trader:
             contracts = float(p.get("contracts", 0) or 0)
             market = self.client.get_market_info(sym)
             cs = market.get("contractSize", 1) or 1
-            val = entry * contracts * cs
+            val = self._position_value(entry, contracts, cs)
             if val <= 0:
                 continue
 
@@ -548,8 +562,8 @@ class Trader:
                 else:
                     raw_pnl = (entry_price - exit_price) * contracts * contract_size
             pnl = raw_pnl
-            position_value = entry_price * contracts * contract_size
-            pnl_rate = pnl / position_value if position_value > 0 else 0
+            position_value = self._position_value(entry_price, contracts, contract_size)
+            pnl_rate = self._pnl_rate(pnl, position_value)
 
             close_fee = exit_price * contracts * contract_size * 0.0005
             if open_fee <= 0:
