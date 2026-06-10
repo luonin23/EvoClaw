@@ -1,9 +1,51 @@
 import asyncio
 import logging
 import math
+import re
+import time
 import ccxt.async_support as ccxt
 
 log = logging.getLogger(__name__)
+
+
+def _extract_code(err: str) -> str:
+    """Extract Binance error code from exception string, e.g. '-2019'."""
+    m = re.search(r'"code":(-?\d+)', err)
+    return m.group(1) if m else ""
+
+
+class LogThrottle:
+    """Suppress duplicate log messages within a cooldown window.
+
+    First occurrence of a key is logged normally.  Subsequent occurrences
+    within *cooldown* seconds are silently counted.  When the cooldown
+    expires the next occurrence is logged with a suppressed-count suffix.
+    """
+
+    def __init__(self, cooldown: float = 30.0):
+        self._cooldown = cooldown
+        self._entries: dict[str, tuple[float, int]] = {}  # key -> (last_emit, suppressed)
+
+    def emit(self, key: str) -> str | None:
+        """Return None to suppress, or a string suffix (``""`` = no suffix)."""
+        now = time.monotonic()
+        entry = self._entries.get(key)
+        if entry is None:
+            self._entries[key] = (now, 0)
+            return ""
+        last_emit, suppressed = entry
+        if now - last_emit >= self._cooldown:
+            self._entries[key] = (now, 0)
+            if suppressed > 0:
+                return f" (suppressed {suppressed} in {self._cooldown:.0f}s)"
+            return ""
+        self._entries[key] = (last_emit, suppressed + 1)
+        return None
+
+
+# Module-level throttles — each throttles independently
+_throttle_error = LogThrottle(cooldown=600)   # for ERROR-level repeats (10 min)
+_throttle_warn = LogThrottle(cooldown=600)    # for WARNING-level repeats (10 min)
 
 
 class ExchangeClient:
@@ -170,6 +212,9 @@ class ExchangeClient:
                 return 1
             contract_size = float(market.get("contractSize", 1) or 1)
             min_notional = float((market.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
+            # Binance USDS-M hard floor: minimum notional is $5.0
+            if min_notional <= 0:
+                min_notional = 5.0
             min_amount = float((market.get("limits", {}).get("amount", {}).get("min", 0)) or 0)
             amount_precision = int(float(market.get("precision", {}).get("amount", 0) or 0))
 
@@ -216,9 +261,15 @@ class ExchangeClient:
                     await asyncio.sleep(0.2)
                     continue
                 if "-2027" in err or "exceeded" in err.lower():
-                    log.warning(f"Open position blocked (max position) {resolved} {side}: {e}")
+                    key = f"open_blocked:{resolved}:{side}"
+                    s = _throttle_warn.emit(key)
+                    if s is not None:
+                        log.warning(f"Open position blocked (max position) {resolved} {side}: {e}{s}")
                 else:
-                    log.error(f"Open position failed {resolved} {side}: {e}")
+                    key = f"open_err:{resolved}:{side}:{_extract_code(err)}"
+                    s = _throttle_error.emit(key)
+                    if s is not None:
+                        log.error(f"Open position failed {resolved} {side}: {e}{s}")
                 return None
 
     async def safe_open(self, symbol: str, side: str, retries: int = 1) -> dict | None:
@@ -228,32 +279,47 @@ class ExchangeClient:
                 return result
             if i < retries:
                 await asyncio.sleep(0.5)
-        log.warning(f"safe_open gave up after {retries + 1} attempts: {symbol} {side}")
+        key = f"safe_open_gave_up:{symbol}:{side}"
+        s = _throttle_warn.emit(key)
+        if s is not None:
+            log.warning(f"safe_open gave up after {retries + 1} attempts: {symbol} {side}{s}")
         return None
 
     async def add_position(self, symbol: str, side: str, amount: float) -> dict | None:
         resolved = self.resolve_symbol(symbol)
         if amount <= 0:
             return None
-        try:
-            open_side = "buy" if side == "long" else "sell"
-            order = await self._safe_call(self.exchange.create_order(
-                symbol=resolved, type="market", side=open_side, amount=amount,
-                params={"positionSide": side.upper()},
-            ), timeout=15)
-            log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
-            return {
-                "order_id": str(order.get("id", "")),
-                "average": float(order.get("average", 0) or 0),
-                "amount": amount,
-            }
-        except Exception as e:
-            err = str(e)
-            if "-2027" in err or "exceeded" in err.lower():
-                log.warning(f"Add position blocked (max position) {resolved} {side}: {e}")
-            else:
-                log.error(f"Add position failed {resolved} {side}: {e}")
-            return None
+        for attempt in range(3):
+            try:
+                open_side = "buy" if side == "long" else "sell"
+                order = await self._safe_call(self.exchange.create_order(
+                    symbol=resolved, type="market", side=open_side, amount=amount,
+                    params={"positionSide": side.upper()},
+                ), timeout=15)
+                log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
+                return {
+                    "order_id": str(order.get("id", "")),
+                    "average": float(order.get("average", 0) or 0),
+                    "amount": amount,
+                }
+            except Exception as e:
+                err = str(e)
+                if "-4164" in err and attempt < 2:
+                    old = amount
+                    amount = max(amount + 1, int(amount * 1.3))
+                    log.warning(f"Notional too small for add {resolved} {side}, retry {old} -> {amount}")
+                    continue
+                if "-2027" in err or "exceeded" in err.lower():
+                    key = f"add_blocked:{resolved}:{side}"
+                    s = _throttle_warn.emit(key)
+                    if s is not None:
+                        log.warning(f"Add position blocked (max position) {resolved} {side}: {e}{s}")
+                else:
+                    key = f"add_err:{resolved}:{side}:{_extract_code(err)}"
+                    s = _throttle_error.emit(key)
+                    if s is not None:
+                        log.error(f"Add position failed {resolved} {side}: {e}{s}")
+                return None
 
     async def close_position(self, symbol: str, side: str, contracts: float | None = None) -> dict | None:
         resolved = self.resolve_symbol(symbol)

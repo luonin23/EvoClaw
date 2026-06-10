@@ -5,6 +5,8 @@ import math
 import os
 from datetime import datetime, timezone
 
+from exchange_client import _throttle_warn
+
 log = logging.getLogger(__name__)
 
 
@@ -94,7 +96,9 @@ class Trader:
         if self._fail2027_counts[symbol] >= self._fail2027_max:
             if symbol not in self._fail2027_skipped_at:
                 self._fail2027_skipped_at[symbol] = datetime.now(timezone.utc).timestamp()
-            log.warning(f"CIRCUIT BREAKER: skipping {symbol} after {self._fail2027_max} consecutive -2027 failures")
+            s = _throttle_warn.emit(f"cb_skip:{symbol}")
+            if s is not None:
+                log.warning(f"CIRCUIT BREAKER: skipping {symbol} after {self._fail2027_max} consecutive -2027 failures{s}")
 
     def _cleanup_stale_2027(self):
         for sym in list(self._fail2027_counts.keys()):
@@ -545,7 +549,9 @@ class Trader:
             )
         else:
             self._record_2027_failure(symbol)
-            log.warning(f"_do_open failed: {symbol} {side} ({open_side})")
+            s = _throttle_warn.emit(f"do_open_fail:{symbol}:{side}")
+            if s is not None:
+                log.warning(f"_do_open failed: {symbol} {side} ({open_side}){s}")
 
     # ========== Record trade ==========
 
