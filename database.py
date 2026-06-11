@@ -46,6 +46,22 @@ class Database:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_open_pos_symbol_side ON open_positions(symbol, side);
+
+            CREATE TABLE IF NOT EXISTS liquidations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                orig_qty REAL NOT NULL,
+                avg_price REAL NOT NULL,
+                executed_qty REAL NOT NULL,
+                pnl REAL NOT NULL DEFAULT 0,
+                liquidation_time TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_liq_batch ON liquidations(batch_id);
+            CREATE INDEX IF NOT EXISTS idx_liq_time ON liquidations(liquidation_time);
+            CREATE INDEX IF NOT EXISTS idx_liq_symbol ON liquidations(symbol);
         """)
         self.conn.commit()
         # Migration: add columns if tables existed before
@@ -296,6 +312,80 @@ class Database:
         if row:
             return {"symbol": row[0], "side": row[1], "pnl": round(row[2], 4), "pnl_rate": round(row[3], 6)}
         return None
+
+    # ===== Liquidation tracking =====
+
+    def record_liquidation(self, batch_id: str, symbol: str, side: str, orig_qty: float,
+                           avg_price: float, executed_qty: float, pnl: float, time_str: str):
+        self.conn.execute(
+            """INSERT INTO liquidations
+               (batch_id, symbol, side, orig_qty, avg_price, executed_qty, pnl, liquidation_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (batch_id, symbol, side, orig_qty, avg_price, executed_qty, pnl, time_str),
+        )
+        self.conn.commit()
+
+    def record_liquidations_batch(self, records: list[dict]):
+        """Batch insert for startup historical backfill."""
+        for r in records:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO liquidations
+                   (batch_id, symbol, side, orig_qty, avg_price, executed_qty, pnl, liquidation_time)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (r["batch_id"], r["symbol"], r["side"], r["orig_qty"], r["avg_price"],
+                 r["executed_qty"], r["pnl"], r["time"]),
+            )
+        self.conn.commit()
+
+    def get_liquidation_stats(self) -> dict:
+        row = self.conn.execute(
+            """SELECT
+                 COUNT(DISTINCT batch_id),
+                 COALESCE(SUM(pnl), 0),
+                 COUNT(DISTINCT symbol),
+                 COALESCE(SUM(executed_qty), 0)
+               FROM liquidations"""
+        ).fetchone()
+        return {
+            "event_count": row[0] if row else 0,
+            "total_pnl": round(row[1], 4) if row else 0,
+            "pairs_count": row[2] if row else 0,
+            "total_qty": round(row[3], 2) if row else 0,
+        }
+
+    def get_liquidation_top10(self) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT symbol, side, avg_price, orig_qty, pnl, liquidation_time
+               FROM liquidations ORDER BY pnl ASC LIMIT 10"""
+        ).fetchall()
+        return [
+            {"symbol": r[0], "side": r[1], "avg_price": round(r[2], 6),
+             "orig_qty": round(r[3], 2), "pnl": round(r[4], 4), "liquidation_time": r[5]}
+            for r in rows
+        ]
+
+    def get_liquidation_events(self, limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
+        """Return batched liquidation events + total count."""
+        rows = self.conn.execute(
+            """SELECT batch_id, liquidation_time,
+                      COUNT(*) as pair_count,
+                      COALESCE(SUM(pnl), 0) as total_pnl,
+                      COALESCE(SUM(executed_qty), 0) as total_qty
+               FROM liquidations
+               GROUP BY batch_id
+               ORDER BY liquidation_time DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+        total = self.conn.execute(
+            "SELECT COUNT(DISTINCT batch_id) FROM liquidations"
+        ).fetchone()[0]
+        events = [
+            {"batch_id": r[0], "time": r[1], "pair_count": r[2],
+             "total_pnl": round(r[3], 4), "total_qty": round(r[4], 2)}
+            for r in rows
+        ]
+        return events, total if total else 0
 
     def increment_margin_call_count(self, increment: int = 1):
         self.conn.execute(

@@ -8,6 +8,7 @@ import json
 import glob
 import logging.handlers
 import fcntl
+from datetime import datetime, timezone, timedelta
 from aiohttp import web
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -148,6 +149,29 @@ async def main():
     db = Database("data/evoclaw.db")
     client = ExchangeClient(cfg)
     await client.load_markets()
+
+    # Backfill historical liquidations (last 7 days)
+    try:
+        existing = db.conn.execute("SELECT COUNT(*) FROM liquidations").fetchone()[0]
+        if existing == 0:
+            log.info("Backfilling liquidation history (7 days)...")
+            liq_records = await client.fetch_liquidations(since_minutes=10080, with_pnl=True)
+            if liq_records:
+                batch_records = []
+                for r in liq_records:
+                    batch_id = r.get("time", "")[:16]
+                    batch_records.append({
+                        "batch_id": batch_id, "symbol": r["symbol"], "side": r["side"],
+                        "orig_qty": r["origQty"], "avg_price": r["avgPrice"],
+                        "executed_qty": r["executedQty"], "pnl": r["pnl"], "time": r["time"],
+                    })
+                db.record_liquidations_batch(batch_records)
+                stats = db.get_liquidation_stats()
+                log.info(f"Backfilled {len(batch_records)} liquidation records from {stats['event_count']} events, total PnL={stats['total_pnl']:.2f}")
+        else:
+            log.info(f"Liquidation table already has {existing} records, skipping backfill")
+    except Exception as e:
+        log.warning(f"Liquidation backfill failed (non-fatal): {e}")
 
     trader = Trader(client, db, "config.json")
     server = WebServer(client, db, "config.json", trader=trader)

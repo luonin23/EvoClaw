@@ -164,6 +164,9 @@ class Trader:
         for sp in self.db.get_open_positions():
             self._system_pos_map[f"{sp['symbol']}:{sp['side']}"] = sp
 
+        # STEP 1.5: Liquidation detection — find positions that vanished from exchange
+        await self._detect_liquidations(all_positions)
+
         # STEP 2: All-close
         if cfg.get("enable_all_close", False):
             if await self.check_all_close(candidate_symbols, sides, all_positions):
@@ -532,6 +535,88 @@ class Trader:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
             log.info(f"Replenished {len(tasks)} positions")
+
+    async def _detect_liquidations(self, all_positions: list[dict]):
+        """Detect positions that vanished from exchange (likely liquidated).
+
+        Compares DB open_positions against live exchange positions.  Any position
+        in DB but not on exchange was closed externally — check Binance force
+        orders to confirm it was a liquidation.
+        """
+        exchange_keys = {f"{self.client.user_symbol(p['symbol'])}:{p.get('side')}" for p in all_positions}
+        db_positions = self.db.get_open_positions()
+        db_keys = {f"{sp['symbol']}:{sp['side']}" for sp in db_positions}
+        vanished = db_keys - exchange_keys
+
+        if not vanished:
+            return
+
+        # Cache: track last fetch time to avoid hammering API within same tick/batch
+        now_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if not hasattr(self, '_last_liq_fetch_ts'):
+            self._last_liq_fetch_ts = 0
+            self._liq_cache: list[dict] = []
+
+        # Only re-fetch if last fetch was > 30 seconds ago
+        if now_ts - self._last_liq_fetch_ts > 30000:
+            self._liq_cache = await self.client.fetch_liquidations(since_minutes=10)
+            self._last_liq_fetch_ts = now_ts
+
+        # Build lookup from force orders: (symbol, side) -> liquidation info
+        force_map = {}
+        for fo in self._liq_cache:
+            key = f"{fo['symbol']}:{fo['side']}"
+            # Keep the earliest (or most recent) match
+            if key not in force_map:
+                force_map[key] = fo
+
+        for key in vanished:
+            sym, side = key.split(":", 1)
+            db_pos = next((sp for sp in db_positions if sp['symbol'] == sym and sp['side'] == side), None)
+            if not db_pos:
+                self.db.remove_open(sym, side)
+                continue
+
+            entry_price = float(db_pos.get('entry_price', 0) or 0)
+            amount = float(db_pos.get('amount', 0) or 0)
+
+            fo = force_map.get(key)
+            if fo:
+                # Calculate PnL from entry vs liquidation price
+                market = self.client.get_market_info(sym)
+                cs = float(market.get("contractSize", 1) or 1)
+                liq_price = fo.get("avgPrice", 0)
+                if liq_price > 0 and entry_price > 0:
+                    if side == "long":
+                        pnl = (liq_price - entry_price) * amount * cs
+                    else:
+                        pnl = (entry_price - liq_price) * amount * cs
+                else:
+                    pnl = fo.get("pnl", 0)
+
+                batch_id = fo.get("time", "")[:16]  # group by minute
+                self.db.record_liquidation(
+                    batch_id=batch_id,
+                    symbol=sym,
+                    side=side.upper(),
+                    orig_qty=amount,
+                    avg_price=liq_price,
+                    executed_qty=fo.get("executedQty", amount),
+                    pnl=pnl,
+                    time_str=fo.get("time", ""),
+                )
+                self.db.remove_open(sym, side)
+                self._system_pos_map.pop(key, None)
+                log.warning(
+                    f"LIQUIDATION DETECTED: {sym} {side} qty={amount} "
+                    f"entry={entry_price:.6f} liq_price={liq_price:.6f} pnl={pnl:.4f}"
+                )
+            else:
+                # Vanished from exchange but no force order found — could be
+                # a stale DB entry or exchange API inconsistency. Clean up.
+                log.warning(f"VANISHED POSITION (not in force orders): {sym} {side}, removing from DB")
+                self.db.remove_open(sym, side)
+                self._system_pos_map.pop(key, None)
 
     async def _do_open(self, symbol: str, open_side: str, side: str):
         if self._is_skipped_2027(symbol):

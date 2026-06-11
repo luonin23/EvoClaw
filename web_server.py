@@ -38,6 +38,7 @@ class WebServer:
         self.app.router.add_get("/api/trades", self.api_trades)
         self.app.router.add_get("/api/system", self.api_system)
         self.app.router.add_get("/api/profit-trend", self.api_profit_trend_cached)
+        self.app.router.add_get("/api/liquidations", self.api_liquidations)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
         self.app.router.add_get("/web/config.json", self.handle_web_config)
         self.app.router.add_get("/api/web-config", self.api_web_config_get)
@@ -276,6 +277,7 @@ class WebServer:
                 await self._db_sync(self.db.set_runtime_stat, "hist_total_loss_rate", hist_total_loss_rate)
 
             margin_call_count = int(await self._db_sync(self.db.get_runtime_stat, "margin_call_count", 0))
+            liq_stats = await self._db_sync(self.db.get_liquidation_stats)
 
             self._balance_cache = (time.monotonic(), float(balance.get("balance", 0) or 0))
             return web.json_response({
@@ -296,6 +298,9 @@ class WebServer:
                 "margin_call_count": margin_call_count,
                 "realtime_profit_rate": round(realtime_rate, 6),
                 "active_symbols": symbols,
+                "liquidation_event_count": liq_stats["event_count"],
+                "liquidation_total_pnl": liq_stats["total_pnl"],
+                "liquidation_pairs_count": liq_stats["pairs_count"],
             })
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -514,6 +519,35 @@ class WebServer:
                 "total": total,
                 "limit": limit,
                 "offset": offset,
+            })
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_liquidations(self, request):
+        try:
+            limit = int(request.query.get("limit", "20"))
+            offset = int(request.query.get("offset", "0"))
+            stats = await self._db_sync(self.db.get_liquidation_stats)
+            top10 = await self._db_sync(self.db.get_liquidation_top10)
+            events, total = await self._db_sync(self.db.get_liquidation_events, limit, offset)
+
+            # For each event, get top 3 worst PnL symbols
+            for evt in events:
+                top3_rows = self.db.conn.execute(
+                    """SELECT symbol, side, pnl FROM liquidations
+                       WHERE batch_id = ? ORDER BY pnl ASC LIMIT 3""",
+                    (evt["batch_id"],),
+                ).fetchall()
+                evt["top3"] = [f"{r[0]} {r[1]} {round(r[2], 2)}" for r in top3_rows]
+
+            return web.json_response({
+                "events": events,
+                "total_events": total,
+                "event_count": stats["event_count"],
+                "total_pnl": stats["total_pnl"],
+                "pairs_count": stats["pairs_count"],
+                "total_qty": stats["total_qty"],
+                "top10": top10,
             })
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)

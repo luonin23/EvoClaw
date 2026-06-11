@@ -3,6 +3,7 @@ import logging
 import math
 import re
 import time
+from datetime import datetime, timezone, timedelta
 import ccxt.async_support as ccxt
 
 log = logging.getLogger(__name__)
@@ -192,6 +193,72 @@ class ExchangeClient:
             "balance": float(usdt_total) if usdt_total else 0,
             "available_balance": float(usdt_free) if usdt_free else 0,
         }
+
+    async def fetch_liquidations(self, since_minutes: int = 1440, with_pnl: bool = False) -> list[dict]:
+        """Fetch liquidation (force order) history from Binance.
+
+        If with_pnl=True, also fetches all user trades in the window and matches
+        realized PnL to each liquidation record.
+
+        Returns list of dicts with: symbol, side, origQty, avgPrice, executedQty, pnl, time.
+        """
+        try:
+            since_ms = int((datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).timestamp() * 1000)
+            raw = await self._safe_call(
+                self.exchange.fapiPrivateGetForceOrders({"startTime": since_ms, "limit": 100}),
+                timeout=20,
+            )
+            result = []
+            for fo in raw:
+                sym_id = fo.get("symbol", "")
+                sym = self.user_symbol(sym_id)
+                side = "LONG" if fo.get("positionSide", "") == "LONG" else "SHORT"
+                raw_time = fo.get("time", 0)
+                if isinstance(raw_time, str):
+                    raw_time = int(raw_time)
+                result.append({
+                    "symbol": sym,
+                    "side": side,
+                    "origQty": float(fo.get("origQty", 0)),
+                    "avgPrice": float(fo.get("price", 0) or fo.get("averagePrice", 0) or 0),
+                    "executedQty": float(fo.get("executedQty", 0)),
+                    "pnl": 0.0,
+                    "time": datetime.fromtimestamp(raw_time / 1000, tz=timezone.utc).isoformat(),
+                    "timestamp_ms": raw_time,
+                    "order_id": fo.get("orderId"),
+                })
+
+            # Optionally enrich with PnL from all trades in one batch call
+            if with_pnl and result:
+                try:
+                    all_trades = await self._safe_call(
+                        self.exchange.fapiPrivateGetUserTrades({"startTime": since_ms, "limit": 1000}),
+                        timeout=20,
+                    )
+                    # Build lookup: (symbol, orderId) -> total realized PnL
+                    trade_pnl: dict[tuple, float] = {}
+                    for t in all_trades:
+                        sym_id = t.get("symbol", "")
+                        sym = self.user_symbol(sym_id)
+                        oid = str(t.get("orderId", ""))
+                        rpnl = float(t.get("realizedPnl", 0) or 0)
+                        key = (sym, oid)
+                        trade_pnl[key] = trade_pnl.get(key, 0) + rpnl
+
+                    for r in result:
+                        matched = trade_pnl.get((r["symbol"], str(r.get("order_id", ""))))
+                        if matched is not None:
+                            r["pnl"] = matched
+                except Exception as e:
+                    log.warning(f"PnL enrichment failed: {e}")
+
+            # Clean up internal fields before returning
+            for r in result:
+                r.pop("order_id", None)
+            return result
+        except Exception as e:
+            log.warning(f"fetch_liquidations failed: {e}")
+            return []
 
     async def get_positions(self, symbols: list = None) -> list[dict]:
         resolved = [self.resolve_symbol(s) for s in symbols] if symbols else None

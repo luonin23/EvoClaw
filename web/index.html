@@ -525,6 +525,23 @@ body::after{
 .config-lock-input-wrap input{padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);color:var(--text);font-size:16px;width:220px;text-align:center;outline:none}
 .config-lock-input-wrap input:focus{border-color:var(--accent)}
 .config-lock-error{font-size:12px;color:var(--error);min-height:18px;margin-bottom:6px}
+
+/* Liquidation table */
+.liq-table{width:100%;border-collapse:collapse;font-size:11px;font-family:var(--font-mono);margin-top:10px}
+.liq-table th{text-align:left;padding:6px 8px;color:var(--text-tertiary);font-weight:500;border-bottom:1px solid var(--border-subtle);font-size:10px;text-transform:uppercase;letter-spacing:0.05em}
+.liq-table td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.03);color:var(--text-secondary)}
+.liq-table tr:hover td{background:rgba(255,255,255,0.02)}
+.liq-table .rank{color:var(--text-muted);width:30px;text-align:center}
+.liq-table .pnl{font-weight:600}
+.liq-table .side-long{color:var(--success)}
+.liq-table .side-short{color:var(--error)}
+.liq-events-scroll{max-height:200px;overflow-y:auto;margin-top:8px}
+.liq-event-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:11px;font-family:var(--font-mono)}
+.liq-event-row:hover{background:rgba(255,71,87,0.04)}
+.liq-event-time{color:var(--text-muted);white-space:nowrap;min-width:130px}
+.liq-event-pairs{color:var(--accent);min-width:70px}
+.liq-event-pnl{color:var(--error);font-weight:600;min-width:80px}
+.liq-event-top3{color:var(--text-tertiary);font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
@@ -660,6 +677,31 @@ body::after{
           <div class="stat-cell"><div class="stat-value" id="stShortRate">-</div><div class="stat-label">空单盈利率</div></div>
         </div>
       </div>
+    </div>
+
+    <!-- Liquidation Panel -->
+    <div class="tile" style="grid-column:1/3">
+      <div class="tile-head">
+        <div class="icon-wrap" style="background:rgba(255,71,87,0.1);border-color:rgba(255,71,87,0.2);color:var(--error)"><i class="ph ph-skull"></i></div>
+        <h2>强平爆仓记录</h2>
+        <span style="margin-left:auto;font-size:10px;color:var(--text-muted)" id="liqUpdateTime"></span>
+      </div>
+      <div class="stat-grid cols-4">
+        <div class="stat-cell"><div class="stat-value text-red" id="liqEventCount">-</div><div class="stat-label">爆仓次数</div></div>
+        <div class="stat-cell"><div class="stat-value text-red" id="liqTotalPnl">-</div><div class="stat-label">爆仓总金额</div></div>
+        <div class="stat-cell"><div class="stat-value" id="liqPairsCount">-</div><div class="stat-label">强平对数量</div></div>
+        <div class="stat-cell"><div class="stat-value" id="liqTotalQty">-</div><div class="stat-label">强平总张数</div></div>
+      </div>
+      <!-- Top10 Table -->
+      <table class="liq-table" id="liqTop10">
+        <thead><tr><th>#</th><th>交易对</th><th>方向</th><th>平仓价</th><th>数量</th><th>PnL</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <!-- Historical events -->
+      <div style="margin-top:14px;font-size:11px;color:var(--text-tertiary);border-top:1px solid var(--border-subtle);padding-top:10px">
+        <i class="ph ph-clock-counter-clockwise"></i> 历史爆仓事件
+      </div>
+      <div class="liq-events-scroll" id="liqEvents"></div>
     </div>
 
   </div>
@@ -1590,13 +1632,54 @@ async function loadProfitTrend(period) {
   drawChart(d.data);
 }
 
+async function loadLiquidations() {
+  const d = await api('/api/liquidations');
+  if (!d) return;
+  setText('liqEventCount', d.event_count || 0);
+  setClass('liqEventCount', 'stat-value ' + ((d.event_count || 0) > 0 ? 'text-red' : ''));
+  setText('liqTotalPnl', fmtP(d.total_pnl || 0));
+  setClass('liqTotalPnl', 'stat-value ' + ((d.total_pnl || 0) < 0 ? 'text-red' : ''));
+  setText('liqPairsCount', d.pairs_count || 0);
+  setText('liqTotalQty', (d.total_qty || 0).toFixed(0));
+
+  // Top10 table
+  const tbody = document.querySelector('#liqTop10 tbody');
+  if (tbody && d.top10) {
+    tbody.innerHTML = d.top10.map((r, i) =>
+      '<tr>' +
+      '<td class="rank">' + (i + 1) + '</td>' +
+      '<td>' + r.symbol.replace(/USDT$/, '') + '</td>' +
+      '<td class="' + (r.side === 'LONG' ? 'side-long' : 'side-short') + '">' + (r.side === 'LONG' ? '多' : '空') + '</td>' +
+      '<td>' + (r.avg_price || 0).toFixed(6) + '</td>' +
+      '<td>' + (r.orig_qty || 0).toFixed(0) + '</td>' +
+      '<td class="pnl text-red">' + fmtP(r.pnl) + '</td>' +
+      '</tr>'
+    ).join('');
+  }
+
+  // Historical events
+  const eventsEl = document.getElementById('liqEvents');
+  if (eventsEl && d.events) {
+    eventsEl.innerHTML = d.events.map(e =>
+      '<div class="liq-event-row">' +
+      '<span class="liq-event-time">' + (e.time || '').replace('T', ' ').substring(0, 16) + '</span>' +
+      '<span class="liq-event-pairs">' + e.pair_count + ' 对</span>' +
+      '<span class="liq-event-pnl">' + fmtP(e.total_pnl) + '</span>' +
+      '<span class="liq-event-top3">' + (e.top3 || []).join('  |  ') + '</span>' +
+      '</div>'
+    ).join('');
+  }
+
+  document.getElementById('liqUpdateTime').textContent = new Date().toLocaleTimeString();
+}
+
 async function refresh() {
   if (window._isRefreshing) return;
   window._isRefreshing = true;
   try {
     const tasks = [];
     if (currentTab === 'dashboard') {
-      tasks.push(loadAccount(), loadStats(), loadProfitTrend());
+      tasks.push(loadAccount(), loadStats(), loadProfitTrend(), loadLiquidations());
       Promise.all(tasks).then(() => updateFlowGraph());
     } else if (currentTab === 'matrix') {
       const posData = await api('/api/positions-map');
@@ -2118,6 +2201,7 @@ async function loadDashboardView() {
   }
   await loadAccount();
   await loadStats();
+  loadLiquidations();
   _prevStats = JSON.parse(JSON.stringify(window._lastStats || {}));
   _prevAccount = JSON.parse(JSON.stringify(window._lastAccount || {}));
   updateFlowGraph();
