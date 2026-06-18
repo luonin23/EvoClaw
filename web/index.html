@@ -175,12 +175,12 @@ body::after{
 @keyframes panelEnter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
 .bento-grid{display:grid;gap:12px}
-.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto auto}
+.bento-dashboard{grid-template-columns:1fr 320px;grid-template-rows:auto auto auto}
 .bento-dashboard .bento-trend{grid-column:1;grid-row:1}
 .bento-dashboard .bento-side-top{grid-column:2;grid-row:1}
 .bento-dashboard .bento-flow{grid-column:1/3;grid-row:2}
 .bento-dashboard .bento-side-bottom{grid-column:1/3;grid-row:3}
-.bento-dashboard .bento-bottom-row{grid-column:1/3;grid-row:4;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bento-dashboard .bento-bottom-row{grid-column:1/3;grid-row:4;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
 @media(max-width:900px){
   .bento-dashboard{grid-template-columns:1fr;grid-template-rows:auto}
   .bento-dashboard .bento-trend,.bento-dashboard .bento-flow,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1;grid-row:auto}
