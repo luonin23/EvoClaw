@@ -379,16 +379,17 @@ body::after{
 .matrix-stats .divider{width:1px;background:var(--border-subtle);align-self:stretch}
 
 /* 全量矩阵网格 — USDT市值决定列宽 */
-.full-matrix{display:grid;grid-template-columns:repeat(14,1fr);gap:6px;width:100%;max-width:100%;grid-auto-rows:1fr}
+/* 全量矩阵网格 — USDT市值决定列宽 */
+.full-matrix{display:grid;grid-template-columns:repeat(14,1fr);gap:6px;width:100%;max-width:100%}
 .full-cell{
   border-radius:6px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:3px 2px;font-family:var(--font-mono);
   color:#fff;cursor:pointer;position:relative;overflow:hidden;text-align:center;line-height:1.15;
   border:1.5px solid transparent;transition:all 0.15s ease;
-  min-height:38px;
 }
+.full-cell[data-span="1"]{aspect-ratio:1}
 .full-cell:hover{z-index:2;border-color:rgba(255,255,255,0.5);box-shadow:0 4px 20px rgba(0,0,0,0.6);transform:scale(1.05)}
-.full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary)}
+.full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary);aspect-ratio:1}
 .full-cell .fc-sym{font-size:clamp(7px,0.9vw,12px);font-weight:500;word-break:break-all;line-height:1.2;width:100%;opacity:0.85;margin-bottom:1px}
 .full-cell .fc-rate{font-size:clamp(9px,1.3vw,17px);font-weight:700;line-height:1.1}
 /* 小格子(span=1)用较小字体 */
