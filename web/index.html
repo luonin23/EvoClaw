@@ -215,6 +215,7 @@ body::after{
 .stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .stat-grid.cols-4{grid-template-columns:repeat(4,1fr)}
 @media(max-width:640px){.stat-grid.cols-4{grid-template-columns:repeat(2,1fr)}}
+.bento-side-bottom .stat-grid.cols-4{max-width:600px;margin:0 auto}
 .stat-cell{
   background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);
   border-radius:var(--radius-md);padding:10px 8px;text-align:center;
@@ -606,7 +607,7 @@ body::after{
         <div class="stat-cell"><div class="stat-value" id="accSingleClose">-</div><div class="stat-label">单项平仓</div></div>
         <div class="stat-cell"><div class="stat-value" id="accMarginCall">-</div><div class="stat-label">加仓次数</div></div>
       </div>
-      <div id="accActiveSymbols" class="sym-bar" style="margin-top:8px"><span style="color:var(--text-muted)">筛选币种加载中...</span></div>
+      <div id="accActiveSymbols" class="sym-bar" style="margin-top:8px;max-width:600px;margin-left:auto;margin-right:auto"><span style="color:var(--text-muted)">筛选币种加载中...</span></div>
     </div>
 
     <div class="bento-bottom-row">
