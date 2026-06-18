@@ -1666,6 +1666,8 @@ window.addEventListener('resize', () => {
 
 let refreshTimer = null;
 let systemTimer = null;
+let _tickTimer = null;
+let systemTimer = null;
 function startTimers() {
   if (!refreshTimer) refreshTimer = setInterval(refresh, 10000);
   if (!systemTimer) systemTimer = setInterval(loadSystem, 10000);
