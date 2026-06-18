@@ -434,7 +434,8 @@ body::after{
   .chart-wrap{height:180px}
   #profitChart{height:180px}
   .full-matrix{grid-template-columns:repeat(6,1fr)!important;gap:3px}
-  .full-cell[data-span]{grid-column:auto!important}
+  .full-cell .fc-sym{font-size:clamp(5px,1.5vw,9px)}
+  .full-cell .fc-rate{font-size:clamp(7px,2vw,12px)}
   .pipeline-bar{gap:1px;padding:4px 2px}
   .pipe-step{min-width:36px;padding:4px 5px;font-size:8px}
   .pipe-step i{font-size:12px}
@@ -1293,9 +1294,9 @@ async function loadFullMatrix(posData) {
     usdt: s.position_value || (s.contracts || 0) * (s.entry_price || 0)
   }));
 
-  // 分配列跨度：每格 = 5 USDT，最少1格
+  // 分配列跨度：每格 = 5 USDT，最少1格，最多整行宽度
   for (const v of slotValues) {
-    v.span = Math.max(1, Math.round(v.usdt / UNIT_USDT));
+    v.span = Math.min(gridCols, Math.max(1, Math.round(v.usdt / UNIT_USDT)));
   }
 
   // 贪心行分配：从左到右填充，放不下就换行
