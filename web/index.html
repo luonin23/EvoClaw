@@ -188,7 +188,6 @@ body::after{
   .bento-dashboard .bento-trend,.bento-dashboard .bento-flow,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1}
   .bento-dashboard .bento-bottom-row{grid-template-columns:1fr}
   .tile{overflow:visible}
-  .stat-grid.cols-4{grid-template-columns:repeat(auto-fit,minmax(80px,1fr))}
   .pipeline-bar{flex-wrap:wrap}
   .pipe-step{min-width:44px;padding:6px 8px;font-size:9px}
   .pipe-step i{font-size:14px}
@@ -220,8 +219,7 @@ body::after{
 .tile-head .tile-actions{margin-left:auto;display:flex;gap:4px}
 
 .stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-.stat-grid.cols-4{grid-template-columns:repeat(auto-fit,minmax(100px,1fr))}
-@media(max-width:640px){.stat-grid.cols-4{grid-template-columns:repeat(auto-fit,minmax(80px,1fr))}}
+.stat-grid.cols-4{grid-template-columns:repeat(4,1fr)}
 .stat-cell{
   background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);
   border-radius:var(--radius-md);padding:10px 8px;text-align:center;
