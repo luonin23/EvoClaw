@@ -1743,6 +1743,27 @@ async function generatePoster() {
 }
 
 
+// ===== Pipeline Status Bar =====
+function updatePipeline(triggered) {
+  const steps = ['pipeFetch','pipeAllClose','pipeSingle','pipePair','pipeMargin','pipeReplenish'];
+  steps.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('active','triggered');
+    const icon = el.querySelector('i');
+    if (icon) icon.classList.remove('glow');
+    if (triggered && triggered[id]) {
+      el.classList.add('triggered');
+      if (icon) icon.classList.add('glow');
+    }
+  });
+  const tick = Math.floor(Date.now() / 1000) % steps.length;
+  const activeEl = document.getElementById(steps[tick]);
+  if (activeEl && !activeEl.classList.contains('triggered')) {
+    activeEl.classList.add('active');
+  }
+}
+
 function startTickSimulation() {
   if (_tickTimer) return;
   const interval = parseInt(document.getElementById('tickInterval')?.textContent || '3');
