@@ -17,7 +17,6 @@ class Trader:
         self.config_path = config_path
         self.running = False
         self.config = self._load_config()
-        self._config_mtime = os.path.getmtime(self.config_path) if os.path.exists(self.config_path) else 0
         self._candidate_symbols = []
         self._last_symbol_refresh = 0
         self._fail2027_counts: dict[str, int] = {}
@@ -28,21 +27,23 @@ class Trader:
         self._tier_executed: dict[str, int] = {}
 
     def _load_config(self):
+        """Load config from database."""
         try:
-            with open(self.config_path, "r") as f:
-                return json.load(f)
+            cfg = self.db.load_config()
+            # Merge exchange_kwargs from file (not stored in DB for security)
+            if self.config_path and os.path.exists(self.config_path):
+                with open(self.config_path, "r") as f:
+                    file_cfg = json.load(f)
+                cfg["exchange_kwargs"] = file_cfg.get("exchange_kwargs", {})
+            return cfg
         except Exception as e:
             log.error(f"Failed to load config: {e}")
             return getattr(self, "config", {})
 
     def _get_config(self):
-        """Reload config only when file changed (mtime-based)."""
+        """Reload latest config from database (always fresh)."""
         try:
-            mtime = os.path.getmtime(self.config_path)
-            if mtime != self._config_mtime:
-                with open(self.config_path, "r") as f:
-                    self.config = json.load(f)
-                self._config_mtime = mtime
+            self.config = self._load_config()
         except Exception as e:
             log.error(f"Config reload failed: {e}")
         return self.config

@@ -147,6 +147,19 @@ async def main():
     cfg = load_config()
 
     db = Database("data/evoclaw.db")
+
+    # Migrate config from file to DB (first run / after reset)
+    # Keep apiKey + secret in config.json for security; everything else in DB
+    db_config = {k: v for k, v in cfg.items() if k != "exchange_kwargs"}
+    is_new = db.seed_config(db_config)
+    if is_new:
+        log.info("Config migrated from config.json to database")
+    # Load runtime config from DB (the source of truth for editable settings)
+    runtime_cfg = db.load_config()
+    runtime_cfg["exchange_kwargs"] = cfg.get("exchange_kwargs", {})
+    cfg = runtime_cfg
+    log.info(f"Config loaded: {len(cfg.get('symbols', []))} symbols")
+
     client = ExchangeClient(cfg)
     await client.load_markets()
 

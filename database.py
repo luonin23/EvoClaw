@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import os
 import logging
@@ -88,6 +89,12 @@ class Database:
             CREATE TABLE IF NOT EXISTS trade_stats (
                 key TEXT PRIMARY KEY,
                 value REAL NOT NULL DEFAULT 0
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
         """)
         self.conn.commit()
@@ -386,6 +393,39 @@ class Database:
             for r in rows
         ]
         return events, total if total else 0
+
+    # ===== App Config (stored in DB, not config.json) =====
+
+    def load_config(self) -> dict:
+        """Load full config from DB, converting types from stored strings."""
+        rows = self.conn.execute("SELECT key, value FROM config").fetchall()
+        config = {}
+        for key, raw in rows:
+            try:
+                config[key] = json.loads(raw)
+            except Exception:
+                config[key] = raw
+        return config
+
+    def save_config(self, config: dict):
+        """Replace all config entries with the given dict (full overwrite)."""
+        self.conn.execute("DELETE FROM config")
+        for key, val in config.items():
+            self.conn.execute(
+                "INSERT INTO config (key, value) VALUES (?, ?)",
+                (key, json.dumps(val)),
+            )
+        self.conn.commit()
+
+    def seed_config(self, defaults: dict):
+        """Initialize config from defaults if table is empty (first-run migration)."""
+        existing = self.conn.execute("SELECT COUNT(*) FROM config").fetchone()[0]
+        if existing == 0:
+            self.save_config(defaults)
+            return True
+        return False
+
+    # ===== End App Config =====
 
     def increment_margin_call_count(self, increment: int = 1):
         self.conn.execute(
