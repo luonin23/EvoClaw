@@ -37,8 +37,8 @@
   --border-strong: rgba(255,255,255,0.14);
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
-  --text-muted: #475569;
+  --text-tertiary: #7c8aa0;
+  --text-muted: #556270;
   --font-ui: 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
   --radius-sm: 6px;
@@ -314,6 +314,8 @@ body::after{
 .field textarea{min-height:64px;height:auto;resize:vertical}
 .field select{cursor:pointer}
 
+.btn:focus-visible,.tab-btn:focus-visible,.field input:focus-visible,.field select:focus-visible,.field textarea:focus-visible,.switch input:focus-visible+.track{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--radius-sm)}
+
 .config-group{
   border:1px solid var(--border-subtle);border-radius:var(--radius-md);
   padding:14px;margin-bottom:10px;background:rgba(255,255,255,0.015);position:relative;
@@ -325,6 +327,11 @@ body::after{
   display:flex;align-items:center;gap:6px;
 }
 .config-group-title .ph{font-size:13px}
+.config-group-title{cursor:pointer;user-select:none;transition:color 0.15s}
+.config-group-title:hover{color:var(--accent)}
+.config-group-title .toggle-icon{font-size:12px;margin-left:auto;transition:transform 0.2s}
+.config-group.collapsed .config-group-body{display:none}
+.config-group.collapsed .toggle-icon{transform:rotate(-90deg)}
 
 .text-green{color:var(--success)}
 .text-red{color:var(--error)}
@@ -421,91 +428,36 @@ body::after{
   .brand h1{font-size:18px}
   .chart-wrap{height:180px}
   #profitChart{height:180px}
+  .full-matrix{grid-template-columns:repeat(6,1fr)!important;gap:3px}
+  .full-cell[data-span]{grid-column:auto!important}
+  .pipeline-bar{gap:1px;padding:4px 2px}
+  .pipe-step{min-width:36px;padding:4px 5px;font-size:8px}
+  .pipe-step i{font-size:12px}
+  .pipe-arrow{font-size:8px}
+  .liq-table{font-size:9px}
+  .liq-table th,.liq-table td{padding:3px 4px}
+}
+@media(max-width:400px){
+  .full-matrix{grid-template-columns:repeat(4,1fr)!important}
 }
 
-/* ===== Strategy Flow Graph (upgraded v3: Layout C center trunk) ===== */
-.flow-graph-container{
-  background:var(--bg-elevated);border:1px solid var(--border-subtle);
-  border-radius:var(--radius-lg);padding:12px;overflow-x:auto;
+/* ===== Pipeline Status Bar ===== */
+.pipeline-bar{
+  display:flex;align-items:center;gap:2px;padding:8px 4px;
+  justify-content:center;flex-wrap:wrap;
 }
-.flow-graph{width:100%;position:relative}
-.flow-svg{width:100%;height:auto;display:block;max-height:580px}
-
-/* Nodes — completely identical size & style */
-.flow-node-rect,.flow-node-check,.flow-node-action{
-  fill:var(--bg-surface);stroke:var(--border-medium);stroke-width:1.5;
-  transition:stroke .3s ease,stroke-width .3s ease,fill .3s ease;
+.pipe-step{
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:6px 8px;border-radius:var(--radius-sm);
+  background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);
+  min-width:44px;transition:all .3s ease;
+  font-size:9px;color:var(--text-muted);text-align:center;
 }
-.flow-node-rect.active,.flow-node-check.active,.flow-node-action.active{
-  stroke:var(--warning);stroke-width:2.2;
-}
-.flow-node-rect.triggered,.flow-node-check.triggered,.flow-node-action.triggered{
-  stroke:var(--success);stroke-width:2.2;
-}
-.flow-node-rect.error,.flow-node-check.error,.flow-node-action.error{
-  stroke:var(--error);stroke-width:2;
-}
-.flow-node-rect.disabled,.flow-node-check.disabled,.flow-node-action.disabled{
-  stroke:var(--text-muted);opacity:.3;
-}
-.flow-node-rect.dimmed,.flow-node-check.dimmed,.flow-node-action.dimmed{
-  stroke:#4b5563;opacity:.35;fill:#1f2937;
-}
-.flow-node-text{
-  fill:var(--text-primary);font-size:11px;font-weight:600;
-  text-anchor:middle;dominant-baseline:middle;pointer-events:none;
-}
-.flow-node-sub{
-  fill:var(--text-secondary);font-size:9px;
-  text-anchor:middle;dominant-baseline:middle;pointer-events:none;
-}
-
-/* Edges */
-.flow-edge{
-  fill:none;stroke:#475569;stroke-width:2;transition:stroke .3s;
-}
-.flow-edge.active{
-  stroke:var(--warning);
-}
-.flow-edge.triggered{
-  stroke:var(--success);
-}
-.flow-edge.dimmed{
-  stroke:#334155;opacity:.35;
-}
-
-/* Particles */
-.flow-particle{
-  fill:var(--accent);
-}
-.flow-particle.green{
-  fill:var(--success);
-}
-.flow-particle.amber{
-  fill:var(--warning);
-}
-.flow-particle.dimmed{
-  opacity:.2;
-}
-
-/* Labels on edges */
-.flow-edge-label{
-  fill:var(--text-muted);font-size:9px;font-weight:600;
-  text-anchor:middle;dominant-baseline:middle;
-  background:var(--bg-base);
-}
-.flow-edge-label-bg{
-  fill:var(--bg-base);
-}
-
-@keyframes nodePulse{
-  0%,100%{stroke-width:2;}
-  50%{stroke-width:3;}
-}
-.flow-node-rect.pulsing,.flow-node-check.pulsing,.flow-node-action.pulsing{
-  stroke:var(--warning);
-  animation:nodePulse 1.2s ease-in-out infinite;
-}
+.pipe-step i{font-size:14px;transition:color .3s}
+.pipe-step.active{border-color:var(--warning);color:var(--warning);background:rgba(245,158,11,0.08)}
+.pipe-step.triggered{border-color:var(--success);color:var(--success);background:rgba(0,229,160,0.08)}
+.pipe-step i.glow{filter:drop-shadow(0 0 4px currentColor)}
+.pipe-arrow{color:var(--text-muted);font-size:10px;flex-shrink:0}
 .log-time{color:var(--text-muted);white-space:nowrap}
 .log-msg{flex:1;word-break:break-all}
 .log-type-open{color:var(--accent)}
@@ -616,8 +568,18 @@ body::after{
         <h2>交易决策流图</h2>
         <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
       </div>
-      <div class="flow-graph-container">
-        <div class="flow-graph" id="flowGraph"></div>
+      <div class="pipeline-bar" id="pipelineBar">
+        <div class="pipe-step" id="pipeFetch"><i class="ph ph-download-simple"></i><span>获取仓位</span></div>
+        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+        <div class="pipe-step" id="pipeAllClose"><i class="ph ph-x-circle"></i><span>全平</span></div>
+        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+        <div class="pipe-step" id="pipeSingle"><i class="ph ph-chart-line-up"></i><span>止盈</span></div>
+        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+        <div class="pipe-step" id="pipePair"><i class="ph ph-arrows-in-line-horizontal"></i><span>对平</span></div>
+        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+        <div class="pipe-step" id="pipeMargin"><i class="ph ph-warning-circle"></i><span>加仓</span></div>
+        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+        <div class="pipe-step" id="pipeReplenish"><i class="ph ph-plus-circle"></i><span>补仓</span></div>
       </div>
     </div>
 
@@ -743,25 +705,25 @@ body::after{
 
   <div id="configFormBody">
   <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-funnel"></i> 币种筛选</div>
-    <div class="form-grid">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-funnel"></i> 币种筛选<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>交易量筛选 (USDT)</label><input type="number" id="cfgVolumeThreshold" step="1000000" min="0" value="0" placeholder="24h 成交量"></div>
       <div class="field"><label>币单价筛选 (USDT)</label><input type="number" id="cfgPriceThreshold" step="0.001" min="0" value="0" placeholder="最新价格"></div>
       <div class="field"><label>币种刷新间隔 (秒)</label><input type="number" id="cfgSymbolRefreshInterval" step="1" min="1" value="86400"></div>
       <div class="field full"><label></label><button class="btn btn-secondary" style="width:100%" onclick="refreshSymbolsNow()"><i class="ph ph-arrows-clockwise"></i> 立即刷新币种</button></div>
-    </div>
+    </div></div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-arrows-left-right"></i> 基础交易</div>
-    <div class="form-grid">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-arrows-left-right"></i> 基础交易<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>交易方向</label><select id="cfgSide"><option value="both">双向（多空）</option><option value="long">只做多</option><option value="short">只做空</option></select></div>
-    </div>
+    </div></div>
   </div>
 
-  <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-chart-line-up"></i> 分档止盈</div>
-    <div class="form-grid">
+  <div class="config-group collapsed">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-chart-line-up"></i> 分档止盈<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>第一档 盈利≥(%)</label><input type="number" id="cfgTier1Threshold" step="0.001" min="0" value="0.2"></div>
       <div class="field"><label>第一档 平仓比例(%)</label><input type="number" id="cfgTier1Close" step="1" min="0" max="100" value="30"></div>
       <div class="field"><label>第二档 盈利≥(%)</label><input type="number" id="cfgTier2Threshold" step="0.001" min="0" value="1"></div>
@@ -772,57 +734,57 @@ body::after{
       <div class="field"><label>第四档 平仓比例(%)</label><input type="number" id="cfgTier4Close" step="1" min="0" max="100" value="50"></div>
       <div class="field"><label>第五档 盈利≥(%)</label><input type="number" id="cfgTier5Threshold" step="0.001" min="0" value="50"></div>
       <div class="field"><label>第五档 平仓比例(%)</label><input type="number" id="cfgTier5Close" step="1" min="0" max="100" value="100"></div>
-    </div>
+    </div></div>
   </div>
 
   <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-plus-circle"></i> 补仓设置</div>
-    <div class="form-grid">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-plus-circle"></i> 补仓设置<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>停补阈值 (%)</label><input type="number" id="cfgReplenishStop" step="0.1" min="0" value="10"></div>
       <div class="field"><label>最高持仓数</label><input type="number" id="cfgMaxPositionCount" step="1" min="0" value="100"></div>
       <div class="field" style="justify-content:flex-end"><span style="font-size:11px;color:var(--text-secondary);padding-bottom:4px">对方仓位开仓价与市价偏离≥此值时，停止补仓</span></div>
-    </div>
+    </div></div>
   </div>
 
-  <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-x-circle"></i> 账户级全平</div>
-    <div class="form-grid">
+  <div class="config-group collapsed">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-x-circle"></i> 账户级全平<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>启用全平</label><div class="switch-wrap"><label class="switch"><input type="checkbox" id="cfgEnableAllClose"><span class="track"></span></label><span class="switch-label">账户整体盈利达标时全部平仓</span></div></div>
       <div class="field"><label>全平利润率 (%)</label><input type="number" id="cfgAllClose" step="0.001" min="0" value="0.15"></div>
-    </div>
+    </div></div>
   </div>
 
-  <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-warning-circle"></i> 亏损加仓</div>
-    <div class="form-grid">
+  <div class="config-group collapsed">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-warning-circle"></i> 亏损加仓<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>启用加仓</label><div class="switch-wrap"><label class="switch"><input type="checkbox" id="cfgEnableMarginCall"><span class="track"></span></label><span class="switch-label">亏损达标时自动追加仓位</span></div></div>
       <div class="field"><label>多单亏损加仓阈值 (%)</label><input type="number" id="cfgMarginCallThresholdLong" step="0.1" min="0" value="25"></div>
       <div class="field"><label>空单亏损加仓阈值 (%)</label><input type="number" id="cfgMarginCallThresholdShort" step="0.1" min="0" value="25"></div>
       <div class="field"><label>加仓倍数</label><input type="number" id="cfgMarginCallMultiplier" step="0.5" min="0.1" value="2"></div>
-    </div>
+    </div></div>
   </div>
 
-  <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-arrows-in-line-horizontal"></i> 多空对平</div>
-    <div class="form-grid">
+  <div class="config-group collapsed">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-arrows-in-line-horizontal"></i> 多空对平<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>启用对平</label><div class="switch-wrap"><label class="switch"><input type="checkbox" id="cfgEnableSinglePairClose"><span class="track"></span></label><span class="switch-label">多空平均盈利达标时双向平仓</span></div></div>
       <div class="field"><label>对平利润率 (%)</label><input type="number" id="cfgPairClose" step="0.001" min="0" value="0.2"></div>
-    </div>
+    </div></div>
   </div>
 
-  <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-shield-check"></i> 白名单</div>
-    <div class="form-grid">
+  <div class="config-group collapsed">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-shield-check"></i> 白名单<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field full"><label>跳过平仓的交易对（每行一个）</label><textarea id="cfgSkip" placeholder="留空表示不跳过任何交易对"></textarea></div>
-    </div>
+    </div></div>
   </div>
 
-  <div class="config-group">
-    <div class="config-group-title"><i class="ph ph-gear"></i> 前端显示设置</div>
-    <div class="form-grid">
+  <div class="config-group collapsed">
+    <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-gear"></i> 前端显示设置<i class="ph ph-caret-down toggle-icon"></i></div>
+    <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>矩阵格子数</label><input type="number" id="cfgMatrixSlots" step="1" min="1" value="100"></div>
       <div class="field"><label>矩阵列数</label><input type="number" id="cfgMatrixColumns" step="1" min="1" value="10"></div>
-    </div>
+    </div></div>
   </div>
 
   <div class="btn-row">
@@ -1677,7 +1639,7 @@ async function refresh() {
     const tasks = [];
     if (currentTab === 'dashboard') {
       tasks.push(loadAccount(), loadStats(), loadProfitTrend(), loadLiquidations());
-      Promise.all(tasks).then(() => updateFlowGraph());
+      Promise.all(tasks).then(() => updatePipeline());
     } else if (currentTab === 'matrix') {
       const posData = await api('/api/positions-map');
       tasks.push(loadPositionsMap(posData), loadFullMatrix(posData));
@@ -1696,8 +1658,7 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (currentTab === 'dashboard') {
-      buildFlowGraph();
-      updateFlowGraph();
+      updatePipeline();
       drawChart();
     }
   }, 150);
@@ -1781,402 +1742,6 @@ async function generatePoster() {
   }
 }
 
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-// ===== Strategy Flow Graph (v3: Layout C center trunk + symmetric branches) =====
-const FLOW_NODES = [
-  // Center trunk — data flow
-  { id:'start',      name:'Tick 开始',       type:'data',    x:265, y:15,  w:120, h:32 },
-  { id:'symbols',    name:'刷新交易对',       type:'data',    x:265, y:50,  w:120, h:32 },
-  { id:'prices',     name:'刷新价格',         type:'data',    x:265, y:85,  w:120, h:32 },
-  { id:'positions',  name:'获取持仓',         type:'data',    x:265, y:120, w:120, h:32 },
-
-  // Decision nodes — center
-  { id:'allCheck',   name:'全仓止盈?',        type:'check',   x:265, y:170, w:120, h:32, checkKey:'enable_all_close' },
-  { id:'tierCheck',  name:'分级止盈?',        type:'check',   x:265, y:252, w:120, h:32 },
-  { id:'pairCheck',  name:'多空对平?',        type:'check',   x:265, y:334, w:120, h:32, checkKey:'enable_single_pair_close' },
-  { id:'marginCheck',name:'亏损加仓?',        type:'check',   x:265, y:416, w:120, h:32, checkKey:'enable_margin_call' },
-  { id:'replenish',  name:'补开仓位?',        type:'check',   x:265, y:498, w:120, h:32 },
-
-  // Left action branches
-  { id:'allClose',   name:'全仓平仓',         type:'action',  x:30,  y:170, w:120, h:32 },
-  { id:'allReplenish',name:'补开全仓',        type:'action',  x:30,  y:214, w:120, h:32 },
-  { id:'pairClose',  name:'多空对平',         type:'action',  x:30,  y:334, w:120, h:32 },
-  { id:'openPos',    name:'开仓',             type:'action',  x:30,  y:498, w:120, h:32 },
-
-  // Right action branches
-  { id:'tierClose',  name:'部分/全部平仓',    type:'action',  x:490, y:252, w:120, h:32 },
-  { id:'marginAdd',  name:'亏损加仓',         type:'action',  x:490, y:416, w:120, h:32 },
-
-  // End of trunk
-  { id:'checkpoint', name:'数据库持久化',     type:'data',    x:265, y:560, w:120, h:32 },
-  { id:'end',        name:'Tick 结束',        type:'data',    x:265, y:598, w:120, h:32 },
-];
-
-const FLOW_EDGES = [
-  { from:'start',      to:'symbols' },
-  { from:'symbols',    to:'prices' },
-  { from:'prices',     to:'positions' },
-  { from:'positions',  to:'allCheck' },
-
-  { from:'allCheck',   to:'allClose',    label:'触发', color:'#00e5a0', type:'yes' },
-  { from:'allCheck',   to:'tierCheck',   label:'继续', type:'no' },
-  { from:'allClose',   to:'allReplenish' },
-  { from:'allReplenish',to:'tierCheck',  curve:'back', color:'#f59e0b' },
-
-  { from:'tierCheck',  to:'tierClose',   label:'触发', color:'#00e5a0', type:'yes' },
-  { from:'tierCheck',  to:'pairCheck',   label:'继续', type:'no' },
-  { from:'tierClose',  to:'pairCheck',   curve:'back', color:'#f59e0b' },
-
-  { from:'pairCheck',  to:'pairClose',   label:'触发', color:'#00e5a0', type:'yes' },
-  { from:'pairCheck',  to:'marginCheck', label:'继续', type:'no' },
-  { from:'pairClose',  to:'marginCheck', curve:'back', color:'#f59e0b' },
-
-  { from:'marginCheck',to:'marginAdd',   label:'触发', color:'#00e5a0', type:'yes' },
-  { from:'marginCheck',to:'replenish',   label:'继续', type:'no' },
-  { from:'marginAdd',  to:'replenish',   curve:'back', color:'#f59e0b' },
-
-  { from:'replenish',  to:'openPos',     label:'触发', color:'#00e5a0', type:'yes' },
-  { from:'replenish',  to:'checkpoint',  label:'继续', type:'no' },
-  { from:'openPos',    to:'checkpoint',  curve:'back', color:'#f59e0b' },
-
-  { from:'checkpoint', to:'end' },
-];
-
-let _flowConfig = null;
-let _prevStats = {};
-let _prevAccount = {};
-let _tickTimer = null;
-let _scanning = false;
-
-function getNode(id) { return FLOW_NODES.find(n => n.id === id); }
-function cx(n){ return n.x + n.w/2; }
-function cy(n){ return n.y + n.h/2; }
-function topCenter(n){ return { x:cx(n), y:n.y }; }
-function bottomCenter(n){ return { x:cx(n), y:n.y+n.h }; }
-function leftCenter(n){ return { x:n.x, y:cy(n) }; }
-function rightCenter(n){ return { x:n.x+n.w, y:cy(n) }; }
-
-function buildEdgePath(edge) {
-  const from = getNode(edge.from);
-  const to = getNode(edge.to);
-  if (!from || !to) return '';
-
-  if (edge.curve === 'back') {
-    // Action node back to next check: if action is LEFT of check, go action-right -> check-left
-    // If action is RIGHT of check, go action-left -> check-right
-    const s = from.x < to.x ? rightCenter(from) : leftCenter(from);
-    const e = from.x < to.x ? leftCenter(to) : rightCenter(to);
-    const c1x = s.x + (e.x - s.x) * 0.5;
-    return `M ${s.x} ${s.y} C ${c1x} ${s.y} ${c1x} ${e.y} ${e.x} ${e.y}`;
-  } else if (edge.type === 'yes') {
-    // Check to action: if action is LEFT of check, go check-left -> action-right
-    // If action is RIGHT of check, go check-right -> action-left
-    const s = to.x < from.x ? leftCenter(from) : rightCenter(from);
-    const e = to.x < from.x ? rightCenter(to) : leftCenter(to);
-    const midX = (s.x + e.x) * 0.5;
-    return `M ${s.x} ${s.y} C ${midX} ${s.y} ${midX} ${e.y} ${e.x} ${e.y}`;
-  } else if (edge.type === 'no') {
-    const s = bottomCenter(from);
-    const e = topCenter(to);
-    const dist = Math.max(1, e.y - s.y);
-    const offset = Math.min(dist * 0.45, 22);
-    return `M ${s.x} ${s.y} C ${s.x} ${s.y + offset} ${e.x} ${e.y - offset} ${e.x} ${e.y}`;
-  } else {
-    const s = bottomCenter(from);
-    const e = topCenter(to);
-    const dist = Math.max(1, e.y - s.y);
-    const offset = Math.min(dist * 0.45, 14);
-    return `M ${s.x} ${s.y} C ${s.x} ${s.y + offset} ${e.x} ${e.y - offset} ${e.x} ${e.y}`;
-  }
-}
-
-function buildFlowGraph() {
-  const container = document.getElementById('flowGraph');
-  if (!container) return;
-  const containerW = Math.max(container.clientWidth || 360, 360);
-  const scale = containerW / 640;
-  const totalW = 640;
-  const totalH = 650;
-
-  let svg = `<svg class="flow-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMin meet"><defs>`;
-  svg += '<marker id="arrow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#475569"/></marker>';
-  svg += '<marker id="arrowA" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#f59e0b"/></marker>';
-  svg += '<marker id="arrowG" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#00e5a0"/></marker>';
-  svg += '</defs>';
-
-  // Edges
-  FLOW_EDGES.forEach((e, i) => {
-    const d = buildEdgePath(e);
-    if (!d) return;
-    const colorClass = e.color === '#00e5a0' ? ' triggered' : (e.color === '#f59e0b' ? ' active' : '');
-    const marker = e.color === '#00e5a0' ? 'url(#arrowG)' : (e.color === '#f59e0b' ? 'url(#arrowA)' : 'url(#arrow)');
-    svg += `<path id="edge-${e.from}-${e.to}" class="flow-edge${colorClass}" d="${d}" marker-end="${marker}" data-base-color="${e.color || ''}"/>`;
-
-    // Edge label
-    if (e.label) {
-      const from = getNode(e.from);
-      const to = getNode(e.to);
-      let lx, ly;
-      if (e.type === 'yes') {
-        const s = to.x < from.x ? leftCenter(from) : rightCenter(from);
-        const ePt = to.x < from.x ? rightCenter(to) : leftCenter(to);
-        lx = (s.x + ePt.x) / 2;
-        ly = (s.y + ePt.y) / 2 - 6;
-      } else if (e.type === 'no') {
-        lx = (bottomCenter(from).x + topCenter(to).x) / 2 + 10;
-        ly = (bottomCenter(from).y + topCenter(to).y) / 2;
-      } else {
-        lx = (bottomCenter(from).x + topCenter(to).x) / 2;
-        ly = (bottomCenter(from).y + topCenter(to).y) / 2;
-      }
-      svg += `<rect class="flow-edge-label-bg" x="${lx-14}" y="${ly-7}" width="28" height="14" rx="3"/>`;
-      svg += `<text class="flow-edge-label" x="${lx}" y="${ly+3}">${e.label}</text>`;
-    }
-
-    // Particle
-    const pColor = e.color === '#00e5a0' ? 'green' : (e.color === '#f59e0b' ? 'amber' : '');
-    const dur = e.type === 'yes' ? '1.4s' : (e.curve === 'back' ? '1.8s' : '2.2s');
-    svg += `<circle r="2.2" class="flow-particle ${pColor}" opacity="0.85">`;
-    svg += `<animateMotion dur="${dur}" repeatCount="indefinite" path="${d}"/>`;
-    svg += `</circle>`;
-  });
-
-  // Nodes
-  FLOW_NODES.forEach(n => {
-    const isAction = n.type === 'action';
-    const isCheck = n.type === 'check';
-    const shapeClass = isAction ? 'flow-node-action' : (isCheck ? 'flow-node-check' : 'flow-node-rect');
-    svg += `<g id="node-${n.id}">`;
-    const rx = 2;
-    svg += `<rect id="rect-${n.id}" class="${shapeClass}" x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${rx}"/>`;
-    svg += `<text class="flow-node-text" x="${cx(n)}" y="${cy(n)-1}">${n.name}</text>`;
-    svg += `<text id="sub-${n.id}" class="flow-node-sub" x="${cx(n)}" y="${cy(n)+11}"></text>`;
-    svg += '</g>';
-  });
-
-  svg += '</svg>';
-  container.innerHTML = svg;
-  container._flowScale = scale;
-
-  // Initial state: dim all action nodes until triggered
-  FLOW_NODES.forEach(n => {
-    if (n.type === 'action') {
-      const rect = document.getElementById('rect-' + n.id);
-      if (rect) rect.classList.add('dimmed');
-    }
-  });
-}
-
-function pulseNode(nodeId, color) {
-  const rect = document.getElementById('rect-' + nodeId);
-  if (!rect) return;
-  rect.classList.remove('active', 'pulsing', 'triggered', 'dimmed');
-  void rect.offsetWidth;
-  if (color) rect.classList.add(color, 'pulsing');
-  setTimeout(() => rect.classList.remove('pulsing'), 1200);
-}
-
-function lightEdge(fromId, toId, color) {
-  const edge = document.getElementById('edge-' + fromId + '-' + toId);
-  if (!edge) return;
-  edge.classList.remove('active', 'triggered', 'dimmed');
-  if (color) {
-    edge.classList.add(color);
-    const marker = color === 'triggered' ? 'url(#arrowG)' : 'url(#arrowA)';
-    edge.setAttribute('marker-end', marker);
-    setTimeout(() => {
-      edge.classList.remove('active', 'triggered');
-      const baseColor = edge.getAttribute('data-base-color');
-      edge.setAttribute('marker-end', baseColor === '#00e5a0' ? 'url(#arrowG)' : (baseColor === '#f59e0b' ? 'url(#arrowA)' : 'url(#arrow)'));
-    }, 1200);
-  }
-}
-
-function dimNode(nodeId) {
-  const rect = document.getElementById('rect-' + nodeId);
-  if (rect) rect.classList.add('dimmed');
-}
-
-function dimEdge(fromId, toId) {
-  const edge = document.getElementById('edge-' + fromId + '-' + toId);
-  if (edge) edge.classList.add('dimmed');
-}
-
-function runTickPulse(triggeredMap) {
-  if (_scanning) return;
-  _scanning = true;
-  const triggered = triggeredMap || {};
-  function done() { _scanning = false; }
-
-  // Reset all
-  FLOW_NODES.forEach(n => {
-    const rect = document.getElementById('rect-' + n.id);
-    if (rect) rect.classList.remove('active', 'pulsing', 'triggered', 'dimmed');
-  });
-  FLOW_EDGES.forEach(e => {
-    const edge = document.getElementById('edge-' + e.from + '-' + e.to);
-    if (edge) edge.classList.remove('active', 'triggered', 'dimmed');
-  });
-
-  // Always pulse main trunk
-  ['start','symbols','prices','positions'].forEach(id => pulseNode(id, 'active'));
-
-  // Dim disabled branches first
-  FLOW_EDGES.forEach(e => {
-    const fromNode = getNode(e.from);
-    const toNode = getNode(e.to);
-    if (fromNode.checkKey && _flowConfig && !_flowConfig[fromNode.checkKey]) {
-      if (e.type === 'yes') {
-        dimEdge(e.from, e.to);
-        dimNode(toNode.id);
-      }
-    }
-  });
-
-  const sequence = [
-    { ids:['allCheck'], delay:200 },
-    { ids:['allClose','allReplenish'], delay:350, ifTriggered:'allClose' },
-    { ids:['tierCheck'], delay:500 },
-    { ids:['tierClose'], delay:650, ifTriggered:'tierClose' },
-    { ids:['pairCheck'], delay:800 },
-    { ids:['pairClose'], delay:950, ifTriggered:'pairClose' },
-    { ids:['marginCheck'], delay:1100 },
-    { ids:['marginAdd'], delay:1250, ifTriggered:'marginAdd' },
-    { ids:['replenish'], delay:1400 },
-    { ids:['openPos'], delay:1550, ifTriggered:'openPos' },
-    { ids:['checkpoint','end'], delay:1700 },
-  ];
-
-  let seqIdx = 0;
-  function runSeq() {
-    if (seqIdx >= sequence.length) {
-      setTimeout(done, 600);
-      return;
-    }
-    const step = sequence[seqIdx];
-    seqIdx++;
-
-    if (step.ifTriggered && !triggered[step.ifTriggered]) {
-      runSeq();
-      return;
-    }
-
-    step.ids.forEach(id => {
-      const n = getNode(id);
-      if (!n) return;
-      const isDisabled = n.checkKey && _flowConfig && !_flowConfig[n.checkKey];
-      if (isDisabled) {
-        dimNode(id);
-        return;
-      }
-      const isTriggered = triggered[id] === true;
-      if (n.type === 'action') {
-        pulseNode(id, isTriggered ? 'triggered' : 'dimmed');
-      } else if (n.type === 'check') {
-        pulseNode(id, isTriggered ? 'triggered' : 'active');
-      } else {
-        pulseNode(id, 'active');
-      }
-    });
-
-    // Light edges leading to these nodes
-    step.ids.forEach(id => {
-      FLOW_EDGES.forEach(e => {
-        if (e.to === id) {
-          const fromNode = getNode(e.from);
-          const fromDisabled = fromNode.checkKey && _flowConfig && !_flowConfig[fromNode.checkKey];
-          if (fromDisabled && e.type === 'yes') return;
-          const toNode = getNode(id);
-          const color = (triggered[id] || toNode.type === 'check' || toNode.type === 'data') ? (triggered[id] ? 'triggered' : 'active') : null;
-          if (color) lightEdge(e.from, e.to, color);
-        }
-      });
-    });
-
-    setTimeout(runSeq, step.delay);
-  }
-  runSeq();
-}
-
-function updateFlowGraph() {
-  if (!_flowConfig) return;
-  const stats = window._lastStats || {};
-  const account = window._lastAccount || {};
-
-  const subEls = {
-    symbols:    (account.active_symbols||[]).length + ' 个币种',
-    positions:  (account.position_count||0) + ' 仓',
-    allCheck:   '阈值 ' + ((_flowConfig.all_close_threshold||0)*100).toFixed(2) + '%',
-    tierCheck:  (stats.single_count||0) + ' 次',
-    pairCheck:  '阈值 ' + ((_flowConfig.pair_close_threshold||(_flowConfig.profit_threshold||0))*100).toFixed(2) + '%',
-    marginCheck:'倍率 x' + (_flowConfig.margin_call_multiplier||2),
-    replenish:  '上限 ' + (_flowConfig.max_position_count||0) + ' 仓',
-  };
-  Object.entries(subEls).forEach(([id, text]) => {
-    const el = document.getElementById('sub-' + id);
-    if (el) el.textContent = text;
-  });
-
-  FLOW_NODES.forEach(n => {
-    const rect = document.getElementById('rect-' + n.id);
-    if (!rect) return;
-    if (n.checkKey && !_flowConfig[n.checkKey]) {
-      rect.classList.add('disabled');
-    } else {
-      rect.classList.remove('disabled');
-    }
-  });
-
-  // Dim edges for disabled checks
-  FLOW_EDGES.forEach(e => {
-    const fromNode = getNode(e.from);
-    const edgeEl = document.getElementById('edge-' + e.from + '-' + e.to);
-    if (!edgeEl) return;
-    if (fromNode.checkKey && _flowConfig && !_flowConfig[fromNode.checkKey] && e.type === 'yes') {
-      edgeEl.classList.add('dimmed');
-    } else {
-      edgeEl.classList.remove('dimmed');
-    }
-  });
-
-  const triggered = {};
-  if ((stats.all_close_count||0) > (_prevStats.all_close_count||0)) {
-    triggered['allCheck'] = true; triggered['allClose'] = true; triggered['allReplenish'] = true;
-  }
-  if ((stats.single_count||0) > (_prevStats.single_count||0)) {
-    triggered['tierCheck'] = true; triggered['tierClose'] = true;
-  }
-  if ((stats.pair_close_count||0) > (_prevStats.pair_close_count||0)) {
-    triggered['pairCheck'] = true; triggered['pairClose'] = true;
-  }
-  if ((account.margin_call_count||0) > (_prevAccount.margin_call_count||0)) {
-    triggered['marginCheck'] = true; triggered['marginAdd'] = true;
-  }
-  const posIncreased = (account.position_count||0) > (_prevAccount.position_count||0);
-  if (posIncreased && !triggered['marginAdd']) {
-    triggered['replenish'] = true; triggered['openPos'] = true;
-  }
-
-  _prevStats = JSON.parse(JSON.stringify(stats));
-  _prevAccount = JSON.parse(JSON.stringify(account));
-
-  if (currentTab === 'dashboard') {
-    runTickPulse(triggered);
-  }
-}
 
 function startTickSimulation() {
   if (_tickTimer) return;
@@ -2188,12 +1753,8 @@ function startTickSimulation() {
 }
 
 async function loadDashboardView() {
-  if (!document.getElementById('flowGraph').querySelector('svg')) {
-    buildFlowGraph();
-  }
   const cfg = await api('/api/config');
   if (cfg) {
-    _flowConfig = cfg;
     document.getElementById('tickInterval').textContent = cfg.position_check_interval || 3;
   }
   await loadAccount();
@@ -2201,10 +1762,9 @@ async function loadDashboardView() {
   loadLiquidations();
   _prevStats = JSON.parse(JSON.stringify(window._lastStats || {}));
   _prevAccount = JSON.parse(JSON.stringify(window._lastAccount || {}));
-  updateFlowGraph();
+  updatePipeline();
   startTickSimulation();
 }
-// Removed strategy tab and log stream
 
 
 loadConfig();
