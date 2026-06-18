@@ -365,6 +365,7 @@ class WebServer:
                     "side": side,
                     "contracts": contracts,
                     "entry_price": entry,
+                    "position_value": round(val, 2),
                     "pnl": round(pnl, 4),
                     "pnl_rate": round(rate, 6),
                 })

@@ -1301,19 +1301,16 @@ async function loadFullMatrix(posData) {
   const occupied = slots.filter(s => s.occupied).sort((a, b) => a.pnl_rate - b.pnl_rate).slice(0, maxSlots);
   const totalPos = occupied.length;
 
-  // 计算每格的 USDT 市值
+  // 5 USDT = 1 格，持仓金额按比例显示
+  const UNIT_USDT = 5;
   const slotValues = occupied.map(s => ({
     slot: s,
-    usdt: (s.contracts || 0) * (s.entry_price || 0)
+    usdt: s.position_value || (s.contracts || 0) * (s.entry_price || 0)
   }));
-  const maxUsdt = Math.max(...slotValues.map(v => v.usdt), 1);
 
-  // 分配列跨度：USDT 市值占比越大，span 越大
-  // span: 1~4 列，对应权重 0~1
+  // 分配列跨度：每格 = 5 USDT，最少1格
   for (const v of slotValues) {
-    const ratio = v.usdt / maxUsdt;
-    // 1列(轻) ~ 4列(重)
-    v.span = ratio < 0.15 ? 1 : ratio < 0.35 ? 2 : ratio < 0.6 ? 3 : 4;
+    v.span = Math.max(1, Math.round(v.usdt / UNIT_USDT));
   }
 
   // 贪心行分配：从左到右填充，放不下就换行
@@ -1328,7 +1325,7 @@ async function loadFullMatrix(posData) {
     col += v.span;
   }
   const totalRows = row;
-  const displayRows = Math.max(totalRows, Math.ceil(maxSlots / gridCols));
+  const displayRows = totalRows;
 
   container.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
 
