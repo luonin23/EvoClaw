@@ -442,22 +442,27 @@ body::after{
 }
 
 /* ===== Pipeline Status Bar ===== */
+.pipeline-wrap{
+  background:var(--bg-surface);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-md);padding:20px 16px;text-align:center;
+}
 .pipeline-bar{
-  display:flex;align-items:center;gap:2px;padding:8px 4px;
-  justify-content:center;flex-wrap:wrap;
+  display:flex;align-items:center;gap:4px;
+  justify-content:center;flex-wrap:wrap;margin-bottom:10px;
 }
 .pipe-step{
-  display:flex;flex-direction:column;align-items:center;gap:3px;
-  padding:6px 8px;border-radius:var(--radius-sm);
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:10px 14px;border-radius:var(--radius-sm);
   background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);
-  min-width:44px;transition:all .3s ease;
-  font-size:9px;color:var(--text-muted);text-align:center;
+  min-width:56px;transition:all .3s ease;
+  font-size:10px;color:var(--text-muted);text-align:center;
 }
-.pipe-step i{font-size:14px;transition:color .3s}
+.pipe-step i{font-size:18px;transition:color .3s}
 .pipe-step.active{border-color:var(--warning);color:var(--warning);background:rgba(245,158,11,0.08)}
 .pipe-step.triggered{border-color:var(--success);color:var(--success);background:rgba(0,229,160,0.08)}
 .pipe-step i.glow{filter:drop-shadow(0 0 4px currentColor)}
-.pipe-arrow{color:var(--text-muted);font-size:10px;flex-shrink:0}
+.pipe-arrow{color:var(--text-muted);font-size:12px;flex-shrink:0}
+.pipeline-desc{font-size:10px;color:var(--text-tertiary)}
 .log-time{color:var(--text-muted);white-space:nowrap}
 .log-msg{flex:1;word-break:break-all}
 .log-type-open{color:var(--accent)}
@@ -568,18 +573,21 @@ body::after{
         <h2>交易决策流图</h2>
         <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
       </div>
-      <div class="pipeline-bar" id="pipelineBar">
-        <div class="pipe-step" id="pipeFetch"><i class="ph ph-download-simple"></i><span>获取仓位</span></div>
-        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-        <div class="pipe-step" id="pipeAllClose"><i class="ph ph-x-circle"></i><span>全平</span></div>
-        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-        <div class="pipe-step" id="pipeSingle"><i class="ph ph-chart-line-up"></i><span>止盈</span></div>
-        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-        <div class="pipe-step" id="pipePair"><i class="ph ph-arrows-in-line-horizontal"></i><span>对平</span></div>
-        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-        <div class="pipe-step" id="pipeMargin"><i class="ph ph-warning-circle"></i><span>加仓</span></div>
-        <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-        <div class="pipe-step" id="pipeReplenish"><i class="ph ph-plus-circle"></i><span>补仓</span></div>
+      <div class="pipeline-wrap">
+        <div class="pipeline-bar" id="pipelineBar">
+          <div class="pipe-step" id="pipeFetch"><i class="ph ph-download-simple"></i><span>获取仓位</span></div>
+          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+          <div class="pipe-step" id="pipeAllClose"><i class="ph ph-x-circle"></i><span>全平</span></div>
+          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+          <div class="pipe-step" id="pipeSingle"><i class="ph ph-chart-line-up"></i><span>止盈</span></div>
+          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+          <div class="pipe-step" id="pipePair"><i class="ph ph-arrows-in-line-horizontal"></i><span>对平</span></div>
+          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+          <div class="pipe-step" id="pipeMargin"><i class="ph ph-warning-circle"></i><span>加仓</span></div>
+          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
+          <div class="pipe-step" id="pipeReplenish"><i class="ph ph-plus-circle"></i><span>补仓</span></div>
+        </div>
+        <div class="pipeline-desc">高亮步骤 = 当前执行中 丨 绿色 = 本 tick 触发操作</div>
       </div>
     </div>
 
