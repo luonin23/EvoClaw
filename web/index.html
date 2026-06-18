@@ -1077,17 +1077,19 @@ async function loadAccount() {
   setClass('accTotalRate', 'stat-value ' + clr(tr));
 
   const symEl = document.getElementById('accActiveSymbols');
-  const newSymText = d.active_symbols && d.active_symbols.length
-    ? '当前筛选币种 (' + d.active_symbols.length + '个): ' + d.active_symbols.join(' ')
-    : '当前无匹配币种 (0个)';
-  const oldSymText = symEl.dataset.symbols || '';
-  if (oldSymText !== newSymText) {
-    symEl.dataset.symbols = newSymText;
-    if (d.active_symbols && d.active_symbols.length) {
-      symEl.innerHTML = '<span style="color:var(--text-muted);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
-        d.active_symbols.map(s => '<span class="sym-tag">' + s + '</span>').join(' ');
-    } else {
-      symEl.innerHTML = '<span style="color:var(--text-muted)">当前无匹配币种 (0个)</span>';
+  if (symEl) {
+    const newSymText = d.active_symbols && d.active_symbols.length
+      ? '当前筛选币种 (' + d.active_symbols.length + '个): ' + d.active_symbols.join(' ')
+      : '当前无匹配币种 (0个)';
+    const oldSymText = symEl.dataset.symbols || '';
+    if (oldSymText !== newSymText) {
+      symEl.dataset.symbols = newSymText;
+      if (d.active_symbols && d.active_symbols.length) {
+        symEl.innerHTML = '<span style="color:var(--text-muted);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
+          d.active_symbols.map(s => '<span class="sym-tag">' + s + '</span>').join(' ');
+      } else {
+        symEl.innerHTML = '<span style="color:var(--text-muted)">当前无匹配币种 (0个)</span>';
+      }
     }
   }
 
