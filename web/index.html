@@ -607,7 +607,15 @@ body::after{
         <div class="stat-cell"><div class="stat-value" id="accSingleClose">-</div><div class="stat-label">单项平仓</div></div>
         <div class="stat-cell"><div class="stat-value" id="accMarginCall">-</div><div class="stat-label">加仓次数</div></div>
       </div>
-      <div id="accActiveSymbols" class="sym-bar" style="margin-top:8px;max-width:600px;margin-left:auto;margin-right:auto"><span style="color:var(--text-muted)">筛选币种加载中...</span></div>
+    </div>
+
+    <div class="tile">
+      <div class="tile-head">
+        <div class="icon-wrap"><i class="ph ph-coin"></i></div>
+        <h2>当前筛选币种</h2>
+        <span style="margin-left:auto;font-size:10px;color:var(--text-muted)"><span id="symCount">0</span> 个</span>
+      </div>
+      <div id="accActiveSymbols" class="sym-bar"><span style="color:var(--text-muted)">筛选币种加载中...</span></div>
     </div>
 
     <div class="bento-bottom-row">
@@ -1080,19 +1088,19 @@ async function loadAccount() {
 
   const symEl = document.getElementById('accActiveSymbols');
   if (symEl) {
-    const newSymText = d.active_symbols && d.active_symbols.length
-      ? '当前筛选币种 (' + d.active_symbols.length + '个): ' + d.active_symbols.join(' ')
-      : '当前无匹配币种 (0个)';
+    const count = d.active_symbols ? d.active_symbols.length : 0;
+    const symText = d.active_symbols ? d.active_symbols.join(' ') : '';
     const oldSymText = symEl.dataset.symbols || '';
-    if (oldSymText !== newSymText) {
-      symEl.dataset.symbols = newSymText;
+    if (oldSymText !== symText) {
+      symEl.dataset.symbols = symText;
       if (d.active_symbols && d.active_symbols.length) {
-        symEl.innerHTML = '<span style="color:var(--text-muted);margin-right:6px">当前筛选币种 (' + d.active_symbols.length + '个):</span>' +
-          d.active_symbols.map(s => '<span class="sym-tag">' + s + '</span>').join(' ');
+        symEl.innerHTML = d.active_symbols.map(s => '<span class="sym-tag">' + s + '</span>').join(' ');
       } else {
-        symEl.innerHTML = '<span style="color:var(--text-muted)">当前无匹配币种 (0个)</span>';
+        symEl.innerHTML = '<span style="color:var(--text-muted)">无匹配币种</span>';
       }
     }
+    const countEl = document.getElementById('symCount');
+    if (countEl) countEl.textContent = count;
   }
 
   setText('posCount', d.position_count || 0);
