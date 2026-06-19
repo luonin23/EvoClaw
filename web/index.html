@@ -118,9 +118,7 @@ body::after{
   box-shadow:0 0 12px rgba(0,212,255,0.3);
 }
 .brand h1{
-  font-size:22px;font-weight:700;letter-spacing:-0.03em;
-  background:linear-gradient(135deg, var(--text-primary), var(--accent));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--accent);
 }
 .brand .version{
   font-family:var(--font-mono);font-size:10px;color:var(--text-muted);
@@ -504,6 +502,11 @@ body::after{
 .liq-event-pairs{color:var(--accent);min-width:70px}
 .liq-event-pnl{color:var(--error);font-weight:600;min-width:80px}
 .liq-event-top3{color:var(--text-tertiary);font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}
+}
+
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
