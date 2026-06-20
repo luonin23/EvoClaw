@@ -1,928 +1,1282 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EvoClaw - 智能量化交易系统</title>
-    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        :root {
-            --bg-black: #000000;
-            --bg-dark: #0a0a0a;
-            --text-white: #ffffff;
-            --text-gray: #a0a0a0;
-            --green-up: #00c853;
-            --green-glow: rgba(0, 200, 83, 0.3);
-            --red-down: #ff1744;
-            --red-glow: rgba(255, 23, 68, 0.3);
-        }
-
-        body {
-            background: var(--bg-black);
-            color: var(--text-white);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            overflow-x: hidden;
-        }
-
-        .scene {
-            width: 100vw;
-            min-height: 100vh;
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-        }
-
-        .scene-content {
-            width: 100%;
-            max-width: 1200px;
-            padding: 80px 40px;
-            position: relative;
-            z-index: 2;
-        }
-
-        .grid-bg {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            background-image:
-                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .k-line {
-            position: absolute;
-            width: 4px;
-            border-radius: 2px;
-            opacity: 0.12;
-        }
-
-        .k-line.green {
-            background: var(--green-up);
-            box-shadow: 0 0 10px var(--green-glow);
-        }
-
-        .k-line.red {
-            background: var(--red-down);
-            box-shadow: 0 0 10px var(--red-glow);
-        }
-
-        /* ===== SCENE 1: HERO ===== */
-        #scene-hero {
-            background: radial-gradient(ellipse at center, #111 0%, #000 100%);
-        }
-
-        .hero-title {
-            font-size: 90px;
-            font-weight: 900;
-            letter-spacing: 10px;
-            text-align: center;
-            margin-bottom: 24px;
-        }
-
-        .hero-title .evo {
-            color: var(--green-up);
-            text-shadow: 0 0 50px var(--green-glow);
-        }
-
-        .hero-title .claw {
-            color: var(--red-down);
-            text-shadow: 0 0 50px var(--red-glow);
-        }
-
-        .hero-subtitle {
-            font-size: 28px;
-            text-align: center;
-            color: var(--text-gray);
-            letter-spacing: 16px;
-            text-transform: uppercase;
-            margin-bottom: 50px;
-        }
-
-        .hero-desc {
-            font-size: 20px;
-            text-align: center;
-            color: var(--text-white);
-            line-height: 2;
-            max-width: 700px;
-            margin: 0 auto;
-        }
-
-        .hero-desc .green { color: var(--green-up); font-weight: 700; }
-        .hero-desc .red { color: var(--red-down); font-weight: 700; }
-
-        .scroll-indicator {
-            position: absolute;
-            bottom: 40px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            color: var(--text-gray);
-            font-size: 12px;
-            letter-spacing: 2px;
-        }
-
-        .scroll-indicator::after {
-            content: '';
-            width: 1px;
-            height: 40px;
-            background: linear-gradient(to bottom, var(--green-up), transparent);
-            animation: scrollPulse 2s ease-in-out infinite;
-        }
-
-        @keyframes scrollPulse {
-            0%, 100% { opacity: 0.3; transform: scaleY(0.5); }
-            50% { opacity: 1; transform: scaleY(1); }
-        }
-
-        /* ===== SECTION TITLE ===== */
-        .section-title {
-            font-size: 44px;
-            font-weight: 800;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-
-        .section-title .green { color: var(--green-up); }
-        .section-title .red { color: var(--red-down); }
-
-        .section-subtitle {
-            font-size: 18px;
-            color: var(--text-gray);
-            text-align: center;
-            margin-bottom: 60px;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
-            line-height: 1.7;
-        }
-
-        .section-line {
-            width: 60px;
-            height: 3px;
-            background: linear-gradient(90deg, var(--green-up), var(--red-down));
-            margin: 0 auto 60px;
-            border-radius: 2px;
-        }
-
-        /* ===== CARDS ===== */
-        .card-grid-3 {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 30px;
-        }
-
-        .card-grid-2 {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 30px;
-        }
-
-        .card-grid-6 {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 24px;
-        }
-
-        .info-card {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 16px;
-            padding: 40px 32px;
-            transition: all 0.3s ease;
-        }
-
-        .info-card:hover {
-            border-color: rgba(0, 200, 83, 0.25);
-            transform: translateY(-6px);
-            box-shadow: 0 24px 48px rgba(0, 200, 83, 0.08);
-        }
-
-        .card-icon {
-            width: 56px;
-            height: 56px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 26px;
-            margin-bottom: 24px;
-        }
-
-        .card-icon.green { background: rgba(0,200,83,0.1); border: 1px solid rgba(0,200,83,0.2); }
-        .card-icon.red { background: rgba(255,23,68,0.1); border: 1px solid rgba(255,23,68,0.2); }
-        .card-icon.white { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); }
-
-        .info-card h3 {
-            font-size: 22px;
-            margin-bottom: 14px;
-        }
-
-        .info-card p {
-            font-size: 15px;
-            color: var(--text-gray);
-            line-height: 1.8;
-        }
-
-        /* ===== COMPARE ===== */
-        #scene-compare {
-            background: var(--bg-dark);
-        }
-
-        .compare-wrap {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 40px;
-            max-width: 960px;
-            margin: 0 auto;
-            position: relative;
-        }
-
-        .compare-box {
-            padding: 44px;
-            border-radius: 20px;
-        }
-
-        .compare-box.old {
-            background: rgba(255,23,68,0.04);
-            border: 1px solid rgba(255,23,68,0.12);
-        }
-
-        .compare-box.new {
-            background: rgba(0,200,83,0.04);
-            border: 1px solid rgba(0,200,83,0.12);
-        }
-
-        .compare-box h3 {
-            font-size: 26px;
-            margin-bottom: 28px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .compare-box.old h3 { color: var(--red-down); }
-        .compare-box.new h3 { color: var(--green-up); }
-
-        .compare-box ul { list-style: none; }
-
-        .compare-box li {
-            padding: 12px 0;
-            font-size: 15px;
-            color: var(--text-gray);
-            border-bottom: 1px solid rgba(255,255,255,0.04);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            line-height: 1.6;
-        }
-
-        .compare-box li:last-child { border-bottom: none; }
-
-        .compare-box.old li::before {
-            content: '✕'; color: var(--red-down); font-weight: bold; flex-shrink: 0;
-        }
-
-        .compare-box.new li::before {
-            content: '✓'; color: var(--green-up); font-weight: bold; flex-shrink: 0;
-        }
-
-        .vs-circle {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 56px;
-            height: 56px;
-            background: var(--bg-black);
-            border: 2px solid rgba(255,255,255,0.1);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 13px;
-            font-weight: 800;
-            z-index: 3;
-        }
-
-        /* ===== ENGINES ===== */
-        #scene-engines {
-            background: var(--bg-black);
-        }
-
-        .engine-card {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.05);
-            border-radius: 14px;
-            padding: 32px 24px;
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-
-        .engine-card:hover {
-            border-color: rgba(0,200,83,0.2);
-            background: rgba(0,200,83,0.02);
-        }
-
-        .engine-num {
-            font-size: 40px;
-            font-weight: 900;
-            margin-bottom: 16px;
-            font-variant-numeric: tabular-nums;
-        }
-
-        .engine-card:nth-child(odd) .engine-num { color: var(--green-up); }
-        .engine-card:nth-child(even) .engine-num { color: var(--red-down); }
-
-        .engine-card h4 {
-            font-size: 18px;
-            margin-bottom: 10px;
-        }
-
-        .engine-card p {
-            font-size: 14px;
-            color: var(--text-gray);
-            line-height: 1.7;
-        }
-
-        /* ===== MATRIX / DASHBOARD ===== */
-        #scene-dashboard {
-            background: var(--bg-dark);
-        }
-
-        .dash-showcase {
-            display: grid;
-            grid-template-columns: 1.2fr 1fr;
-            gap: 50px;
-            align-items: center;
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-
-        .dash-visual {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 20px;
-            padding: 36px;
-            min-height: 380px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-
-        .matrix-grid {
-            display: grid;
-            grid-template-columns: repeat(10, 1fr);
-            gap: 6px;
-            margin-bottom: 20px;
-        }
-
-        .m-cell {
-            aspect-ratio: 1;
-            border-radius: 4px;
-            font-size: 9px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-        }
-
-        .m-cell.profit {
-            background: rgba(0,200,83,0.15);
-            border: 1px solid rgba(0,200,83,0.3);
-            color: var(--green-up);
-        }
-
-        .m-cell.loss {
-            background: rgba(255,23,68,0.15);
-            border: 1px solid rgba(255,23,68,0.3);
-            color: var(--red-down);
-        }
-
-        .m-cell.empty {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.05);
-        }
-
-        .dash-stats-row {
-            display: flex;
-            gap: 12px;
-            justify-content: center;
-        }
-
-        .dash-stat {
-            background: rgba(255,255,255,0.03);
-            border-radius: 8px;
-            padding: 10px 16px;
-            text-align: center;
-            min-width: 90px;
-        }
-
-        .dash-stat .val {
-            font-size: 18px;
-            font-weight: 700;
-        }
-
-        .dash-stat .val.up { color: var(--green-up); }
-        .dash-stat .val.down { color: var(--red-down); }
-
-        .dash-stat .lab {
-            font-size: 10px;
-            color: var(--text-gray);
-            margin-top: 4px;
-            letter-spacing: 1px;
-        }
-
-        .dash-text h3 {
-            font-size: 32px;
-            margin-bottom: 24px;
-            line-height: 1.3;
-        }
-
-        .dash-text p {
-            font-size: 16px;
-            color: var(--text-gray);
-            line-height: 1.9;
-            margin-bottom: 20px;
-        }
-
-        .dash-list {
-            list-style: none;
-        }
-
-        .dash-list li {
-            padding: 10px 0;
-            font-size: 15px;
-            color: var(--text-white);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            border-bottom: 1px solid rgba(255,255,255,0.04);
-        }
-
-        .dash-list li::before {
-            content: '▸';
-            color: var(--green-up);
-        }
-
-        /* ===== PROCESS ===== */
-        #scene-process {
-            background: var(--bg-black);
-        }
-
-        .process-track {
-            display: flex;
-            justify-content: space-between;
-            gap: 24px;
-            max-width: 1000px;
-            margin: 0 auto;
-            position: relative;
-        }
-
-        .process-track::before {
-            content: '';
-            position: absolute;
-            top: 36px;
-            left: 8%;
-            right: 8%;
-            height: 2px;
-            background: linear-gradient(90deg, var(--green-up), var(--red-down), var(--green-up));
-            opacity: 0.25;
-        }
-
-        .p-step {
-            flex: 1;
-            text-align: center;
-            position: relative;
-            z-index: 2;
-        }
-
-        .p-circle {
-            width: 72px;
-            height: 72px;
-            border-radius: 50%;
-            background: var(--bg-black);
-            border: 2px solid;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 22px;
-            font-weight: 800;
-            margin: 0 auto 24px;
-        }
-
-        .p-step:nth-child(odd) .p-circle {
-            border-color: var(--green-up);
-            color: var(--green-up);
-            box-shadow: 0 0 24px var(--green-glow);
-        }
-
-        .p-step:nth-child(even) .p-circle {
-            border-color: var(--red-down);
-            color: var(--red-down);
-            box-shadow: 0 0 24px var(--red-glow);
-        }
-
-        .p-step h4 {
-            font-size: 17px;
-            margin-bottom: 10px;
-        }
-
-        .p-step p {
-            font-size: 14px;
-            color: var(--text-gray);
-            line-height: 1.6;
-        }
-
-        /* ===== ENDING ===== */
-        #scene-ending {
-            background: radial-gradient(ellipse at center, #111 0%, #000 100%);
-        }
-
-        .ending-wrap {
-            text-align: center;
-        }
-
-        .ending-big {
-            font-size: 56px;
-            font-weight: 900;
-            margin-bottom: 32px;
-            line-height: 1.3;
-        }
-
-        .ending-big .green { color: var(--green-up); }
-        .ending-big .red { color: var(--red-down); }
-
-        .ending-desc {
-            font-size: 20px;
-            color: var(--text-gray);
-            line-height: 1.9;
-            max-width: 640px;
-            margin: 0 auto 50px;
-        }
-
-        .ending-badges {
-            display: flex;
-            justify-content: center;
-            gap: 24px;
-            flex-wrap: wrap;
-        }
-
-        .badge {
-            padding: 14px 32px;
-            border-radius: 10px;
-            font-size: 15px;
-            font-weight: 600;
-            letter-spacing: 2px;
-            border: 1px solid;
-            background: rgba(255,255,255,0.02);
-        }
-
-        .badge.green {
-            border-color: rgba(0,200,83,0.35);
-            color: var(--green-up);
-        }
-
-        .badge.red {
-            border-color: rgba(255,23,68,0.35);
-            color: var(--red-down);
-        }
-
-        .badge.white {
-            border-color: rgba(255,255,255,0.15);
-            color: var(--text-white);
-        }
-
-        /* ===== ANIMATIONS ===== */
-        .fade-in {
-            opacity: 0;
-            transform: translateY(40px);
-        }
-
-        /* ===== RESPONSIVE ===== */
-        @media (max-width: 768px) {
-            .hero-title { font-size: 52px; letter-spacing: 4px; }
-            .hero-subtitle { font-size: 18px; letter-spacing: 6px; }
-            .section-title { font-size: 32px; }
-            .card-grid-3, .card-grid-2, .card-grid-6 { grid-template-columns: 1fr; }
-            .compare-wrap { grid-template-columns: 1fr; }
-            .vs-circle { display: none; }
-            .dash-showcase { grid-template-columns: 1fr; }
-            .process-track { flex-direction: column; }
-            .process-track::before { display: none; }
-            .ending-big { font-size: 36px; }
-            .ending-badges { flex-direction: column; align-items: center; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EvoClaw v2 -- 智能量化交易系统</title>
+<link rel="preconnect" href="https://fonts.loli.net">
+<link rel="preconnect" href="https://gstatic.loli.net" crossorigin>
+<link href="https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   EvoClaw Intro -- Design System
+   Shared tokens with index.html via :root variables
+   ============================================================ */
+
+/* ---- Geist font (variable, same as index.html) ---- */
+@font-face {
+  font-family: 'Geist';
+  src: url('https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Core palette -- identical to index.html */
+  --bg-base: #070a12;
+  --bg-elevated: #0d1220;
+  --bg-surface: #111827;
+  --bg-hover: #1a2234;
+  --accent: #00d4ff;
+  --accent-dim: #0891b2;
+  --accent-glow: rgba(0, 212, 255, 0.15);
+  --success: #00e5a0;
+  --success-dim: #059669;
+  --success-glow: rgba(0, 229, 160, 0.12);
+  --error: #ff4757;
+  --error-dim: #dc2626;
+  --error-glow: rgba(255, 71, 87, 0.12);
+  --warning: #f59e0b;
+  --warning-glow: rgba(245, 158, 11, 0.1);
+  --border-subtle: rgba(255,255,255,0.06);
+  --border-medium: rgba(255,255,255,0.10);
+  --border-strong: rgba(255,255,255,0.14);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #7c8aa0;
+  --text-muted: #556270;
+  --text-inverse: #070a12;
+
+  /* Typography */
+  --font-ui: 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  /* Font scale -- 6 levels */
+  --font-xs: 9px;
+  --font-sm: 11px;
+  --font-base: 13px;
+  --font-md: 15px;
+  --font-lg: 18px;
+  --font-xl: 22px;
+
+  /* Spacing scale -- 5 levels */
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Animation durations */
+  --dur-fast: 0.2s;
+  --dur-normal: 0.4s;
+  --dur-slow: 0.8s;
+
+  /* Derived -- section gaps */
+  --section-pad-y: clamp(40px, 8vh, 80px);
+  --section-pad-x: clamp(16px, 4vw, 48px);
+  --content-max: 1200px;
+
+  /* Hero */
+  --hero-title-size: clamp(36px, 9vw, 80px);
+  --hero-subtitle-size: clamp(14px, 2.5vw, 22px);
+  --section-heading-size: clamp(24px, 5vw, 44px);
+}
+
+/* ---- Reset & Base ---- */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;font-size:var(--font-md)}
+body{
+  font-family:var(--font-ui);
+  background:var(--bg-base);
+  color:var(--text-primary);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  overflow-x:hidden;
+}
+
+/* Subtle ambient gradient background */
+body::before{
+  content:'';
+  position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(ellipse 70% 40% at 15% 30%, rgba(0,212,255,0.025) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 35% at 85% 65%, rgba(0,229,160,0.018) 0%, transparent 55%);
+}
+
+/* Subtle noise texture */
+body::after{
+  content:'';
+  position:fixed;inset:0;z-index:9998;opacity:0.018;pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---- Grid background (subtle, fixed) ---- */
+.grid-bg{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size:60px 60px;
+}
+
+/* ---- Section layout ---- */
+.section{
+  width:100%;min-height:100vh;
+  position:relative;
+  display:flex;align-items:center;justify-content:center;
+  padding:var(--section-pad-y) var(--section-pad-x);
+  z-index:1;
+}
+.section--half{min-height:auto;padding:var(--space-24) var(--section-pad-x)}
+.section-inner{
+  width:100%;max-width:var(--content-max);
+  position:relative;z-index:2;
+}
+
+/* ---- Section headings ---- */
+.section-label{
+  font-family:var(--font-mono);
+  font-size:var(--font-sm);
+  font-weight:600;
+  color:var(--accent);
+  text-transform:uppercase;
+  letter-spacing:0.12em;
+  margin-bottom:var(--space-12);
+}
+.section-heading{
+  font-size:var(--section-heading-size);
+  font-weight:800;
+  line-height:1.2;
+  letter-spacing:-0.02em;
+  margin-bottom:var(--space-16);
+  text-wrap:balance;
+}
+.section-heading .hl-green{color:var(--success)}
+.section-heading .hl-red{color:var(--error)}
+.section-heading .hl-accent{color:var(--accent)}
+.section-subtitle{
+  font-size:var(--font-base);
+  color:var(--text-secondary);
+  line-height:1.8;
+  max-width:600px;
+  margin-bottom:var(--space-24);
+}
+.section-divider{
+  width:56px;height:2px;
+  background:linear-gradient(90deg, var(--success), var(--accent));
+  border-radius:1px;
+  margin-bottom:var(--space-24);
+}
+
+/* ============================================================
+   SECTION 1: HERO
+   ============================================================ */
+#hero{
+  background:radial-gradient(ellipse 80% 60% at 50% 40%, rgba(0,212,255,0.04) 0%, transparent 65%),
+             radial-gradient(ellipse 40% 30% at 70% 75%, rgba(0,229,160,0.02) 0%, transparent 50%);
+  text-align:center;
+}
+.hero-logo{
+  font-family:var(--font-mono);
+  font-size:var(--font-sm);
+  font-weight:600;
+  color:var(--accent);
+  letter-spacing:0.15em;
+  text-transform:uppercase;
+  margin-bottom:var(--space-12);
+  padding:var(--space-4) var(--space-16);
+  border:1px solid var(--border-subtle);
+  border-radius:9999px;
+  display:inline-block;
+  background:rgba(0,212,255,0.04);
+}
+.hero-title{
+  font-size:var(--hero-title-size);
+  font-weight:900;
+  letter-spacing:-0.03em;
+  line-height:1;
+  margin-bottom:var(--space-16);
+}
+.hero-title .t-evo{
+  color:var(--success);
+  text-shadow:0 0 60px var(--success-glow);
+}
+.hero-title .t-claw{
+  color:var(--error);
+  text-shadow:0 0 60px var(--error-glow);
+}
+.hero-subtitle{
+  font-size:var(--hero-subtitle-size);
+  color:var(--text-secondary);
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  margin-bottom:var(--space-24);
+  font-family:var(--font-mono);
+}
+.hero-pitch{
+  font-size:var(--font-md);
+  color:var(--text-secondary);
+  line-height:2;
+  max-width:640px;
+  margin:0 auto var(--space-24);
+}
+.hero-pitch strong{color:var(--text-primary);font-weight:600}
+.hero-pitch .tag-green{color:var(--success);font-weight:600}
+.hero-pitch .tag-red{color:var(--error);font-weight:600}
+
+/* Hero CTA */
+.hero-cta{
+  display:flex;gap:var(--space-12);justify-content:center;flex-wrap:wrap;
+}
+.cta-btn{
+  display:inline-flex;align-items:center;gap:var(--space-8);
+  padding:12px 28px;border-radius:var(--radius-sm);
+  font-size:var(--font-base);font-weight:600;font-family:var(--font-ui);
+  cursor:pointer;text-decoration:none;
+  transition:all var(--dur-fast) cubic-bezier(0.16,1,0.3,1);
+  letter-spacing:0.01em;position:relative;overflow:hidden;
+}
+.cta-btn--primary{
+  background:linear-gradient(135deg, var(--accent), var(--accent-dim));
+  color:var(--text-inverse);border:none;
+  box-shadow:0 2px var(--space-12) rgba(0,212,255,0.25);
+}
+.cta-btn--primary:hover{
+  box-shadow:0 4px var(--space-24) rgba(0,212,255,0.35);
+  transform:translateY(-1px);
+}
+.cta-btn--secondary{
+  background:var(--bg-surface);
+  color:var(--text-primary);
+  border:1px solid var(--border-subtle);
+}
+.cta-btn--secondary:hover{
+  background:var(--bg-hover);
+  border-color:var(--border-medium);
+  transform:translateY(-1px);
+}
+.cta-btn:active{transform:scale(0.97)}
+.cta-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Scroll indicator */
+.scroll-hint{
+  position:absolute;bottom:32px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;align-items:center;gap:var(--space-8);
+  color:var(--text-muted);
+  font-size:var(--font-xs);
+  font-family:var(--font-mono);
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+.scroll-hint::after{
+  content:'';
+  width:1px;height:36px;
+  background:linear-gradient(to bottom, var(--accent), transparent);
+  animation:scrollHint 2.4s ease-in-out infinite;
+}
+@keyframes scrollHint{
+  0%,100%{opacity:0.2;transform:scaleY(0.4)}
+  50%{opacity:1;transform:scaleY(1)}
+}
+
+/* ============================================================
+   SECTION 2: WHAT IS EVOCLAW
+   ============================================================ */
+#what-is{
+  background:var(--bg-base);
+  text-align:center;
+}
+.capability-grid{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:var(--space-16);
+}
+.cap-card{
+  background:var(--bg-elevated);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  padding:var(--space-24);
+  text-align:left;
+  transition:all var(--dur-normal) cubic-bezier(0.16,1,0.3,1);
+  position:relative;overflow:hidden;
+}
+.cap-card::before{
+  content:'';position:absolute;inset:0;border-radius:inherit;
+  border:1px solid transparent;
+  background:linear-gradient(135deg, rgba(255,255,255,0.06), transparent 50%, transparent 80%, rgba(255,255,255,0.02)) border-box;
+  -webkit-mask:linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  pointer-events:none;opacity:0;transition:opacity var(--dur-normal);
+}
+.cap-card:hover{border-color:var(--border-medium);transform:translateY(-4px);box-shadow:0 16px 48px rgba(0,0,0,0.3)}
+.cap-card:hover::before{opacity:1}
+.cap-card__icon{
+  width:44px;height:44px;border-radius:var(--radius-sm);
+  display:flex;align-items:center;justify-content:center;
+  font-size:var(--font-lg);margin-bottom:var(--space-16);
+  background:var(--bg-hover);border:1px solid var(--border-subtle);
+}
+.cap-card__icon.i-green{background:rgba(0,229,160,0.08);border-color:rgba(0,229,160,0.15);color:var(--success)}
+.cap-card__icon.i-red{background:rgba(255,71,87,0.08);border-color:rgba(255,71,87,0.15);color:var(--error)}
+.cap-card__icon.i-accent{background:rgba(0,212,255,0.08);border-color:rgba(0,212,255,0.15);color:var(--accent)}
+.cap-card h3{font-size:var(--font-md);font-weight:700;margin-bottom:var(--space-8);letter-spacing:-0.01em}
+.cap-card p{font-size:var(--font-base);color:var(--text-secondary);line-height:1.7}
+
+/* ============================================================
+   SECTION 3: COMPARE -- Traditional vs EvoClaw v2
+   ============================================================ */
+#compare{
+  background:var(--bg-elevated);
+}
+.compare-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:var(--space-24);
+  max-width:980px;
+  margin:0 auto;
+  position:relative;
+}
+.compare-box{
+  padding:var(--space-24);
+  border-radius:var(--radius-lg);
+}
+.compare-box--old{
+  background:rgba(255,71,87,0.03);
+  border:1px solid rgba(255,71,87,0.12);
+}
+.compare-box--new{
+  background:rgba(0,229,160,0.03);
+  border:1px solid rgba(0,229,160,0.12);
+}
+.compare-box h3{
+  font-size:var(--font-lg);
+  font-weight:700;
+  margin-bottom:var(--space-16);
+  display:flex;align-items:center;gap:var(--space-8);
+}
+.compare-box--old h3{color:var(--error)}
+.compare-box--new h3{color:var(--success)}
+.compare-box ul{list-style:none}
+.compare-box li{
+  padding:var(--space-8) 0;
+  font-size:var(--font-base);
+  color:var(--text-secondary);
+  border-bottom:1px solid var(--border-subtle);
+  display:flex;align-items:flex-start;gap:var(--space-8);
+  line-height:1.6;
+}
+.compare-box li:last-child{border-bottom:none}
+.compare-box--old li::before{
+  content:'\2715';color:var(--error);font-weight:700;flex-shrink:0;
+  margin-top:1px;
+}
+.compare-box--new li::before{
+  content:'\2713';color:var(--success);font-weight:700;flex-shrink:0;
+  margin-top:1px;
+}
+/* VS badge */
+.vs-badge{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:52px;height:52px;
+  background:var(--bg-surface);
+  border:2px solid var(--border-medium);
+  border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-mono);
+  font-size:var(--font-sm);
+  font-weight:800;
+  letter-spacing:0.05em;
+  color:var(--text-secondary);
+  z-index:3;
+}
+
+/* ============================================================
+   SECTION 4: SIX ENGINES
+   ============================================================ */
+#engines{
+  background:var(--bg-base);
+  text-align:center;
+}
+.engine-grid{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:var(--space-16);
+}
+.engine-card{
+  background:var(--bg-elevated);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  padding:var(--space-24) var(--space-16);
+  text-align:center;
+  transition:all var(--dur-normal) cubic-bezier(0.16,1,0.3,1);
+  position:relative;
+}
+.engine-card:hover{
+  border-color:var(--border-medium);
+  transform:translateY(-4px);
+  box-shadow:0 16px 48px rgba(0,0,0,0.3);
+}
+.engine-num{
+  font-family:var(--font-mono);
+  font-size:clamp(28px, 4vw, 40px);
+  font-weight:900;
+  margin-bottom:var(--space-12);
+  font-variant-numeric:tabular-nums;
+}
+.engine-card:nth-child(odd) .engine-num{color:var(--success)}
+.engine-card:nth-child(even) .engine-num{color:var(--error)}
+.engine-card h4{font-size:var(--font-md);font-weight:700;margin-bottom:var(--space-8)}
+.engine-card p{font-size:var(--font-base);color:var(--text-secondary);line-height:1.7}
+
+/* ============================================================
+   SECTION 5: NEW FEATURES v2.1
+   ============================================================ */
+#new-features{
+  background:var(--bg-elevated);
+}
+.feature-grid{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:var(--space-12);
+}
+.ft-card{
+  background:var(--bg-surface);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-md);
+  padding:var(--space-16);
+  transition:all var(--dur-normal) cubic-bezier(0.16,1,0.3,1);
+  position:relative;
+}
+.ft-card:hover{
+  border-color:var(--border-medium);
+  transform:translateY(-2px);
+}
+.ft-card__icon{
+  width:36px;height:36px;border-radius:var(--radius-sm);
+  display:flex;align-items:center;justify-content:center;
+  font-size:var(--font-md);margin-bottom:var(--space-12);
+  background:var(--bg-hover);border:1px solid var(--border-subtle);
+}
+.ft-card__icon.f-red{background:rgba(255,71,87,0.08);border-color:rgba(255,71,87,0.15);color:var(--error)}
+.ft-card__icon.f-green{background:rgba(0,229,160,0.08);border-color:rgba(0,229,160,0.15);color:var(--success)}
+.ft-card__icon.f-warn{background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.15);color:var(--warning)}
+.ft-card__icon.f-accent{background:rgba(0,212,255,0.08);border-color:rgba(0,212,255,0.15);color:var(--accent)}
+.ft-card h4{font-size:var(--font-base);font-weight:700;margin-bottom:var(--space-8)}
+.ft-card p{font-size:var(--font-sm);color:var(--text-secondary);line-height:1.7}
+
+/* ============================================================
+   SECTION 6: DASHBOARD PREVIEW
+   ============================================================ */
+#dashboard-preview{
+  background:var(--bg-base);
+}
+.dash-preview-grid{
+  display:grid;
+  grid-template-columns:1.2fr 1fr;
+  gap:var(--space-24);
+  align-items:flex-start;
+}
+.dash-mock{
+  background:var(--bg-elevated);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  padding:var(--space-16);
+}
+.dash-mock__header{
+  display:flex;align-items:center;gap:var(--space-8);
+  margin-bottom:var(--space-12);
+  font-family:var(--font-mono);
+  font-size:var(--font-xs);
+  color:var(--text-tertiary);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+}
+.dash-mock__header .dot{
+  width:6px;height:6px;border-radius:50%;background:var(--success);
+  box-shadow:0 0 6px var(--success);
+}
+/* Matrix mini preview */
+.matrix-mini{
+  display:grid;
+  grid-template-columns:repeat(10, 1fr);
+  gap:var(--space-4);
+  margin-bottom:var(--space-12);
+}
+.mm-cell{
+  aspect-ratio:1;
+  border-radius:3px;
+  font-family:var(--font-mono);
+  font-size:clamp(5px, 0.7vw, 8px);
+  font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+  border:1px solid transparent;
+}
+.mm-cell.p{background:rgba(0,229,160,0.15);border-color:rgba(0,229,160,0.3);color:var(--success)}
+.mm-cell.l{background:rgba(255,71,87,0.15);border-color:rgba(255,71,87,0.3);color:var(--error)}
+.mm-cell.e{background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle)}
+/* Stat strip */
+.dash-stats-strip{
+  display:flex;gap:var(--space-8);justify-content:center;
+}
+.dss-item{
+  background:var(--bg-surface);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-sm);
+  padding:var(--space-8) var(--space-12);
+  text-align:center;
+  min-width:80px;
+}
+.dss-val{
+  font-family:var(--font-mono);
+  font-size:var(--font-md);
+  font-weight:700;
+}
+.dss-val.up{color:var(--success)}
+.dss-val.down{color:var(--error)}
+.dss-lab{
+  font-size:var(--font-xs);
+  color:var(--text-muted);
+  margin-top:var(--space-4);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.dash-text h3{
+  font-size:var(--font-lg);
+  font-weight:800;
+  margin-bottom:var(--space-16);
+  line-height:1.3;
+  letter-spacing:-0.01em;
+}
+.dash-text p{
+  font-size:var(--font-base);
+  color:var(--text-secondary);
+  line-height:1.9;
+  margin-bottom:var(--space-12);
+}
+.dash-checklist{list-style:none}
+.dash-checklist li{
+  padding:var(--space-8) 0;
+  font-size:var(--font-base);
+  color:var(--text-primary);
+  display:flex;align-items:center;gap:var(--space-8);
+  border-bottom:1px solid var(--border-subtle);
+}
+.dash-checklist li::before{
+  content:'\203A';
+  color:var(--accent);
+  font-weight:700;
+  font-size:var(--font-md);
+}
+
+/* ============================================================
+   SECTION 7: FLOW PROCESS
+   ============================================================ */
+#flow{
+  background:var(--bg-elevated);
+  text-align:center;
+}
+.flow-track{
+  display:flex;justify-content:space-between;
+  gap:var(--space-16);
+  max-width:1080px;
+  margin:0 auto;
+  position:relative;
+}
+.flow-track::before{
+  content:'';
+  position:absolute;top:40px;left:6%;right:6%;
+  height:2px;
+  background:linear-gradient(90deg, var(--accent), var(--success), var(--accent));
+  opacity:0.2;
+  border-radius:1px;
+}
+.flow-step{
+  flex:1;text-align:center;position:relative;z-index:2;
+}
+.flow-circle{
+  width:80px;height:80px;border-radius:50%;
+  background:var(--bg-base);
+  border:2px solid;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-mono);
+  font-size:var(--font-lg);
+  font-weight:800;
+  margin:0 auto var(--space-16);
+  position:relative;
+}
+.flow-step:nth-child(odd) .flow-circle{
+  border-color:var(--accent);color:var(--accent);
+  box-shadow:0 0 24px var(--accent-glow);
+}
+.flow-step:nth-child(even) .flow-circle{
+  border-color:var(--success);color:var(--success);
+  box-shadow:0 0 24px var(--success-glow);
+}
+.flow-step h4{font-size:var(--font-base);font-weight:700;margin-bottom:var(--space-8)}
+.flow-step p{font-size:var(--font-sm);color:var(--text-secondary);line-height:1.6}
+
+/* ============================================================
+   SECTION 8: TECH STACK + STATS
+   ============================================================ */
+#tech{
+  background:var(--bg-base);
+}
+.tech-grid{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:var(--space-16);
+}
+.tech-card{
+  background:var(--bg-elevated);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  padding:var(--space-24);
+  text-align:center;
+  transition:all var(--dur-normal) cubic-bezier(0.16,1,0.3,1);
+}
+.tech-card:hover{border-color:var(--border-medium)}
+.tech-card__label{
+  font-family:var(--font-mono);
+  font-size:var(--font-sm);
+  color:var(--text-tertiary);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  margin-bottom:var(--space-8);
+}
+.tech-card__value{
+  font-family:var(--font-mono);
+  font-size:var(--font-xl);
+  font-weight:800;
+  color:var(--accent);
+}
+
+/* ============================================================
+   SECTION 9: ENDING CTA
+   ============================================================ */
+#ending{
+  background:radial-gradient(ellipse 70% 50% at 50% 40%, rgba(0,212,255,0.04) 0%, transparent 60%),
+             radial-gradient(ellipse 50% 30% at 30% 70%, rgba(0,229,160,0.02) 0%, transparent 50%);
+  text-align:center;
+}
+.ending-heading{
+  font-size:clamp(28px, 6vw, 52px);
+  font-weight:900;
+  line-height:1.2;
+  letter-spacing:-0.02em;
+  margin-bottom:var(--space-16);
+}
+.ending-heading .hl-green{color:var(--success)}
+.ending-heading .hl-red{color:var(--error)}
+.ending-text{
+  font-size:var(--font-md);
+  color:var(--text-secondary);
+  line-height:1.9;
+  max-width:600px;
+  margin:0 auto var(--space-24);
+}
+.badge-strip{
+  display:flex;justify-content:center;gap:var(--space-12);flex-wrap:wrap;
+  margin-bottom:var(--space-24);
+}
+.badge{
+  padding:var(--space-8) var(--space-16);
+  border-radius:var(--radius-sm);
+  font-size:var(--font-sm);
+  font-weight:600;
+  letter-spacing:0.05em;
+  border:1px solid;
+  background:rgba(255,255,255,0.02);
+  font-family:var(--font-mono);
+}
+.badge.b-green{border-color:rgba(0,229,160,0.3);color:var(--success)}
+.badge.b-red{border-color:rgba(255,71,87,0.3);color:var(--error)}
+.badge.b-accent{border-color:rgba(0,212,255,0.25);color:var(--accent)}
+.badge.b-white{border-color:var(--border-medium);color:var(--text-secondary)}
+
+/* ============================================================
+   SECTION 10: FOOTER
+   ============================================================ */
+.footer{
+  border-top:1px solid var(--border-subtle);
+  padding:var(--space-16) var(--section-pad-x);
+  text-align:center;
+  font-size:var(--font-sm);
+  color:var(--text-muted);
+}
+.footer a{color:var(--accent);text-decoration:none}
+.footer a:hover{text-decoration:underline}
+
+/* ============================================================
+   ANIMATION SYSTEM
+   Pure CSS + IntersectionObserver (no GSAP)
+   ============================================================ */
+.reveal{
+  opacity:0;
+  transform:translateY(30px);
+  transition:opacity var(--dur-slow) cubic-bezier(0.16,1,0.3,1),
+             transform var(--dur-slow) cubic-bezier(0.16,1,0.3,1);
+}
+.reveal.is-visible{
+  opacity:1;
+  transform:translateY(0);
+}
+
+/* Stagger children */
+.reveal-stagger > .reveal:nth-child(1){transition-delay:0ms}
+.reveal-stagger > .reveal:nth-child(2){transition-delay:80ms}
+.reveal-stagger > .reveal:nth-child(3){transition-delay:160ms}
+.reveal-stagger > .reveal:nth-child(4){transition-delay:240ms}
+.reveal-stagger > .reveal:nth-child(5){transition-delay:320ms}
+.reveal-stagger > .reveal:nth-child(6){transition-delay:400ms}
+.reveal-stagger > .reveal:nth-child(7){transition-delay:480ms}
+.reveal-stagger > .reveal:nth-child(8){transition-delay:560ms}
+.reveal-stagger > .reveal:nth-child(9){transition-delay:640ms}
+.reveal-stagger > .reveal:nth-child(10){transition-delay:720ms}
+
+/* Hero reveals use shorter stagger */
+.reveal-hero > .reveal:nth-child(1){transition-delay:0ms}
+.reveal-hero > .reveal:nth-child(2){transition-delay:100ms}
+.reveal-hero > .reveal:nth-child(3){transition-delay:200ms}
+.reveal-hero > .reveal:nth-child(4){transition-delay:300ms}
+
+/* Directional variants */
+.reveal--left{transform:translateX(-30px)}
+.reveal--right{transform:translateX(30px)}
+.reveal--left.is-visible,
+.reveal--right.is-visible{transform:translateX(0)}
+.reveal--scale{transform:scale(0.95) translateY(20px)}
+.reveal--scale.is-visible{transform:scale(1) translateY(0)}
+
+/* ============================================================
+   RESPONSIVE -- Mobile-first
+   ============================================================ */
+
+/* Tablet: 768px and below */
+@media(max-width:768px){
+  :root{
+    --section-pad-y:clamp(24px, 5vh, 48px);
+  }
+  .capability-grid{grid-template-columns:1fr}
+  .compare-grid{grid-template-columns:1fr;gap:var(--space-16)}
+  .vs-badge{display:none}
+  .engine-grid{grid-template-columns:1fr}
+  .feature-grid{grid-template-columns:repeat(2, 1fr)}
+  .dash-preview-grid{grid-template-columns:1fr}
+  .flow-track{flex-direction:column;gap:var(--space-8)}
+  .flow-track::before{display:none}
+  .flow-circle{width:60px;height:60px;font-size:var(--font-md)}
+  .tech-grid{grid-template-columns:1fr}
+  .hero-title{letter-spacing:-0.02em}
+  .section-heading{margin-bottom:var(--space-12)}
+  .badge-strip{gap:var(--space-8)}
+  .section--half{padding:var(--space-16) var(--section-pad-x)}
+}
+
+/* Phone: 480px and below */
+@media(max-width:480px){
+  .feature-grid{grid-template-columns:1fr}
+  .hero-cta{flex-direction:column;align-items:stretch}
+  .hero-cta .cta-btn{justify-content:center}
+  .dash-stats-strip{flex-wrap:wrap}
+  .dss-item{min-width:70px;padding:var(--space-4) var(--space-8)}
+  .dss-val{font-size:var(--font-base)}
+  .matrix-mini{grid-template-columns:repeat(8, 1fr)}
+}
+
+/* Motion reduction */
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}
+  .reveal{opacity:1;transform:none;transition:none}
+}
+</style>
 </head>
 <body>
-    <div class="grid-bg"></div>
-    <div id="kline-container" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1;"></div>
 
-    <!-- ===== SCENE 1: HERO ===== -->
-    <section class="scene" id="scene-hero">
-        <div class="scene-content">
-            <h1 class="hero-title fade-in">
-                <span class="evo">EVO</span><span class="claw">CLAW</span>
-            </h1>
-            <p class="hero-subtitle fade-in">智能量化交易系统</p>
-            <p class="hero-desc fade-in">
-                让机器替你感知市场，让算法替你收割利润<br>
-                <span class="green">双向持仓</span>对冲风险，<span class="red">分层止盈</span>锁定收益<br>
-                全自动运行，7×24 小时不眠不休
-            </p>
+<div class="grid-bg"></div>
+
+<!-- =========================================================
+     SECTION 1: HERO
+     ========================================================= -->
+<section class="section" id="hero">
+  <div class="section-inner reveal-hero">
+    <div class="hero-logo reveal">EVOCLAW TERMINAL v2</div>
+    <h1 class="hero-title reveal">
+      <span class="t-evo">EVO</span><span class="t-claw">CLAW</span>
+    </h1>
+    <p class="hero-subtitle reveal">智能量化交易系统</p>
+    <p class="hero-pitch reveal">
+      让算法替你感知市场，
+      <strong>双向持仓</strong>对冲单边风险，
+      <span class="tag-green">分层止盈</span>锁定每一分利润<br>
+      全自动运行，7&#215;24 永不疲倦，毫秒级响应每一波行情
+    </p>
+    <div class="hero-cta reveal">
+      <a href="/" class="cta-btn cta-btn--primary">进入终端</a>
+      <a href="#what-is" class="cta-btn cta-btn--secondary">了解更多</a>
+    </div>
+  </div>
+  <div class="scroll-hint">Scroll</div>
+</section>
+
+<!-- =========================================================
+     SECTION 2: WHAT IS EVOCLAW
+     ========================================================= -->
+<section class="section" id="what-is">
+  <div class="section-inner">
+    <p class="section-label reveal">Why EvoClaw</p>
+    <h2 class="section-heading reveal">
+      <span class="hl-accent">AI</span> 驱动的交易大脑
+    </h2>
+    <p class="section-subtitle reveal">
+      EvoClaw 是一套具备感知、决策、执行、自愈能力的完整交易体系，
+      不是简单的定时脚本，而是一个永不疲倦的交易员。
+    </p>
+    <div class="section-divider reveal"></div>
+
+    <div class="capability-grid reveal-stagger">
+      <div class="cap-card reveal">
+        <div class="cap-card__icon i-accent">&#9671;</div>
+        <h3>实时市场感知</h3>
+        <p>每秒扫描全市场持仓状态，实时计算盈亏比率、波动偏离、资金健康度。
+        比人类交易员快数百倍的反应速度，任何微小的盈利窗口都逃不过它的感知。</p>
+      </div>
+      <div class="cap-card reveal">
+        <div class="cap-card__icon i-red">&#9673;</div>
+        <h3>智能风险对冲</h3>
+        <p>同一标的自动建立多空双向仓位，无论市场涨跌总有一边在盈利。
+        配合动态停补保护，当对方仓位偏离过大时自动暂停补仓，防止无限敞口。</p>
+      </div>
+      <div class="cap-card reveal">
+        <div class="cap-card__icon i-green">&#9679;</div>
+        <h3>自适应标的筛选</h3>
+        <p>基于成交量与价格维度自动扫描全市场，持续发现高流动性、
+        低门槛的优质标的。候选池自动更新，资金永远流向最具性价比的机会。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     SECTION 3: COMPARE -- Traditional Manual Trading vs EvoClaw v2
+     ========================================================= -->
+<section class="section section--half" id="compare">
+  <div class="section-inner">
+    <p class="section-label reveal">Comparison</p>
+    <h2 class="section-heading reveal">
+      传统手动交易 vs <span class="hl-green">EvoClaw v2</span>
+    </h2>
+    <p class="section-subtitle reveal">
+      手工交易的痛点，正是 EvoClaw v2 的战场。
+      从数据到决策，从执行到风控，全面升级。
+    </p>
+    <div class="section-divider reveal"></div>
+
+    <div class="compare-grid reveal-stagger">
+      <div class="compare-box compare-box--old reveal">
+        <h3>&#9888; 传统手动交易</h3>
+        <ul>
+          <li>盯盘耗神，反应延迟以秒计，错过最佳时机</li>
+          <li>单向押注方向，暴涨暴跌全靠赌运气</li>
+          <li>手动翻币选币，信息滞后维护成本高</li>
+          <li>单层止盈僵化，利润到嘴又吐回市场</li>
+          <li>亏损恐慌割肉，越亏越慌越乱越错</li>
+          <li>情绪干扰决策，贪婪与恐惧交替支配</li>
+          <li>配置散落各处，无版本管理难追溯</li>
+          <li>不知何时爆仓，风险敞口完全黑盒</li>
+        </ul>
+      </div>
+      <div class="vs-badge">VS</div>
+      <div class="compare-box compare-box--new reveal reveal--right">
+        <h3>&#10003; EvoClaw v2 全自动</h3>
+        <ul>
+          <li>毫秒级感知微盈利窗口，即刻收割利润</li>
+          <li>双向持仓天然对冲，涨跌都有收益来源</li>
+          <li>全市场自动扫描，优质标的自动入库</li>
+          <li>5 档阶梯止盈，利润分批落袋为安</li>
+          <li>智能亏损加仓，摊薄成本静待反弹</li>
+          <li>纯数据驱动，零情绪、零犹豫、零误差</li>
+          <li>配置数据库化管理，版本可追溯可回滚</li>
+          <li>实时爆仓检测 + 智能熔断，风险透明可控</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     SECTION 4: SIX ENGINES
+     ========================================================= -->
+<section class="section" id="engines">
+  <div class="section-inner">
+    <p class="section-label reveal">The Engines</p>
+    <h2 class="section-heading reveal">
+      六大<span class="hl-green">智能引擎</span>协同运转
+    </h2>
+    <p class="section-subtitle reveal">
+      每一个引擎独立运行、协同配合，形成完整的交易闭环。
+      从选币到盈利，全链路自动化。
+    </p>
+    <div class="section-divider reveal"></div>
+
+    <div class="engine-grid reveal-stagger">
+      <div class="engine-card reveal">
+        <div class="engine-num">01</div>
+        <h4>利润收割引擎</h4>
+        <p>5 档阶梯式止盈，盈利达不同阶段自动分批平仓。
+        低位利润先落袋，高位仓位继续博弈，最大化资金利用率。</p>
+      </div>
+      <div class="engine-card reveal">
+        <div class="engine-num">02</div>
+        <h4>全局风控引擎</h4>
+        <p>账户整体盈利达设定阈值时一键全平所有持仓，
+        落袋为安后自动重新开仓，资金永不闲置。</p>
+      </div>
+      <div class="engine-card reveal">
+        <div class="engine-num">03</div>
+        <h4>对冲锁定引擎</h4>
+        <p>同币种多空双边同时盈利时，智能判断最佳对平时机，
+        双向平仓锁定对冲利润，释放保证金给下一轮建仓。</p>
+      </div>
+      <div class="engine-card reveal">
+        <div class="engine-num">04</div>
+        <h4>成本修复引擎</h4>
+        <p>仓位浮亏达预设条件时自动追加仓位摊薄平均成本，
+        基于当前持仓量动态计算加仓规模，非固定模式灵活应对。</p>
+      </div>
+      <div class="engine-card reveal">
+        <div class="engine-num">05</div>
+        <h4>仓位自愈引擎</h4>
+        <p>持续监测持仓完整性，发现缺失仓位自动补齐。
+        三重防重复机制确保不会过度开仓，停补保护防止逆势加仓。</p>
+      </div>
+      <div class="engine-card reveal">
+        <div class="engine-num">06</div>
+        <h4>数据可视化引擎</h4>
+        <p>持仓热力矩阵一屏尽览全局战场，多空盈亏实时统计，
+        盈利趋势 Canvas 图表，让数据成为你指挥交易的作战地图。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     SECTION 5: NEW FEATURES -- v2.1 Enhancements
+     ========================================================= -->
+<section class="section section--half" id="new-features">
+  <div class="section-inner">
+    <p class="section-label reveal">What's New</p>
+    <h2 class="section-heading reveal">
+      v2.1 <span class="hl-accent">全新升级</span>
+    </h2>
+    <p class="section-subtitle reveal">
+      不仅是交易引擎的迭代，更是工程体系的全面进化。
+    </p>
+    <div class="section-divider reveal"></div>
+
+    <div class="feature-grid reveal-stagger">
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-red">&#9762;</div>
+        <h4>爆仓检测</h4>
+        <p>实时监控 Binance 强平事件，Top10 爆仓排行 + 历史事件时间线。
+        每次爆仓触发 PnL 快照，清楚了解极端行情的真实代价。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-warn">&#9889;</div>
+        <h4>智能熔断</h4>
+        <p>针对 Binance -2027 错误（超出最大持仓）内置断路器模式。
+        连续失败 5 次自动跳过 10 分钟，成功后自动恢复，避免死循环重试。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-accent">&#9921;</div>
+        <h4>配置数据库化</h4>
+        <p>交易配置从 JSON 文件迁移至 SQLite 数据库统一管理。
+        所有参数可编辑、可追溯、可通过 Web API 实时修改，无需重启进程。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-green">&#9776;</div>
+        <h4>日志限流</h4>
+        <p>错误日志独立分流（errors.log），WARNING+ 级别单独记录。
+        旋转日志 3MB/5 备份 + 启动时自动清理旧文件，磁盘永不溢出。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-green">&#9733;</div>
+        <h4>API 缓存机制</h4>
+        <p>高频接口 15 秒 TTL 缓存防 Binance 418 封禁。
+        asyncio.Lock 防缓存击穿，缓存键按时间粒度区分保证数据新鲜度。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-accent">&#9783;</div>
+        <h4>看门狗守护</h4>
+        <p>restart.sh --watch 模式每 30 秒检测进程存活。
+        崩溃自动重启 + crash 前最后 10 行日志写入 crash.log，永不掉线。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-warn">&#9744;</div>
+        <h4>PID 文件锁</h4>
+        <p>fcntl.flock 防双进程同时运行，避免重复开仓酿成灾难。
+        restart.sh 优雅关闭：SIGTERM 8 秒等待后再 SIGKILL。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-red">&#9878;</div>
+        <h4>停补安全加固</h4>
+        <p>should_stop_replenish() 统一检查所有开仓路径。
+        价格不可获取时默认 STOP，从源头杜绝无限开仓安全漏洞。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     SECTION 6: DASHBOARD PREVIEW
+     ========================================================= -->
+<section class="section" id="dashboard-preview">
+  <div class="section-inner">
+    <p class="section-label reveal">The Terminal</p>
+    <h2 class="section-heading reveal">
+      你的<span class="hl-red">交易指挥中心</span>
+    </h2>
+    <p class="section-subtitle reveal">
+      不是冰冷的后台，而是直观的作战地图。
+      持仓热力图、盈亏趋势图、策略决策流图 -- 三合一可视化终端。
+    </p>
+    <div class="section-divider reveal"></div>
+
+    <div class="dash-preview-grid reveal-stagger">
+      <div class="dash-mock reveal">
+        <div class="dash-mock__header">
+          <span class="dot"></span> MATRIX &bull; 持仓热力图
         </div>
-        <div class="scroll-indicator">SCROLL</div>
-    </section>
-
-    <!-- ===== SCENE 2: AI BRAIN ===== -->
-    <section class="scene" id="scene-ai">
-        <div class="scene-content">
-            <h2 class="section-title fade-in">
-                <span class="green">AI</span> 驱动的交易大脑
-            </h2>
-            <p class="section-subtitle fade-in">
-                EvoClaw 不是简单的定时任务，而是一套具备感知、决策、执行、自愈能力的智能交易体系
-            </p>
-            <div class="section-line fade-in"></div>
-
-            <div class="card-grid-3">
-                <div class="info-card fade-in">
-                    <div class="card-icon green">🧠</div>
-                    <h3>实时市场感知</h3>
-                    <p>每秒扫描全市场持仓状态，实时计算盈亏比率、波动偏离、资金健康度。比人类交易员快数百倍的反应速度，任何微小的盈利窗口都逃不过它的感知。</p>
-                </div>
-                <div class="info-card fade-in">
-                    <div class="card-icon red">🛡️</div>
-                    <h3>智能风险对冲</h3>
-                    <p>同一标的自动建立多空双向仓位，无论市场涨跌，总有一边在盈利。配合动态停补保护，当对方仓位偏离过大时自动暂停补仓，防止无限敞口。</p>
-                </div>
-                <div class="info-card fade-in">
-                    <div class="card-icon white">🔭</div>
-                    <h3>自适应标的筛选</h3>
-                    <p>基于成交量与价格维度自动扫描全市场，持续发现高流动性、低门槛的优质标的。候选池自动更新，资金永远流向最具性价比的机会。</p>
-                </div>
-            </div>
+        <div class="matrix-mini">
+          <div class="mm-cell p">BTC</div>
+          <div class="mm-cell l">ETH</div>
+          <div class="mm-cell p">SOL</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell p">DOGE</div>
+          <div class="mm-cell l">XRP</div>
+          <div class="mm-cell p">ADA</div>
+          <div class="mm-cell p">AVAX</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell l">LINK</div>
+          <div class="mm-cell p">DOT</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell l">LTC</div>
+          <div class="mm-cell p">BCH</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell p">UNI</div>
+          <div class="mm-cell l">MATIC</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell p">FIL</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell p">APT</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell l">ARB</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell p">SUI</div>
+          <div class="mm-cell l">OP</div>
+          <div class="mm-cell p">NEAR</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell p">RUNE</div>
+          <div class="mm-cell e"></div>
+          <div class="mm-cell l">APT</div>
         </div>
-    </section>
-
-    <!-- ===== SCENE 3: COMPARE ===== -->
-    <section class="scene" id="scene-compare">
-        <div class="scene-content">
-            <h2 class="section-title fade-in">
-                为什么放弃<span class="red">传统交易</span>？
-            </h2>
-            <p class="section-subtitle fade-in">
-                人工交易的痛点，正是 EvoClaw 的战场
-            </p>
-            <div class="section-line fade-in"></div>
-
-            <div class="compare-wrap">
-                <div class="compare-box old fade-in">
-                    <h3>人工/半自动交易</h3>
-                    <ul>
-                        <li>盯盘耗神，反应延迟以秒计</li>
-                        <li>单向押注，暴涨暴跌全靠赌</li>
-                        <li>手动选币，信息滞后维护累</li>
-                        <li>止盈僵化，利润到嘴又吐出</li>
-                        <li>亏损割肉，越亏越慌越乱</li>
-                        <li>情绪干扰，贪婪恐惧交替支配</li>
-                    </ul>
-                </div>
-                <div class="vs-circle">VS</div>
-                <div class="compare-box new fade-in">
-                    <h3>EvoClaw 全自动</h3>
-                    <ul>
-                        <li>毫秒级感知，微盈利即刻收割</li>
-                        <li>双向持仓，涨跌都有收益来源</li>
-                        <li>全市场扫描，优质标的自动入库</li>
-                        <li>阶梯止盈，利润分批落袋为安</li>
-                        <li>智能加仓，摊薄成本静待反弹</li>
-                        <li>零情绪执行，纯数据驱动决策</li>
-                    </ul>
-                </div>
-            </div>
+        <div class="dash-stats-strip">
+          <div class="dss-item">
+            <div class="dss-val up">+12.5%</div>
+            <div class="dss-lab">累计盈利率</div>
+          </div>
+          <div class="dss-item">
+            <div class="dss-val up">87.3%</div>
+            <div class="dss-lab">胜率</div>
+          </div>
+          <div class="dss-item">
+            <div class="dss-val down">-3.2%</div>
+            <div class="dss-lab">实时回撤</div>
+          </div>
+          <div class="dss-item">
+            <div class="dss-val up">156</div>
+            <div class="dss-lab">总交易数</div>
+          </div>
         </div>
-    </section>
+      </div>
 
-    <!-- ===== SCENE 4: ENGINES ===== -->
-    <section class="scene" id="scene-engines">
-        <div class="scene-content">
-            <h2 class="section-title fade-in">
-                六大<span class="green">智能引擎</span>
-            </h2>
-            <p class="section-subtitle fade-in">
-                每一个引擎独立运行，协同配合，形成完整的交易闭环
-            </p>
-            <div class="section-line fade-in"></div>
+      <div class="dash-text reveal">
+        <h3>一屏掌控<br><span class="hl-accent">全局战场</span></h3>
+        <p>持仓热力矩阵将数百个仓位浓缩为一张作战地图。
+        绿色是盈利的阵地，红色是待收复的失地，空白是等待部署的战位。
+        HSL 连续热力图着色，盈亏幅度一目了然。</p>
+        <ul class="dash-checklist">
+          <li>多空盈亏独立统计，策略效能实时评估</li>
+          <li>历史最高亏损追踪，风险边界心中有数</li>
+          <li>爆仓检测 + Top10 排行，极端风险即时预警</li>
+          <li>盈利趋势 Canvas 图表，长期表现清晰呈现</li>
+          <li>策略决策流图 SVG 可视化，执行链路透明</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
 
-            <div class="card-grid-6">
-                <div class="engine-card fade-in">
-                    <div class="engine-num">01</div>
-                    <h4>利润收割引擎</h4>
-                    <p>多档阶梯式止盈策略，盈利达到不同阶段自动分批平仓。低位利润先落袋，高位仓位继续博弈，最大化资金利用率。</p>
-                </div>
-                <div class="engine-card fade-in">
-                    <div class="engine-num">02</div>
-                    <h4>全局风控引擎</h4>
-                    <p>当账户整体盈利达到设定阈值时，一键全平所有持仓，落袋为安。随后自动重新开仓，让资金立即回归战场。</p>
-                </div>
-                <div class="engine-card fade-in">
-                    <div class="engine-num">03</div>
-                    <h4>对冲锁定引擎</h4>
-                    <p>同一标的多空双边同时盈利时，智能判断最佳对平时机，双向平仓锁定对冲利润，释放保证金。</p>
-                </div>
-                <div class="engine-card fade-in">
-                    <div class="engine-num">04</div>
-                    <h4>成本修复引擎</h4>
-                    <p>仓位出现浮亏且达到预设条件时，自动追加仓位摊薄平均成本。基于当前持仓量动态计算加仓规模，非固定模式。</p>
-                </div>
-                <div class="engine-card fade-in">
-                    <div class="engine-num">05</div>
-                    <h4>仓位自愈引擎</h4>
-                    <p>持续监测持仓完整性，发现缺失仓位自动补齐。三重防重复机制确保不会过度开仓，停补保护防止逆势加仓。</p>
-                </div>
-                <div class="engine-card fade-in">
-                    <div class="engine-num">06</div>
-                    <h4>数据可视化引擎</h4>
-                    <p>持仓矩阵一屏尽览全局战场，多空盈亏实时统计，盈利趋势一眼看清。让数据成为你指挥交易的作战地图。</p>
-                </div>
-            </div>
-        </div>
-    </section>
+<!-- =========================================================
+     SECTION 7: FLOW PROCESS
+     ========================================================= -->
+<section class="section section--half" id="flow">
+  <div class="section-inner">
+    <p class="section-label reveal">The Pipeline</p>
+    <h2 class="section-heading reveal">
+      从选币到盈利，<span class="hl-green">全自动闭环</span>
+    </h2>
+    <p class="section-subtitle reveal" style="margin-left:auto;margin-right:auto">
+      配置一次，剩下的交给 EvoClaw。每秒一次的 tick 循环覆盖完整交易生命周期。
+    </p>
+    <div class="section-divider reveal" style="margin-left:auto;margin-right:auto"></div>
 
-    <!-- ===== SCENE 5: DASHBOARD ===== -->
-    <section class="scene" id="scene-dashboard">
-        <div class="scene-content">
-            <h2 class="section-title fade-in">
-                你的<span class="red">交易指挥中心</span>
-            </h2>
-            <p class="section-subtitle fade-in">
-                不是冰冷的后台，而是直观的作战地图
-            </p>
-            <div class="section-line fade-in"></div>
+    <div class="flow-track reveal-stagger">
+      <div class="flow-step reveal">
+        <div class="flow-circle">1</div>
+        <h4>动态选币</h4>
+        <p>全市场扫描高流动性标的，自动筛选符合条件的交易对，候选池持续更新</p>
+      </div>
+      <div class="flow-step reveal">
+        <div class="flow-circle">2</div>
+        <h4>双向建仓</h4>
+        <p>同步建立多空仓位，天然对冲单边风险，涨跌都有收益来源</p>
+      </div>
+      <div class="flow-step reveal">
+        <div class="flow-circle">3</div>
+        <h4>实时扫描</h4>
+        <p>每秒遍历全部持仓，计算盈亏、检测止盈止损条件、识别加仓与对平机会</p>
+      </div>
+      <div class="flow-step reveal">
+        <div class="flow-circle">4</div>
+        <h4>智能执行</h4>
+        <p>阶梯止盈、账户全平、多空对平、亏损加仓 -- 四种策略协同并发执行</p>
+      </div>
+      <div class="flow-step reveal">
+        <div class="flow-circle">5</div>
+        <h4>仓位修复</h4>
+        <p>平仓后检测仓位缺口，自动补齐缺失头寸，停补保护防止过度开仓</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-            <div class="dash-showcase">
-                <div class="dash-visual fade-in">
-                    <div class="matrix-grid">
-                        <div class="m-cell profit">BTC</div>
-                        <div class="m-cell loss">ETH</div>
-                        <div class="m-cell profit">SOL</div>
-                        <div class="m-cell empty"></div>
-                        <div class="m-cell profit">DOGE</div>
-                        <div class="m-cell loss">XRP</div>
-                        <div class="m-cell profit">ADA</div>
-                        <div class="m-cell profit">AVAX</div>
-                        <div class="m-cell empty"></div>
-                        <div class="m-cell loss">LINK</div>
-                        <div class="m-cell profit">DOT</div>
-                        <div class="m-cell empty"></div>
-                        <div class="m-cell loss">LTC</div>
-                        <div class="m-cell profit">BCH</div>
-                        <div class="m-cell empty"></div>
-                        <div class="m-cell profit">UNI</div>
-                        <div class="m-cell loss">MATIC</div>
-                        <div class="m-cell empty"></div>
-                        <div class="m-cell profit">FIL</div>
-                        <div class="m-cell empty"></div>
-                    </div>
-                    <div class="dash-stats-row">
-                        <div class="dash-stat">
-                            <div class="val up">+12.5%</div>
-                            <div class="lab">累计盈利率</div>
-                        </div>
-                        <div class="dash-stat">
-                            <div class="val up">87.3%</div>
-                            <div class="lab">胜率</div>
-                        </div>
-                        <div class="dash-stat">
-                            <div class="val down">-3.2%</div>
-                            <div class="lab">实时回撤</div>
-                        </div>
-                        <div class="dash-stat">
-                            <div class="val up">156</div>
-                            <div class="lab">总交易数</div>
-                        </div>
-                    </div>
-                </div>
+<!-- =========================================================
+     SECTION 8: TECH STACK
+     ========================================================= -->
+<section class="section section--half" id="tech">
+  <div class="section-inner" style="text-align:center">
+    <p class="section-label reveal">Tech Stack</p>
+    <h2 class="section-heading reveal">
+      极简技术栈，<span class="hl-accent">极致性能</span>
+    </h2>
+    <p class="section-subtitle reveal" style="margin-left:auto;margin-right:auto">
+      零构建步骤、零外部依赖，单文件部署，进程常驻内存 < 100MB。
+    </p>
+    <div class="section-divider reveal" style="margin-left:auto;margin-right:auto"></div>
 
-                <div class="dash-text fade-in">
-                    <h3>一屏掌控<br><span class="green">全局战场</span></h3>
-                    <p>持仓矩阵将数百个仓位浓缩为一张作战地图。绿色是盈利的阵地，红色是待收复的失地，空白是等待部署的战位。</p>
-                    <ul class="dash-list">
-                        <li>多空盈亏独立统计，策略效能一目了然</li>
-                        <li>历史最高亏损追踪，风险边界心中有数</li>
-                        <li>实时资产健康度监测，随时掌握资金状态</li>
-                        <li>盈利趋势可视化，长期表现清晰呈现</li>
-                        <li>系统性能监控，服务器状态实时可见</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-    </section>
+    <div class="tech-grid reveal-stagger">
+      <div class="tech-card reveal">
+        <div class="tech-card__label">Runtime</div>
+        <div class="tech-card__value">Python 3.12</div>
+        <div style="font-size:var(--font-sm);color:var(--text-tertiary);margin-top:var(--space-8)">asyncio + ccxt 原生异步</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-card__label">Database</div>
+        <div class="tech-card__value">SQLite WAL</div>
+        <div style="font-size:var(--font-sm);color:var(--text-tertiary);margin-top:var(--space-8)">零配置、单文件、异步友好</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-card__label">Frontend</div>
+        <div class="tech-card__value">1 HTML</div>
+        <div style="font-size:var(--font-sm);color:var(--text-tertiary);margin-top:var(--space-8)">原生 JS，零构建，< 50KB</div>
+      </div>
+    </div>
+  </div>
+</section>
 
-    <!-- ===== SCENE 6: PROCESS ===== -->
-    <section class="scene" id="scene-process">
-        <div class="scene-content">
-            <h2 class="section-title fade-in">
-                从选币到盈利，<span class="green">全自动闭环</span>
-            </h2>
-            <p class="section-subtitle fade-in">
-                你只需配置一次，剩下的交给 EvoClaw
-            </p>
-            <div class="section-line fade-in"></div>
+<!-- =========================================================
+     SECTION 9: ENDING CTA
+     ========================================================= -->
+<section class="section" id="ending">
+  <div class="section-inner reveal-hero">
+    <h2 class="ending-heading reveal">
+      <span class="hl-green">进化</span>你的交易思维<br>
+      <span class="hl-red">抓取</span>每一个盈利窗口
+    </h2>
+    <p class="ending-text reveal">
+      不需要盯盘，不需要分析，不需要情绪管理。<br>
+      你设定规则，EvoClaw 替你执行。<br>
+      24 小时不间断，毫秒级响应，零情绪干扰。
+    </p>
+    <div class="badge-strip reveal">
+      <div class="badge b-green">全自动运行</div>
+      <div class="badge b-red">双向对冲</div>
+      <div class="badge b-accent">爆仓检测</div>
+      <div class="badge b-white">智能熔断</div>
+      <div class="badge b-green">配置数据库化</div>
+      <div class="badge b-accent">看门狗守护</div>
+    </div>
+    <div class="hero-cta reveal">
+      <a href="/" class="cta-btn cta-btn--primary">进入终端</a>
+    </div>
+  </div>
+</section>
 
-            <div class="process-track">
-                <div class="p-step fade-in">
-                    <div class="p-circle">1</div>
-                    <h4>智能选币</h4>
-                    <p>全市场扫描高流动性标的，自动筛选符合条件的交易对并持续更新候选池</p>
-                </div>
-                <div class="p-step fade-in">
-                    <div class="p-circle">2</div>
-                    <h4>双向建仓</h4>
-                    <p>对每只候选标的同步建立多空仓位，天然对冲单边风险，无惧涨跌</p>
-                </div>
-                <div class="p-step fade-in">
-                    <div class="p-circle">3</div>
-                    <h4>实时扫描</h4>
-                    <p>每秒遍历全部持仓，计算盈亏、检测止盈止损条件、识别加仓机会</p>
-                </div>
-                <div class="p-step fade-in">
-                    <div class="p-circle">4</div>
-                    <h4>智能收割</h4>
-                    <p>达到条件即自动平仓，阶梯止盈、全平、对平多种模式协同运作</p>
-                </div>
-                <div class="p-step fade-in">
-                    <div class="p-circle">5</div>
-                    <h4>自动补仓</h4>
-                    <p>平仓后检测仓位缺口，自动补齐缺失头寸，资金永不闲置</p>
-                </div>
-            </div>
-        </div>
-    </section>
+<!-- =========================================================
+     FOOTER
+     ========================================================= -->
+<footer class="footer">
+  <p>EvoClaw v2.1 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
+</footer>
 
-    <!-- ===== SCENE 7: ENDING ===== -->
-    <section class="scene" id="scene-ending">
-        <div class="scene-content ending-wrap">
-            <h2 class="ending-big fade-in">
-                <span class="green">进化</span>你的交易思维<br>
-                <span class="red">抓取</span>每一个盈利窗口
-            </h2>
-            <p class="ending-desc fade-in">
-                不需要盯盘，不需要分析，不需要情绪管理<br>
-                你设定规则，EvoClaw 替你执行<br>
-                24 小时不间断，毫秒级响应，零情绪干扰
-            </p>
-            <div class="ending-badges fade-in">
-                <div class="badge green">全自动运行</div>
-                <div class="badge red">双向对冲</div>
-                <div class="badge white">微盈利策略</div>
-                <div class="badge green">智能决策</div>
-            </div>
-        </div>
-    </section>
+<!-- =========================================================
+     ANIMATION SCRIPT
+     Pure IntersectionObserver, no GSAP dependency
+     ========================================================= -->
+<script>
+(function(){
+  /* ---- IntersectionObserver for reveal animations ---- */
+  const observerOptions = {
+    threshold: 0.12,
+    rootMargin: '0px 0px -40px 0px'
+  };
 
-    <script>
-        // K-line decorations
-        const kc = document.getElementById('kline-container');
-        for (let i = 0; i < 30; i++) {
-            const k = document.createElement('div');
-            k.className = 'k-line ' + (Math.random() > 0.5 ? 'green' : 'red');
-            k.style.left = Math.random() * 100 + '%';
-            k.style.top = Math.random() * 100 + '%';
-            k.style.height = (20 + Math.random() * 80) + 'px';
-            kc.appendChild(k);
-        }
+  const revealObserver = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      if(entry.isIntersecting){
+        entry.target.classList.add('is-visible');
+        revealObserver.unobserve(entry.target);
+      }
+    });
+  }, observerOptions);
 
-        // IntersectionObserver scroll animations
-        const obs = new IntersectionObserver((entries) => {
-            entries.forEach(e => {
-                if (e.isIntersecting) {
-                    const el = e.target;
-                    const siblings = Array.from(el.parentElement.querySelectorAll('.fade-in'));
-                    const idx = siblings.indexOf(el);
-                    gsap.to(el, { opacity: 1, y: 0, duration: 0.6, ease: 'power2.out', delay: idx * 0.1 });
-                    obs.unobserve(el);
-                }
-            });
-        }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
+  /* Observe all .reveal elements */
+  document.querySelectorAll('.reveal').forEach(function(el){
+    revealObserver.observe(el);
+  });
 
-        document.querySelectorAll('.fade-in').forEach(el => obs.observe(el));
+  /* ---- Smooth scroll for anchor links ---- */
+  document.querySelectorAll('a[href^="#"]').forEach(function(anchor){
+    anchor.addEventListener('click', function(e){
+      const targetId = this.getAttribute('href');
+      if(targetId === '#') return;
+      const target = document.querySelector(targetId);
+      if(target){
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+})();
+</script>
 
-        // Hero auto entrance
-        gsap.to('#scene-hero .hero-title', { opacity: 1, y: 0, duration: 1, ease: 'power3.out', delay: 0.3 });
-        gsap.to('#scene-hero .hero-subtitle', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out', delay: 0.6 });
-        gsap.to('#scene-hero .hero-desc', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out', delay: 0.9 });
-    </script>
 </body>
 </html>
