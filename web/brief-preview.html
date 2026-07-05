@@ -451,16 +451,16 @@ header p {
 }
 </style>
 </head>
-<body data-theme="light">
+<body data-theme="dark">
 <div class="container">
   <header>
     <div>
       <h1>EvoClaw × Fuselab Creative</h1>
-      <p>Design system preview — toggle between light (intro) and dark (terminal) themes.</p>
+      <p>Design system preview — current implementation uses the dark theme.</p>
     </div>
     <div class="theme-switcher">
-      <button class="active" onclick="setTheme('light')">Light</button>
-      <button onclick="setTheme('dark')">Dark</button>
+      <button class="active" onclick="setTheme('dark')">Dark</button>
+      <button onclick="setTheme('light')">Light</button>
     </div>
   </header>
 
@@ -550,11 +550,11 @@ header p {
   <div class="notes">
     <h2>Design Notes</h2>
     <ul>
-      <li><strong>Light theme</strong> is recommended for the marketing landing page (<code>intro.html</code>).</li>
-      <li><strong>Dark theme</strong> is recommended for the trading terminal (<code>index.html</code>) to reduce eye strain during long monitoring sessions.</li>
-      <li>Accent color <code>#00d084</code> is shared across both themes, matching Fuselab's bright green signature.</li>
-      <li>All JavaScript logic, API calls, Canvas chart rendering, and the matrix heatmap algorithm will remain unchanged during implementation.</li>
-      <li>Hover effects use subtle <code>translateY(-2px)</code> — no scale or rotate on images.</li>
+      <li><strong>Dark theme</strong> is the current implementation for both <code>intro.html</code> and <code>index.html</code>.</li>
+      <li>Accent color <code>#00d084</code> is the Fuselab signature bright green used across the app.</li>
+      <li>All JavaScript logic, API calls, Canvas chart rendering, and the matrix heatmap algorithm remain unchanged.</li>
+      <li>Hover effects use subtle <code>translateY(-2px)</code> plus glow — no scale or rotate on images.</li>
+      <li>Background ambient animations (aurora + flowing grid) are active in both pages.</li>
     </ul>
   </div>
 </div>
@@ -627,7 +627,7 @@ function renderRuler(name) {
 }
 
 const urlTheme = new URLSearchParams(location.search).get('theme');
-const initialTheme = urlTheme === 'dark' ? 'dark' : 'light';
+const initialTheme = urlTheme === 'light' ? 'light' : 'dark';
 document.body.setAttribute('data-theme', initialTheme);
 document.querySelectorAll('.theme-switcher button').forEach(btn => {
   btn.classList.toggle('active', btn.textContent.toLowerCase() === initialTheme);

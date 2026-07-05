@@ -1,6 +1,6 @@
 # EvoClaw Fuselab-Creative 设计系统
 
-> 基于 Fuselab Creative 官网（https://fuselabcreative.com/）视觉风格复刻，并针对 EvoClaw 交易终端的实用性做深色变体适配。
+> 基于 Fuselab Creative 官网（https://fuselabcreative.com/）视觉风格复刻。当前实现为**深色主题**，`index.html`（交易终端）和 `intro.html`（落地页）均使用同一套深色 tokens，以保证视觉统一。
 
 ## Visual Theme & Atmosphere
 
@@ -8,31 +8,18 @@
 - **Feel**: "Technical precision meets creative confidence" —— 干净、自信、克制，带有数据/AI 产品的精密感
 - **References**: Fuselab Creative agency site, enterprise AI dashboards
 - **核心视觉特征**:
-  - 大面积留白/留黑
+  - 大面积留黑
   - 大字号标题，低字重
   - 高对比度
   - 单一点亮绿 accent，使用克制
   - 卡片式信息组织
   - 圆角柔和但不过度
+  - 背景氛围动画（aurora 光晕 + 流动网格）
+  - 数据可视化动效（数字 flash、图表入场、矩阵 pulse）
 
 ## Color Palette & Roles
 
-### 浅色主题（Light Theme）—— 用于 `intro.html` 落地页
-
-| Token | Hex | Role |
-|-------|-----|------|
-| `--bg-base` | `#f2f2f2` | 页面背景 |
-| `--bg-surface` | `#ffffff` | 卡片/面板背景 |
-| `--bg-elevated` | `#fafafa` | 稍 elevated 的表面 |
-| `--text-primary` | `#0a0a0a` | 主文字 |
-| `--text-secondary` | `#6b6b6b` | 次要文字 |
-| `--text-muted` | `#9ca3af` | 弱化文字/占位符 |
-| `--accent` | `#00d084` | 强调色（亮绿） |
-| `--accent-hover` | `#00b86b` | 强调色悬停 |
-| `--border-subtle` | `rgba(10,10,10,0.08)` | subtle 边框 |
-| `--border-medium` | `rgba(10,10,10,0.12)` | 中等边框 |
-
-### 深色主题（Dark Theme）—— 用于 `index.html` 交易终端
+当前 `index.html` 和 `intro.html` 均使用以下**深色主题** tokens。
 
 | Token | Hex | Role |
 |-------|-----|------|
@@ -43,18 +30,19 @@
 | `--text-primary` | `#f5f5f5` | 主文字 |
 | `--text-secondary` | `#a1a1aa` | 次要文字 |
 | `--text-muted` | `#71717a` | 弱化文字 |
-| `--accent` | `#00d084` | 强调色（亮绿，与浅色主题一致） |
+| `--accent` | `#00d084` | 强调色（亮绿） |
 | `--accent-hover` | `#00b86b` | 强调色悬停 |
 | `--success` | `#00d084` | 盈利/做多 |
-| `--error` | `#ff4757` | 亏损/做空（保留高辨识度红色） |
+| `--error` | `#ff4757` | 亏损/做空 |
 | `--warning` | `#f59e0b` | 警告 |
 | `--border-subtle` | `rgba(255,255,255,0.08)` | subtle 边框 |
 | `--border-medium` | `rgba(255,255,255,0.12)` | 中等边框 |
+| `--border-strong` | `rgba(255,255,255,0.16)` | 强边框 |
 
 ### 迁移映射（旧 → 新）
 
-| 旧 Token | 旧值 | 新 Token（深色） | 新值 |
-|----------|------|------------------|------|
+| 旧 Token | 旧值 | 新 Token | 新值 |
+|----------|------|----------|------|
 | `--bg-base` | `#070a12` | `--bg-base` | `#0a0a0a` |
 | `--bg-elevated` | `#0d1220` | `--bg-elevated` | `#141414` |
 | `--bg-surface` | `#111827` | `--bg-surface` | `#1a1a1a` |
@@ -101,10 +89,20 @@
 
 ### Matrix Cells
 
-- border-radius: `8px`
+- border-radius: `8px`（小格子 `6px`）
 - 保留 HSL 热力图逻辑
 - 方向边框：多单 accent green，空单 error red
-- hover: 柔和 glow
+- 入场动画：stagger 缩放淡入
+- 盈利/亏损格子：idle pulse glow 动画
+- hover: 柔和 glow + 放大
+
+### Motion
+
+- **Background**: aurora gradient drift (20s) + flowing grid (30s)
+- **Data value flash**: scale(1.05) + color flash on update
+- **Chart**: fade-in/scale entrance
+- **Cards/Buttons**: translateY(-2px) + accent glow on hover
+- ** prefers-reduced-motion**: all animations respect reduced motion
 
 ## Layout Principles
 
@@ -155,9 +153,9 @@
 
 ## Migration Notes
 
-1. `index.html` 和 `intro.html` 的 `:root` 需要分别更新，但语义一致的 token 名相同
-2. `intro.html` 使用浅色主题 token 值；`index.html` 使用深色主题 token 值
-3. Canvas `drawChart()` 中硬编码颜色需要替换为新 tokens
-4. `generatePoster()` 的 `backgroundColor` 需要同步新 `--bg-base`
-5. 保留现有 JS 函数签名和 DOM 结构
-6. 所有 hover 动画使用 `ease-out` 或 `cubic-bezier(0.25, 0.1, 0.25, 1)`
+1. `index.html` 和 `intro.html` 的 `:root` 使用同一套深色 token 值
+2. Canvas `drawChart()` 中硬编码颜色已替换为新 tokens
+3. `generatePoster()` 的 `backgroundColor` 已同步新 `--bg-base`
+4. 保留现有 JS 函数签名和 DOM 结构
+5. 所有 hover/entrance 动画使用 `ease-out` 或 `cubic-bezier(0.16, 1, 0.3, 1)`
+6. 持仓矩阵支持滚动，超出视口时可上下滚动查看

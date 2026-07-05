@@ -4,7 +4,7 @@
 
 HEALTH_URL="http://localhost:8080/api/health"
 LOG_FILE="/home/claudeuser/EvoClaw/data/health_monitor.log"
-ALERT_THRESHOLD=600  # Alert if no price refresh for 10 minutes
+ALERT_THRESHOLD=300  # Alert if no price refresh for 5 minutes (matches main.py stale threshold)
 
 RESPONSE=$(curl -s --max-time 10 "$HEALTH_URL" 2>/dev/null)
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
