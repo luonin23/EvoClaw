@@ -71,6 +71,7 @@ class Database:
             ("open_positions", "open_fee", "REAL DEFAULT 0"),
             ("open_positions", "slot_index", "INTEGER DEFAULT -1"),
             ("trades", "fee", "REAL DEFAULT 0"),
+            ("open_positions", "tier_executed", "INTEGER DEFAULT -1"),
         ]:
             try:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
@@ -237,6 +238,14 @@ class Database:
         )
         self.conn.commit()
 
+    def update_open_amount(self, symbol: str, side: str, new_amount: float):
+        """Update position amount after partial close."""
+        self.conn.execute(
+            "UPDATE open_positions SET amount=? WHERE symbol=? AND side=?",
+            (new_amount, symbol, side),
+        )
+        self.conn.commit()
+
     def remove_open(self, symbol: str, side: str):
         self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
         self.conn.commit()
@@ -394,7 +403,7 @@ class Database:
         ]
         return events, total if total else 0
 
-    # ===== App Config (stored in DB, not config.json) =====
+    # ===== App Config (stored in DB, source of truth for ALL settings) =====
 
     def load_config(self) -> dict:
         """Load full config from DB, converting types from stored strings."""
@@ -425,7 +434,34 @@ class Database:
             return True
         return False
 
+    def upsert_config_key(self, key: str, value):
+        """Insert or update a single config key without affecting others.
+
+        Phase 4: Used to migrate sensitive keys (exchange_kwargs) into DB
+        without a full config overwrite.
+        """
+        self.conn.execute(
+            "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value)),
+        )
+        self.conn.commit()
+
     # ===== End App Config =====
+
+    def set_tier_executed(self, symbol: str, side: str, tier: int):
+        """Persist tier close state so it survives restarts."""
+        self.conn.execute(
+            "UPDATE open_positions SET tier_executed=? WHERE symbol=? AND side=?",
+            (tier, symbol, side),
+        )
+        self.conn.commit()
+
+    def load_tier_states(self) -> dict:
+        """Load persisted tier close states (key -> tier_index)."""
+        rows = self.conn.execute(
+            "SELECT symbol, side, tier_executed FROM open_positions WHERE tier_executed >= 0"
+        ).fetchall()
+        return {f"{r[0]}:{r[1]}": r[2] for r in rows}
 
     def increment_margin_call_count(self, increment: int = 1):
         self.conn.execute(

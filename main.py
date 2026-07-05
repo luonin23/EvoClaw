@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import glob
+import time
 import logging.handlers
 import fcntl
 from datetime import datetime, timezone, timedelta
@@ -148,17 +149,39 @@ async def main():
 
     db = Database("data/evoclaw.db")
 
+    # === Phase 4: Migrate exchange_kwargs from config.json into database ===
+    exchange_kwargs = cfg.get("exchange_kwargs", {})
+    if exchange_kwargs:
+        db.upsert_config_key("exchange_kwargs", exchange_kwargs)
+        # Verify it was stored correctly
+        db_cfg = db.load_config()
+        if db_cfg.get("exchange_kwargs"):
+            log.info("exchange_kwargs stored in database (apiKey=***, secret=***)")
+            # Remove from in-memory config so we don't write it back
+            cfg.pop("exchange_kwargs", None)
+            # Remove from config.json file
+            try:
+                with open("config.json", "w") as f:
+                    json.dump(cfg, f, indent=2)
+                log.info("exchange_kwargs removed from config.json (migrated to DB)")
+            except Exception as e:
+                log.warning(f"Failed to update config.json (non-fatal): {e}")
+        else:
+            log.warning("exchange_kwargs migration to DB failed — keeping in config.json as fallback")
+    else:
+        log.warning("No exchange_kwargs in config.json — will try loading from DB")
+
     # Migrate config from file to DB (first run / after reset)
-    # Keep apiKey + secret in config.json for security; everything else in DB
-    db_config = {k: v for k, v in cfg.items() if k != "exchange_kwargs"}
+    # Note: exchange_kwargs was handled above, everything else goes through seed_config
+    db_config = {k: v for k, v in cfg.items()}
     is_new = db.seed_config(db_config)
     if is_new:
         log.info("Config migrated from config.json to database")
-    # Load runtime config from DB (the source of truth for editable settings)
+
+    # Load runtime config from DB (now includes exchange_kwargs)
     runtime_cfg = db.load_config()
-    runtime_cfg["exchange_kwargs"] = cfg.get("exchange_kwargs", {})
     cfg = runtime_cfg
-    log.info(f"Config loaded: {len(cfg.get('symbols', []))} symbols")
+    log.info(f"Config loaded from DB: {len(cfg.get('symbols', []))} symbols, exchange_kwargs={'present' if cfg.get('exchange_kwargs') else 'MISSING'}")
 
     client = ExchangeClient(cfg)
     await client.load_markets()
@@ -186,8 +209,54 @@ async def main():
     except Exception as e:
         log.warning(f"Liquidation backfill failed (non-fatal): {e}")
 
+    # === Startup DB repair: sync open_positions amounts with exchange ===
+    try:
+        db_positions = db.get_open_positions()
+        if db_positions:
+            ex_positions = await client.get_positions()
+            ex_map = {}
+            for p in ex_positions:
+                sym = client.user_symbol(p["symbol"])
+                side = p.get("side")
+                ex_map[f"{sym}:{side}"] = float(p.get("contracts", 0) or 0)
+
+            repaired = 0
+            removed = 0
+            for sp in db_positions:
+                key = f"{sp['symbol']}:{sp['side']}"
+                ex_amt = ex_map.get(key)
+                if ex_amt is None or ex_amt <= 0:
+                    db.remove_open(sp['symbol'], sp['side'])
+                    removed += 1
+                elif abs(sp['amount'] - ex_amt) > 1:
+                    db.update_open_amount(sp['symbol'], sp['side'], ex_amt)
+                    repaired += 1
+
+            if repaired > 0 or removed > 0:
+                log.info(f"DB repair: {repaired} amounts synced, {removed} stale entries removed")
+    except Exception as e:
+        log.warning(f"DB repair failed (non-fatal): {e}")
+
     trader = Trader(client, db, "config.json")
     server = WebServer(client, db, "config.json", trader=trader)
+
+    # === Phase 3: Health check endpoint ===
+    async def health_handler(request):
+        now = time.monotonic()
+        price_age = now - trader._last_price_ok if trader._last_price_ok > 0 else None
+        trader_alive = trader.running and (price_age is None or price_age < 300)
+        return web.json_response({
+            "status": "ok" if trader_alive else "degraded",
+            "trader_running": trader.running,
+            "last_price_ok_seconds_ago": round(price_age, 1) if price_age else None,
+            "price_fail_streak": trader._price_fail_streak,
+            "open_positions": len(trader._system_pos_map),
+            "skipped_2027_count": len(trader._fail2027_skipped_at),
+            "mc_cooldown_count": len(trader._mc_last_success),
+            "mc_fail_streaks": dict(trader._mc_fail_streak),
+        })
+
+    server.app.router.add_get("/api/health", health_handler)
 
     # Dynamic symbol selection based on volume & price thresholds
     volume_threshold = cfg.get("volume_threshold", 0)

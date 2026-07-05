@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import time
 from datetime import datetime, timezone
 
 from exchange_client import _throttle_warn
@@ -24,18 +25,37 @@ class Trader:
         self._fail2027_skipped_at: dict[str, float] = {}
         self._fail2027_retry_after = 600
         self._system_pos_map: dict[str, dict] = {}
-        self._tier_executed: dict[str, int] = {}
+        self._tier_executed: dict[str, int] = {}  # loaded from DB below
+
+        # === Phase 1: Margin call rate limiting ===
+        self._mc_last_success: dict[str, float] = {}     # symbol -> timestamp of last SUCCESSFUL margin call
+        self._mc_fail_streak: dict[str, int] = {}         # symbol -> consecutive failures
+        self._mc_max_fail_streak = 5
+        self._mc_cooldown_success = 3600                   # 1 hour after any success
+        self._mc_cooldown_fail = 3600                      # 1 hour after max consecutive failures
+
+        # === Phase 2: Price refresh health ===
+        self._last_price_ok: float = 0                     # timestamp of last successful refresh_prices
+        self._price_fail_streak: int = 0
+        self._price_max_fail_streak = 3
+        self._price_stale_seconds = 300                    # prices considered stale after 5 min
+
+        # === Phase 2: Heartbeat ===
+        self._last_heartbeat_tick: int = 0
+
+        # Load persisted tier states from DB (survives restarts)
+        try:
+            self._tier_executed = self.db.load_tier_states()
+            if self._tier_executed:
+                import logging as _log
+                _log.getLogger(__name__).info(f"Loaded {len(self._tier_executed)} tier states from DB")
+        except Exception:
+            pass
 
     def _load_config(self):
-        """Load config from database."""
+        """Load config from database (source of truth for ALL settings including exchange_kwargs)."""
         try:
-            cfg = self.db.load_config()
-            # Merge exchange_kwargs from file (not stored in DB for security)
-            if self.config_path and os.path.exists(self.config_path):
-                with open(self.config_path, "r") as f:
-                    file_cfg = json.load(f)
-                cfg["exchange_kwargs"] = file_cfg.get("exchange_kwargs", {})
-            return cfg
+            return self.db.load_config()
         except Exception as e:
             log.error(f"Failed to load config: {e}")
             return getattr(self, "config", {})
@@ -59,19 +79,48 @@ class Trader:
         tick_count = 0
         interval = self._get_config().get("position_check_interval", 1)
         log.info("Trader started")
+
+        # Track tick duration for health monitoring
+        tick_start = time.monotonic()
+
         while self.running:
             try:
-                await self.tick()
+                # === Phase 1: Per-tick timeout (30s) to prevent event-loop hangs ===
+                await asyncio.wait_for(self.tick(), timeout=30)
                 tick_count += 1
+
+                # === Phase 2: Heartbeat every 60 ticks (~1 minute) ===
                 if tick_count % 60 == 0:
                     self.db.checkpoint_restart()
+                    elapsed = time.monotonic() - tick_start
+                    log.info(
+                        f"HEARTBEAT: tick={tick_count} "
+                        f"pos={len(self._system_pos_map)} "
+                        f"skipped_2027={len(self._fail2027_skipped_at)} "
+                        f"mc_cooldowns={len(self._mc_last_success)} "
+                        f"price_age={time.monotonic() - self._last_price_ok:.0f}s" if self._last_price_ok > 0 else "price_age=N/A"
+                    )
+                    tick_start = time.monotonic()
+
                 if tick_count % 300 == 0:
                     self._cleanup_stale_2027()
+                    self._cleanup_stale_mc_state()
+
                 # Re-read interval occasionally in case config changed
                 if tick_count % 100 == 0:
                     interval = self._get_config().get("position_check_interval", 1)
+
+            except asyncio.TimeoutError:
+                # === Phase 1: Tick timeout — log and continue ===
+                tick_count += 1
+                log.error(
+                    f"TICK TIMEOUT: tick() exceeded 30s (tick={tick_count}). "
+                    f"Forcing next cycle. Check Binance API connectivity."
+                )
             except Exception as e:
+                tick_count += 1
                 log.error(f"Tick error: {e}")
+
             await asyncio.sleep(interval)
         log.info("Trader stopped")
 
@@ -111,6 +160,47 @@ class Trader:
     def _clear_2027_failure(self, symbol: str):
         if symbol in self._fail2027_counts:
             del self._fail2027_counts[symbol]
+
+    # === Phase 1: Margin call rate limiting helpers ===
+
+    def _is_mc_cooldown(self, symbol: str) -> bool:
+        """Check if margin call is in cooldown for this symbol."""
+        last_ok = self._mc_last_success.get(symbol)
+        if last_ok is not None:
+            now = time.monotonic()
+            if now - last_ok < self._mc_cooldown_success:
+                return True
+            else:
+                # Cooldown expired, clean up
+                del self._mc_last_success[symbol]
+        return False
+
+    def _record_mc_success(self, symbol: str):
+        """Record a successful margin call — starts cooldown."""
+        self._mc_last_success[symbol] = time.monotonic()
+        self._mc_fail_streak.pop(symbol, None)
+
+    def _record_mc_failure(self, symbol: str):
+        """Record a failed margin call attempt."""
+        streak = self._mc_fail_streak.get(symbol, 0) + 1
+        self._mc_fail_streak[symbol] = streak
+        if streak >= self._mc_max_fail_streak:
+            # Cooldown same as success — 1 hour
+            self._mc_last_success[symbol] = time.monotonic()
+            log.warning(
+                f"MARGIN CALL COOLDOWN: {symbol} after {streak} consecutive failures, "
+                f"cooling down for {self._mc_cooldown_fail}s"
+            )
+
+    def _cleanup_stale_mc_state(self):
+        """Periodically clean up stale MC state entries."""
+        now = time.monotonic()
+        for sym in list(self._mc_last_success.keys()):
+            if now - self._mc_last_success[sym] >= max(self._mc_cooldown_success, self._mc_cooldown_fail) * 2:
+                del self._mc_last_success[sym]
+        for sym in list(self._mc_fail_streak.keys()):
+            if sym not in self._mc_last_success:
+                del self._mc_fail_streak[sym]
 
     async def _ensure_symbols(self):
         cfg = self._get_config()
@@ -153,7 +243,33 @@ class Trader:
         if not candidate_symbols:
             return
 
-        await self.client.refresh_prices(candidate_symbols)
+        # === Phase 2: Price refresh with staleness detection ===
+        try:
+            await self.client.refresh_prices(candidate_symbols)
+            self._last_price_ok = time.monotonic()
+            self._price_fail_streak = 0
+        except Exception:
+            # refresh_prices already logs the warning internally
+            self._price_fail_streak += 1
+            if self._price_fail_streak >= self._price_max_fail_streak:
+                # Multiple consecutive failures — skip this tick entirely
+                if self._price_fail_streak == self._price_max_fail_streak:
+                    log.error(
+                        f"PRICE FEED STALE: refresh_prices failed {self._price_fail_streak} times. "
+                        f"Prices are {time.monotonic() - self._last_price_ok:.0f}s old. "
+                        f"Continuing with stale prices..."
+                    )
+            # Don't return — continue with stale prices rather than stopping entirely
+
+        # === Phase 2: Warn if prices are stale ===
+        if self._last_price_ok > 0 and (time.monotonic() - self._last_price_ok) > self._price_stale_seconds:
+            if tick_count := getattr(self, '_stale_warn_count', 0) == 0:
+                log.warning(
+                    f"STALE PRICES: last successful refresh was "
+                    f"{time.monotonic() - self._last_price_ok:.0f}s ago. "
+                    f"Trading decisions may be unreliable."
+                )
+            self._stale_warn_count = (tick_count + 1) % 60
 
         # STEP 1: Fetch positions ONCE
         all_positions = await self.client.get_positions()
@@ -322,6 +438,13 @@ class Trader:
                 close_pct = tier.get("close_pct", 1.0)
                 close_contracts = math.floor(contracts * close_pct)
                 if close_contracts < 1:
+                    # Position too small for this tier — mark as attempted
+                    # and move to next tier. Persist so restart doesn't loop.
+                    self._tier_executed[pos_key] = i
+                    try:
+                        self.db.set_tier_executed(symbol, pos_side, i)
+                    except Exception:
+                        pass
                     continue
                 log.info(f"TIER CLOSE {symbol} {pos_side}: tier={i+1} pnl={unrealized_pnl:.4f} rate={profit_rate:.4%} close={close_contracts}/{contracts}")
                 result = await self.client.close_position(symbol, pos_side, close_contracts)
@@ -330,15 +453,28 @@ class Trader:
                     sp = self._system_pos_map.get(pos_key)
                     if sp:
                         open_fee = sp.get("open_fee", 0)
-                    if close_contracts >= contracts:
+                    remaining = contracts - close_contracts
+                    if remaining <= 0:
                         self.db.remove_open(symbol, pos_side)
                         self._system_pos_map.pop(pos_key, None)
+                    else:
+                        try:
+                            self.db.update_open_amount(symbol, pos_side, remaining)
+                            if sp:
+                                sp["amount"] = remaining
+                        except Exception:
+                            pass
                     await self._record_trade(
                         symbol=symbol, side=pos_side,
                         entry_price=entry_price, contracts=close_contracts,
                         close_result=result, trade_type="single", open_fee=open_fee,
                     )
                     self._tier_executed[pos_key] = i
+                    # Persist tier state to DB (survives restarts)
+                    try:
+                        self.db.set_tier_executed(symbol, pos_side, i)
+                    except Exception:
+                        pass
                 return True
         return False
 
@@ -404,10 +540,16 @@ class Trader:
                 closed_any = True
         return closed_any
 
-    # ========== Margin call ==========
+    # ========== Margin call (Phase 1: with rate limiting) ==========
 
     async def check_margin_call(self, all_positions, skip) -> bool:
-        """Return True if any margin call was executed."""
+        """Return True if any margin call was executed.
+
+        Phase 1 protections:
+        - Per-symbol cooldown: max 1 margin call per hour per symbol
+        - Circuit breaker: after 5 consecutive failures, cooldown 1 hour
+        - -2027 circuit breaker integration: checks _is_skipped_2027
+        """
         cfg = self.config
         threshold_long = cfg.get("margin_call_threshold_long", cfg.get("margin_call_threshold", 0.01))
         threshold_short = cfg.get("margin_call_threshold_short", cfg.get("margin_call_threshold", 0.01))
@@ -418,10 +560,21 @@ class Trader:
             sym = self.client.user_symbol(p["symbol"])
             if sym in skip:
                 continue
+
+            # === Phase 1: Check -2027 circuit breaker ===
+            if self._is_skipped_2027(sym):
+                continue
+
+            # === Phase 1: Check margin call cooldown ===
+            if self._is_mc_cooldown(sym):
+                continue
+
             side = p.get("side")
 
             pnl = float(p.get("unrealizedPnl", 0) or 0)
             if pnl >= 0:
+                # Position is profitable — clear failure streak
+                self._mc_fail_streak.pop(sym, None)
                 continue
 
             entry = float(p.get("entryPrice", 0) or 0)
@@ -445,6 +598,9 @@ class Trader:
                 )
                 result = await self.client.add_position(sym, side, add_amount)
                 if result:
+                    # === Phase 1: Record success → start cooldown ===
+                    self._record_mc_success(sym)
+                    self._clear_2027_failure(sym)
                     self.db.increment_margin_call_count()
                     new_total = contracts + add_amount
                     added_fee = result["average"] * add_amount * cs * 0.0005
@@ -454,6 +610,11 @@ class Trader:
                         open_fee = entry * contracts * cs * 0.0005 + added_fee
                         self.db.record_open(sym, side, "margin_call", entry, new_total, open_fee)
                     executed = True
+                else:
+                    # === Phase 1: Record failure ===
+                    self._record_mc_failure(sym)
+                    # Also feed into -2027 circuit breaker (add_position already logs if -2027)
+                    self._record_2027_failure(sym)
         return executed
 
     # ========== Replenish ==========

@@ -54,15 +54,9 @@ class WebServer:
         self._system_cache = (0, None)
 
     def _load_config(self):
-        """Load config from database (source of truth for editable settings).
-        Merges exchange_kwargs from config.json (not stored in DB for security)."""
+        """Load config from database (source of truth for ALL settings including exchange_kwargs)."""
         try:
-            cfg = self.db.load_config()
-            if self.config_path and os.path.exists(self.config_path):
-                with open(self.config_path, "r") as f:
-                    file_cfg = json.load(f)
-                cfg["exchange_kwargs"] = file_cfg.get("exchange_kwargs", {})
-            return cfg
+            return self.db.load_config()
         except Exception:
             return {}
 
@@ -182,26 +176,25 @@ class WebServer:
             body = await request.json()
             existing = self._load_config()
             kwargs = existing.get("exchange_kwargs", {})
+
+            # Phase 4: Handle exchange_kwargs updates via DB
             if "exchange_kwargs" in body:
                 if body["exchange_kwargs"].get("apiKey"):
                     kwargs["apiKey"] = body["exchange_kwargs"]["apiKey"]
                 if body["exchange_kwargs"].get("secret"):
                     kwargs["secret"] = body["exchange_kwargs"]["secret"]
+
+            # Build the full config to save
             for k, v in body.items():
                 if k == "exchange_kwargs":
                     continue
                 existing[k] = v
-            # Save editable settings to database
-            db_config = {k: v for k, v in existing.items() if k != "exchange_kwargs"}
-            await self._db_sync(self.db.save_config, db_config)
-            # Save exchange_kwargs to config.json (API keys stay on disk)
             existing["exchange_kwargs"] = kwargs
-            try:
-                with open(self.config_path, "w") as f:
-                    json.dump(existing, f, indent=4)
-            except Exception:
-                pass  # config.json may be read-only under systemd; DB save is what matters
-            return web.json_response({"status": "ok", "message": "Config saved"})
+
+            # Phase 4: Save everything to DB (including exchange_kwargs)
+            await self._db_sync(self.db.save_config, existing)
+
+            return web.json_response({"status": "ok", "message": "Config saved to database"})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 

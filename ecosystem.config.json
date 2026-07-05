@@ -1,0 +1,22 @@
+{
+  "apps": [
+    {
+      "name": "evoclaw",
+      "script": "main.py",
+      "cwd": "/home/claudeuser/EvoClaw",
+      "interpreter": "/usr/bin/python3",
+      "autorestart": true,
+      "max_restarts": 10,
+      "restart_delay": 5000,
+      "max_memory_restart": "500M",
+      "watch": false,
+      "error_file": "/home/claudeuser/EvoClaw/data/pm2-error.log",
+      "out_file": "/home/claudeuser/EvoClaw/data/pm2-out.log",
+      "merge_logs": true,
+      "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  ]
+}

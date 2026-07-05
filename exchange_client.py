@@ -314,9 +314,20 @@ class ExchangeClient:
                     params={"positionSide": "LONG" if side == "buy" else "SHORT"},
                 ), timeout=15)
                 log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
+                avg = order.get("average") or order.get("price")
+                if not avg:
+                    info = order.get("info", {})
+                    avg = info.get("avgPrice") or info.get("averagePrice")
+                if not avg:
+                    cost = order.get("cost")
+                    filled = order.get("filled")
+                    if cost and filled and filled > 0:
+                        avg = cost / filled
+                if not avg:
+                    avg = self._prices.get(resolved, 0)
                 return {
                     "order_id": str(order.get("id", "")),
-                    "average": float(order.get("average", 0) or 0),
+                    "average": float(avg or 0),
                     "amount": amount,
                 }
             except Exception as e:
@@ -364,9 +375,20 @@ class ExchangeClient:
                     params={"positionSide": side.upper()},
                 ), timeout=15)
                 log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
+                avg = order.get("average") or order.get("price")
+                if not avg:
+                    info = order.get("info", {})
+                    avg = info.get("avgPrice") or info.get("averagePrice")
+                if not avg:
+                    cost = order.get("cost")
+                    filled = order.get("filled")
+                    if cost and filled and filled > 0:
+                        avg = cost / filled
+                if not avg:
+                    avg = self._prices.get(resolved, 0)
                 return {
                     "order_id": str(order.get("id", "")),
-                    "average": float(order.get("average", 0) or 0),
+                    "average": float(avg or 0),
                     "amount": amount,
                 }
             except Exception as e:
@@ -415,9 +437,24 @@ class ExchangeClient:
                 order = await self._safe_call(self.exchange.create_order(**kwargs), timeout=15)
                 tag = "no params" if params is None else side
                 log.info(f"Close {tag} {resolved} {contracts} -> {order.get('id')}")
+                # Get fill price via multiple fallbacks (ccxt may not set average)
+                avg = order.get("average")
+                if not avg:
+                    avg = order.get("price")
+                if not avg:
+                    info = order.get("info", {})
+                    avg = info.get("avgPrice") or info.get("averagePrice")
+                if not avg:
+                    # Last resort: cost/filled
+                    cost = order.get("cost")
+                    filled = order.get("filled")
+                    if cost and filled and filled > 0:
+                        avg = cost / filled
+                if not avg:
+                    avg = self._prices.get(resolved, 0)
                 return {
                     "order_id": str(order.get("id", "")),
-                    "average": float(order.get("average", 0) or 0),
+                    "average": float(avg or 0),
                     "closedPnL": order.get("closedPnL", 0),
                     "contracts": contracts,
                 }
