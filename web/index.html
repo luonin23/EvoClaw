@@ -395,8 +395,7 @@ body::after{
 .pos-cell.no-bottom::before{display:none}
 
 #panel-matrix{
-  position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;
-  width:100vw;padding:var(--space-12) var(--space-12) var(--space-24);max-width:none;
+  padding:0 0 var(--space-24);
   height:calc(100vh - 80px);overflow-y:auto;
 }
 
@@ -1917,7 +1916,7 @@ startTimers();
     const bgCtx = bgCanvas.getContext('2d');
     let bgW, bgH;
     const bgParticles = [];
-    const BG_COUNT = Math.min(90, Math.floor((window.innerWidth * window.innerHeight) / 18000));
+    const BG_COUNT = Math.min(140, Math.floor((window.innerWidth * window.innerHeight) / 12000));
 
     function resizeBg() {
       bgW = bgCanvas.width = window.innerWidth;
@@ -1931,8 +1930,8 @@ startTimers();
         x: Math.random() * bgW,
         y: Math.random() * bgH,
         r: Math.random() * 2.2 + 0.9,
-        vx: (Math.random() - 0.5) * 0.35,
-        vy: (Math.random() - 0.5) * 0.35,
+        vx: (Math.random() - 0.5) * 0.7,
+        vy: (Math.random() - 0.5) * 0.7,
         alpha: Math.random() * 0.55 + 0.25,
         pulse: Math.random() * Math.PI * 2
       });
