@@ -804,11 +804,22 @@ body::after{
   *{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}
   .reveal{opacity:1;transform:none;transition:none}
 }
+
+/* Background particle canvas */
+#bgParticles{
+  position:fixed;inset:0;z-index:-1;pointer-events:none;
+}
+/* Pipeline particle canvas */
+#pipelineParticles{
+  position:absolute;inset:0;pointer-events:none;z-index:1;
+}
+
 </style>
 </head>
 <body>
 
 <div class="grid-bg"></div>
+<canvas id="bgParticles"></canvas>
 
 <!-- =========================================================
      SECTION 1: HERO
