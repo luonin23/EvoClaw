@@ -1295,7 +1295,7 @@ body::after{
     });
   });
 
-  /* ---- Background floating particles ---- */
+  /* ---- Background floating particles (full-page, scroll-aware) ---- */
   (function initBgParticles(){
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
@@ -1304,25 +1304,27 @@ body::after{
     const canvas = document.getElementById('bgParticles');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    let W, H;
+    let W, H, docH;
     const particles = [];
-    const COUNT = Math.min(60, Math.floor((window.innerWidth * window.innerHeight) / 28000));
 
     function resize(){
       W = canvas.width = window.innerWidth;
       H = canvas.height = window.innerHeight;
+      docH = Math.max(document.documentElement.scrollHeight, H);
     }
     resize();
     window.addEventListener('resize', resize, { passive: true });
 
+    // Distribute particles across the entire scrollable document height
+    const COUNT = Math.min(120, Math.floor((W * docH) / 22000));
     for (let i = 0; i < COUNT; i++){
       particles.push({
         x: Math.random() * W,
-        y: Math.random() * H,
-        r: Math.random() * 2 + 0.8,
+        wy: Math.random() * docH,          // world Y (full document)
+        r: Math.random() * 2.2 + 0.9,
         vx: (Math.random() - 0.5) * 0.35,
         vy: (Math.random() - 0.5) * 0.35,
-        alpha: Math.random() * 0.5 + 0.2,
+        alpha: Math.random() * 0.55 + 0.25,
         pulse: Math.random() * Math.PI * 2
       });
     }
@@ -1333,15 +1335,17 @@ body::after{
       if (now - lastTime < 33) return;
       lastTime = now;
 
+      const scrollY = window.scrollY || window.pageYOffset;
+      docH = Math.max(document.documentElement.scrollHeight, H);
       ctx.clearRect(0, 0, W, H);
 
-      // ambient glow
-      const t = now * 0.00015;
+      // ambient glow follows viewport
+      const t = now * 0.00012;
       const g = ctx.createRadialGradient(
         W * (0.15 + Math.sin(t) * 0.08), H * (0.25 + Math.cos(t * 0.7) * 0.08), 0,
         W * 0.25, H * 0.35, W * 0.55
       );
-      g.addColorStop(0, `rgba(${ACCENT_RGB},0.05)`);
+      g.addColorStop(0, `rgba(${ACCENT_RGB},0.06)`);
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
@@ -1349,28 +1353,44 @@ body::after{
       for (let i = 0; i < particles.length; i++){
         const p = particles[i];
         p.x += p.vx;
-        p.y += p.vy;
+        p.wy += p.vy;
+
+        // wrap world coordinates
         if (p.x < -10) p.x = W + 10;
         if (p.x > W + 10) p.x = -10;
-        if (p.y < -10) p.y = H + 10;
-        if (p.y > H + 10) p.y = -10;
+        if (p.wy < -10) p.wy = docH + 10;
+        if (p.wy > docH + 10) p.wy = -10;
 
-        const pulse = Math.sin(now * 0.002 + p.pulse) * 0.15 + 1;
+        // convert world Y to viewport Y
+        let sy = p.wy - scrollY;
+        // seamless vertical wrapping for fixed background feel
+        if (sy < -20) sy += docH;
+        if (sy > H + 20) sy -= docH;
+
+        // skip only if still far outside viewport
+        if (sy < -30 || sy > H + 30) continue;
+
+        const pulse = Math.sin(now * 0.002 + p.pulse) * 0.2 + 1;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2);
+        ctx.arc(p.x, sy, p.r * pulse, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha})`;
         ctx.fill();
 
         for (let j = i + 1; j < particles.length; j++){
           const q = particles[j];
+          let qsy = q.wy - scrollY;
+          if (qsy < -20) qsy += docH;
+          if (qsy > H + 20) qsy -= docH;
+          if (qsy < -30 || qsy > H + 30) continue;
+
           const dx = p.x - q.x;
-          const dy = p.y - q.y;
+          const dy = sy - qsy;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 130){
+          if (dist < 140){
             ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(q.x, q.y);
-            ctx.strokeStyle = `rgba(${ACCENT_RGB},${0.1 * (1 - dist / 130)})`;
+            ctx.moveTo(p.x, sy);
+            ctx.lineTo(q.x, qsy);
+            ctx.strokeStyle = `rgba(${ACCENT_RGB},${0.12 * (1 - dist / 140)})`;
             ctx.lineWidth = 0.5;
             ctx.stroke();
           }

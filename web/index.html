@@ -502,6 +502,7 @@ body::after{
 
 /* ===== Pipeline Status Bar ===== */
 .pipeline-wrap{
+  position:relative;
   background:var(--bg-elevated);border:1px solid var(--border-subtle);
   border-radius:var(--radius-lg);padding:var(--space-16) var(--space-16);text-align:center;
 }
@@ -1910,13 +1911,13 @@ startTimers();
   const ACCENT = '#00d084';
   const ACCENT_RGB = '0,208,132';
 
-  // --- 1. Background floating particles ---
+  // --- 1. Background floating particles (full app viewport) ---
   const bgCanvas = document.getElementById('bgParticles');
   if (bgCanvas) {
     const bgCtx = bgCanvas.getContext('2d');
     let bgW, bgH;
     const bgParticles = [];
-    const BG_COUNT = Math.min(70, Math.floor((window.innerWidth * window.innerHeight) / 25000));
+    const BG_COUNT = Math.min(90, Math.floor((window.innerWidth * window.innerHeight) / 18000));
 
     function resizeBg() {
       bgW = bgCanvas.width = window.innerWidth;
@@ -1929,10 +1930,10 @@ startTimers();
       bgParticles.push({
         x: Math.random() * bgW,
         y: Math.random() * bgH,
-        r: Math.random() * 2 + 1,
-        vx: (Math.random() - 0.5) * 0.4,
-        vy: (Math.random() - 0.5) * 0.4,
-        alpha: Math.random() * 0.5 + 0.2,
+        r: Math.random() * 2.2 + 0.9,
+        vx: (Math.random() - 0.5) * 0.35,
+        vy: (Math.random() - 0.5) * 0.35,
+        alpha: Math.random() * 0.55 + 0.25,
         pulse: Math.random() * Math.PI * 2
       });
     }
@@ -1952,13 +1953,13 @@ startTimers();
 
       bgCtx.clearRect(0, 0, bgW, bgH);
 
-      // subtle ambient glow centers
-      const t = now * 0.0002;
+      // subtle ambient glow center
+      const t = now * 0.00015;
       const g1 = bgCtx.createRadialGradient(
-        bgW * (0.2 + Math.sin(t) * 0.1), bgH * (0.3 + Math.cos(t * 0.7) * 0.1), 0,
-        bgW * 0.3, bgH * 0.4, bgW * 0.6
+        bgW * (0.3 + Math.sin(t) * 0.1), bgH * (0.4 + Math.cos(t * 0.7) * 0.1), 0,
+        bgW * 0.4, bgH * 0.5, bgW * 0.7
       );
-      g1.addColorStop(0, `rgba(${ACCENT_RGB},0.04)`);
+      g1.addColorStop(0, `rgba(${ACCENT_RGB},0.05)`);
       g1.addColorStop(1, 'rgba(0,0,0,0)');
       bgCtx.fillStyle = g1;
       bgCtx.fillRect(0, 0, bgW, bgH);
@@ -1972,7 +1973,7 @@ startTimers();
         if (p.y < -10) p.y = bgH + 10;
         if (p.y > bgH + 10) p.y = -10;
 
-        const pulse = Math.sin(now * 0.002 + p.pulse) * 0.15 + 1;
+        const pulse = Math.sin(now * 0.002 + p.pulse) * 0.2 + 1;
         bgCtx.beginPath();
         bgCtx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2);
         bgCtx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha})`;
@@ -1984,25 +1985,25 @@ startTimers();
           const dx = p.x - q.x;
           const dy = p.y - q.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 120) {
+          if (dist < 130) {
             bgCtx.beginPath();
             bgCtx.moveTo(p.x, p.y);
             bgCtx.lineTo(q.x, q.y);
-            bgCtx.strokeStyle = `rgba(${ACCENT_RGB},${0.12 * (1 - dist / 120)})`;
+            bgCtx.strokeStyle = `rgba(${ACCENT_RGB},${0.14 * (1 - dist / 130)})`;
             bgCtx.lineWidth = 0.5;
             bgCtx.stroke();
           }
         }
 
-        // mouse repulsion glow
+        // mouse proximity glow
         if (bgMouse.active) {
           const mdx = p.x - bgMouse.x;
           const mdy = p.y - bgMouse.y;
           const mdist = Math.sqrt(mdx * mdx + mdy * mdy);
-          if (mdist < 140) {
+          if (mdist < 150) {
             bgCtx.beginPath();
-            bgCtx.arc(p.x, p.y, p.r * 2.5, 0, Math.PI * 2);
-            bgCtx.fillStyle = `rgba(${ACCENT_RGB},${0.25 * (1 - mdist / 140)})`;
+            bgCtx.arc(p.x, p.y, p.r * 2.8, 0, Math.PI * 2);
+            bgCtx.fillStyle = `rgba(${ACCENT_RGB},${0.28 * (1 - mdist / 150)})`;
             bgCtx.fill();
           }
         }
@@ -2011,31 +2012,47 @@ startTimers();
     requestAnimationFrame(drawBgParticles);
   }
 
-  // --- 2. Pipeline data-flow particles ---
+  // --- 2. Pipeline data-flow particles (follow the actual pipeline bar) ---
   const pipeCanvas = document.getElementById('pipelineParticles');
-  if (pipeCanvas) {
+  const pipeBar = document.getElementById('pipelineBar');
+  if (pipeCanvas && pipeBar) {
     const pipeCtx = pipeCanvas.getContext('2d');
     const pipeWrap = pipeCanvas.parentElement;
-    let pipeW, pipeH;
+    let wrapW, wrapH;
     const pipeParticles = [];
 
     function resizePipe() {
       const rect = pipeWrap.getBoundingClientRect();
-      pipeW = pipeCanvas.width = rect.width;
-      pipeH = pipeCanvas.height = rect.height;
+      wrapW = pipeCanvas.width = rect.width;
+      wrapH = pipeCanvas.height = rect.height;
     }
     resizePipe();
     window.addEventListener('resize', resizePipe, { passive: true });
 
+    function getBarMetrics() {
+      const wrapRect = pipeWrap.getBoundingClientRect();
+      const barRect = pipeBar.getBoundingClientRect();
+      return {
+        x: barRect.left - wrapRect.left,
+        y: barRect.top - wrapRect.top,
+        w: barRect.width,
+        h: barRect.height
+      };
+    }
+
     function spawnPipeParticle() {
       if (document.hidden) return;
+      const bar = getBarMetrics();
+      if (bar.w <= 0 || bar.h <= 0) return;
       pipeParticles.push({
-        x: 10,
-        y: pipeH / 2 + (Math.random() - 0.5) * (pipeH * 0.5),
-        vx: Math.random() * 1.5 + 0.8,
-        r: Math.random() * 2 + 1.5,
-        alpha: Math.random() * 0.4 + 0.4,
-        life: 1
+        x: bar.x + 8,
+        y: bar.y + bar.h / 2 + (Math.random() - 0.5) * (bar.h * 0.35),
+        vx: Math.random() * 1.2 + 0.9,
+        r: Math.random() * 2 + 1.2,
+        alpha: Math.random() * 0.35 + 0.45,
+        life: 1,
+        barY: bar.y + bar.h / 2,
+        barH: bar.h
       });
     }
 
@@ -2046,19 +2063,26 @@ startTimers();
       if (now - lastPipeTime < 16) return; // ~60fps
       lastPipeTime = now;
 
-      pipeCtx.clearRect(0, 0, pipeW, pipeH);
+      pipeCtx.clearRect(0, 0, wrapW, wrapH);
 
-      if (now - lastPipeSpawn > 250) {
+      if (now - lastPipeSpawn > 220) {
         spawnPipeParticle();
         lastPipeSpawn = now;
       }
 
+      const bar = getBarMetrics();
+
       for (let i = pipeParticles.length - 1; i >= 0; i--) {
         const p = pipeParticles[i];
         p.x += p.vx;
-        p.life -= 0.005;
+        p.life -= 0.004;
 
-        if (p.x > pipeW - 10 || p.life <= 0) {
+        // confine vertically to the pipeline bar band
+        const targetY = bar.y + bar.h / 2;
+        const dy = targetY - p.y;
+        p.y += dy * 0.06 + (Math.random() - 0.5) * 0.3;
+
+        if (p.x > bar.x + bar.w - 8 || p.life <= 0) {
           pipeParticles.splice(i, 1);
           continue;
         }
@@ -2067,16 +2091,16 @@ startTimers();
         pipeCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
         pipeCtx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life})`;
         pipeCtx.shadowColor = ACCENT;
-        pipeCtx.shadowBlur = 8;
+        pipeCtx.shadowBlur = 10;
         pipeCtx.fill();
         pipeCtx.shadowBlur = 0;
 
         // trailing tail
         pipeCtx.beginPath();
         pipeCtx.moveTo(p.x, p.y);
-        pipeCtx.lineTo(p.x - p.vx * 12, p.y);
-        pipeCtx.strokeStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life * 0.5})`;
-        pipeCtx.lineWidth = p.r * 0.6;
+        pipeCtx.lineTo(p.x - p.vx * 14, p.y);
+        pipeCtx.strokeStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life * 0.55})`;
+        pipeCtx.lineWidth = p.r * 0.55;
         pipeCtx.stroke();
       }
     }
