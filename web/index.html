@@ -651,6 +651,7 @@ body::after{
         <span style="margin-left:auto;font-size:var(--font-sm);color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
       </div>
       <div class="pipeline-wrap">
+        <canvas id="pipelineParticles"></canvas>
         <div class="pipeline-bar" id="pipelineBar">
           <div class="pipe-step" id="pipeFetch"><i class="ph ph-download-simple"></i><span>获取仓位</span></div>
           <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
@@ -1900,6 +1901,188 @@ loadDashboardView();
 refresh();
 loadSystem();
 startTimers();
+
+// ===== Canvas particle effects (background + pipeline data flow) =====
+(function initParticles(){
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (prefersReducedMotion) return;
+
+  const ACCENT = '#00d084';
+  const ACCENT_RGB = '0,208,132';
+
+  // --- 1. Background floating particles ---
+  const bgCanvas = document.getElementById('bgParticles');
+  if (bgCanvas) {
+    const bgCtx = bgCanvas.getContext('2d');
+    let bgW, bgH;
+    const bgParticles = [];
+    const BG_COUNT = Math.min(70, Math.floor((window.innerWidth * window.innerHeight) / 25000));
+
+    function resizeBg() {
+      bgW = bgCanvas.width = window.innerWidth;
+      bgH = bgCanvas.height = window.innerHeight;
+    }
+    resizeBg();
+    window.addEventListener('resize', resizeBg, { passive: true });
+
+    for (let i = 0; i < BG_COUNT; i++) {
+      bgParticles.push({
+        x: Math.random() * bgW,
+        y: Math.random() * bgH,
+        r: Math.random() * 2 + 1,
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: (Math.random() - 0.5) * 0.4,
+        alpha: Math.random() * 0.5 + 0.2,
+        pulse: Math.random() * Math.PI * 2
+      });
+    }
+
+    let bgMouse = { x: -1000, y: -1000, active: false };
+    document.addEventListener('mousemove', (e) => {
+      bgMouse.x = e.clientX;
+      bgMouse.y = e.clientY;
+      bgMouse.active = true;
+    }, { passive: true });
+
+    let lastBgTime = 0;
+    function drawBgParticles(now) {
+      requestAnimationFrame(drawBgParticles);
+      if (now - lastBgTime < 33) return; // ~30fps background
+      lastBgTime = now;
+
+      bgCtx.clearRect(0, 0, bgW, bgH);
+
+      // subtle ambient glow centers
+      const t = now * 0.0002;
+      const g1 = bgCtx.createRadialGradient(
+        bgW * (0.2 + Math.sin(t) * 0.1), bgH * (0.3 + Math.cos(t * 0.7) * 0.1), 0,
+        bgW * 0.3, bgH * 0.4, bgW * 0.6
+      );
+      g1.addColorStop(0, `rgba(${ACCENT_RGB},0.04)`);
+      g1.addColorStop(1, 'rgba(0,0,0,0)');
+      bgCtx.fillStyle = g1;
+      bgCtx.fillRect(0, 0, bgW, bgH);
+
+      for (let i = 0; i < bgParticles.length; i++) {
+        const p = bgParticles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < -10) p.x = bgW + 10;
+        if (p.x > bgW + 10) p.x = -10;
+        if (p.y < -10) p.y = bgH + 10;
+        if (p.y > bgH + 10) p.y = -10;
+
+        const pulse = Math.sin(now * 0.002 + p.pulse) * 0.15 + 1;
+        bgCtx.beginPath();
+        bgCtx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2);
+        bgCtx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha})`;
+        bgCtx.fill();
+
+        // connect nearby particles
+        for (let j = i + 1; j < bgParticles.length; j++) {
+          const q = bgParticles[j];
+          const dx = p.x - q.x;
+          const dy = p.y - q.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 120) {
+            bgCtx.beginPath();
+            bgCtx.moveTo(p.x, p.y);
+            bgCtx.lineTo(q.x, q.y);
+            bgCtx.strokeStyle = `rgba(${ACCENT_RGB},${0.12 * (1 - dist / 120)})`;
+            bgCtx.lineWidth = 0.5;
+            bgCtx.stroke();
+          }
+        }
+
+        // mouse repulsion glow
+        if (bgMouse.active) {
+          const mdx = p.x - bgMouse.x;
+          const mdy = p.y - bgMouse.y;
+          const mdist = Math.sqrt(mdx * mdx + mdy * mdy);
+          if (mdist < 140) {
+            bgCtx.beginPath();
+            bgCtx.arc(p.x, p.y, p.r * 2.5, 0, Math.PI * 2);
+            bgCtx.fillStyle = `rgba(${ACCENT_RGB},${0.25 * (1 - mdist / 140)})`;
+            bgCtx.fill();
+          }
+        }
+      }
+    }
+    requestAnimationFrame(drawBgParticles);
+  }
+
+  // --- 2. Pipeline data-flow particles ---
+  const pipeCanvas = document.getElementById('pipelineParticles');
+  if (pipeCanvas) {
+    const pipeCtx = pipeCanvas.getContext('2d');
+    const pipeWrap = pipeCanvas.parentElement;
+    let pipeW, pipeH;
+    const pipeParticles = [];
+
+    function resizePipe() {
+      const rect = pipeWrap.getBoundingClientRect();
+      pipeW = pipeCanvas.width = rect.width;
+      pipeH = pipeCanvas.height = rect.height;
+    }
+    resizePipe();
+    window.addEventListener('resize', resizePipe, { passive: true });
+
+    function spawnPipeParticle() {
+      if (document.hidden) return;
+      pipeParticles.push({
+        x: 10,
+        y: pipeH / 2 + (Math.random() - 0.5) * (pipeH * 0.5),
+        vx: Math.random() * 1.5 + 0.8,
+        r: Math.random() * 2 + 1.5,
+        alpha: Math.random() * 0.4 + 0.4,
+        life: 1
+      });
+    }
+
+    let lastPipeSpawn = 0;
+    let lastPipeTime = 0;
+    function drawPipeParticles(now) {
+      requestAnimationFrame(drawPipeParticles);
+      if (now - lastPipeTime < 16) return; // ~60fps
+      lastPipeTime = now;
+
+      pipeCtx.clearRect(0, 0, pipeW, pipeH);
+
+      if (now - lastPipeSpawn > 250) {
+        spawnPipeParticle();
+        lastPipeSpawn = now;
+      }
+
+      for (let i = pipeParticles.length - 1; i >= 0; i--) {
+        const p = pipeParticles[i];
+        p.x += p.vx;
+        p.life -= 0.005;
+
+        if (p.x > pipeW - 10 || p.life <= 0) {
+          pipeParticles.splice(i, 1);
+          continue;
+        }
+
+        pipeCtx.beginPath();
+        pipeCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        pipeCtx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life})`;
+        pipeCtx.shadowColor = ACCENT;
+        pipeCtx.shadowBlur = 8;
+        pipeCtx.fill();
+        pipeCtx.shadowBlur = 0;
+
+        // trailing tail
+        pipeCtx.beginPath();
+        pipeCtx.moveTo(p.x, p.y);
+        pipeCtx.lineTo(p.x - p.vx * 12, p.y);
+        pipeCtx.strokeStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life * 0.5})`;
+        pipeCtx.lineWidth = p.r * 0.6;
+        pipeCtx.stroke();
+      }
+    }
+    requestAnimationFrame(drawPipeParticles);
+  }
+})();
 </script>
 <div id="posMatrixTooltip" class="pos-tooltip"></div>
 </body>
