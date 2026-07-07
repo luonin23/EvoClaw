@@ -427,13 +427,11 @@ body::after{
   align-items:center;justify-content:center;padding:var(--space-4) 2px;font-family:var(--font-mono);
   color:var(--text-primary);cursor:pointer;position:relative;overflow:hidden;text-align:center;line-height:1.15;
   border:1.5px solid transparent;transition:all 0.15s ease;
-  animation:cellEnter 0.4s ease-out backwards;
 }
-@keyframes cellEnter{from{opacity:0;transform:scale(0.9)}to{opacity:1;transform:scale(1)}}
 @keyframes cellPulseProfit{0%,100%{box-shadow:0 0 0 rgba(0,208,132,0)}50%{box-shadow:0 0 12px rgba(0,208,132,0.25)}}
 @keyframes cellPulseLoss{0%,100%{box-shadow:0 0 0 rgba(255,71,87,0)}50%{box-shadow:0 0 12px rgba(255,71,87,0.2)}}
-.full-cell.is-profit{animation:cellEnter 0.4s ease-out backwards, cellPulseProfit 3s ease-in-out infinite 0.5s}
-.full-cell.is-loss{animation:cellEnter 0.4s ease-out backwards, cellPulseLoss 3s ease-in-out infinite 0.5s}
+.full-cell.is-profit{animation:cellPulseProfit 3s ease-in-out infinite 0.5s}
+.full-cell.is-loss{animation:cellPulseLoss 3s ease-in-out infinite 0.5s}
 .full-cell[data-span="1"]{aspect-ratio:1}
 .full-cell:hover{z-index:2;border-color:rgba(0,208,132,0.4);box-shadow:0 var(--space-4) var(--space-16) rgba(0,0,0,0.5), 0 0 16px rgba(0,208,132,0.15);transform:translateY(-1px) scale(1.02)}
 .full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary);aspect-ratio:1}
@@ -1414,7 +1412,6 @@ async function loadFullMatrix(posData) {
   // 创建持仓格子（盖在空格子上面，dom 靠后层级高）
   let totalPnl = 0, profitCount = 0, lossCount = 0;
 
-  let cellIndex = 0;
   for (const v of slotValues) {
     const s = v.slot;
     const isProfit = (s.pnl_rate || 0) >= 0;
@@ -1423,7 +1420,6 @@ async function loadFullMatrix(posData) {
 
     const cell = document.createElement('div');
     cell.className = 'full-cell ' + (isProfit ? 'is-profit' : 'is-loss');
-    cell.style.animationDelay = (cellIndex * 0.015) + 's';
     cell.style.background = pnlToHeatBg(pnlRate);
     // 边框由多/空决定：多=绿框，空=红框
     cell.style.borderColor = isLong ? 'hsla(140, 70%, 50%, 0.6)' : 'hsla(0, 70%, 55%, 0.6)';
@@ -1442,7 +1438,6 @@ async function loadFullMatrix(posData) {
 
     totalPnl += s.pnl || 0;
     if (isProfit) profitCount++; else lossCount++;
-    cellIndex++;
   }
 
   container.appendChild(frag);
