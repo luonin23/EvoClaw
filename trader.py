@@ -271,8 +271,12 @@ class Trader:
                 )
             self._stale_warn_count = (tick_count + 1) % 60
 
-        # STEP 1: Fetch positions ONCE
-        all_positions = await self.client.get_positions()
+        # STEP 1: Fetch positions ONCE (timeout-safe)
+        try:
+            all_positions = await self.client.get_positions()
+        except Exception as e:
+            log.warning(f"get_positions() failed in tick, skipping cycle: {e}")
+            return
         exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
         did_change = False
 

@@ -184,7 +184,11 @@ async def main():
     log.info(f"Config loaded from DB: {len(cfg.get('symbols', []))} symbols, exchange_kwargs={'present' if cfg.get('exchange_kwargs') else 'MISSING'}")
 
     client = ExchangeClient(cfg)
-    await client.load_markets()
+    try:
+        await client.load_markets()
+    except Exception as e:
+        log.warning(f"load_markets() failed (will retry on next API call): {e}")
+        # Don't crash — the exchange will lazy-load markets on first use
 
     # Backfill historical liquidations (last 7 days)
     try:
@@ -268,12 +272,19 @@ async def main():
     log.info(f"Active symbols: {len(symbols)} (volume>={volume_threshold}, price<={price_threshold})")
 
     if symbols:
-        await client.refresh_prices(symbols)
+        try:
+            await client.refresh_prices(symbols)
+        except Exception as e:
+            log.warning(f"Initial price refresh failed (non-fatal): {e}")
 
     # Open initial positions - track existing ones, open missing ones
     sides = get_sides(cfg.get("side", "both"))
     if symbols:
-        positions = await client.get_positions()
+        try:
+            positions = await client.get_positions()
+        except Exception as e:
+            log.warning(f"Initial get_positions() failed (non-fatal): {e}")
+            positions = []
 
         for p in positions:
             sym = client.user_symbol(p["symbol"])
@@ -328,7 +339,11 @@ async def main():
         if open_tasks:
             log.info(f"Opening {len(open_tasks)} missing positions")
             for sym, open_side, side in open_tasks:
-                result = await client.safe_open(sym, open_side)
+                try:
+                    result = await client.safe_open(sym, open_side)
+                except Exception as e:
+                    log.warning(f"safe_open failed for {sym} {side} (non-fatal): {e}")
+                    continue
                 if result:
                     market = client.get_market_info(sym)
                     contract_size = market.get("contractSize", 1) or 1
