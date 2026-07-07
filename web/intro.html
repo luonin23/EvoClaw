@@ -805,9 +805,9 @@ body::after{
   .reveal{opacity:1;transform:none;transition:none}
 }
 
-/* Background particle canvas */
+/* Background particle canvas — fixed viewport layer */
 #bgParticles{
-  position:fixed;inset:0;z-index:-1;pointer-events:none;
+  position:fixed;inset:0;z-index:0;pointer-events:none;
 }
 /* Pipeline particle canvas */
 #pipelineParticles{
@@ -1295,7 +1295,7 @@ body::after{
     });
   });
 
-  /* ---- Background floating particles (full-page, scroll-aware) ---- */
+  /* ---- Background floating particles (fixed viewport, dense + bright) ---- */
   (function initBgParticles(){
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
@@ -1304,27 +1304,26 @@ body::after{
     const canvas = document.getElementById('bgParticles');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    let W, H, docH;
+    let W, H;
     const particles = [];
 
     function resize(){
       W = canvas.width = window.innerWidth;
       H = canvas.height = window.innerHeight;
-      docH = Math.max(document.documentElement.scrollHeight, H);
     }
     resize();
     window.addEventListener('resize', resize, { passive: true });
 
-    // Distribute particles across the entire scrollable document height
-    const COUNT = Math.min(180, Math.floor((W * docH) / 14000));
+    // High density in viewport so every scroll position sees plenty
+    const COUNT = Math.min(220, Math.max(100, Math.floor((W * H) / 9000)));
     for (let i = 0; i < COUNT; i++){
       particles.push({
         x: Math.random() * W,
-        wy: Math.random() * docH,          // world Y (full document)
-        r: Math.random() * 2.2 + 0.9,
-        vx: (Math.random() - 0.5) * 0.7,
-        vy: (Math.random() - 0.5) * 0.7,
-        alpha: Math.random() * 0.55 + 0.25,
+        y: Math.random() * H,
+        r: Math.random() * 2.6 + 1.2,
+        vx: (Math.random() - 0.5) * 1.1,
+        vy: (Math.random() - 0.5) * 1.1,
+        alpha: Math.random() * 0.5 + 0.4,
         pulse: Math.random() * Math.PI * 2
       });
     }
@@ -1335,17 +1334,15 @@ body::after{
       if (now - lastTime < 33) return;
       lastTime = now;
 
-      const scrollY = window.scrollY || window.pageYOffset;
-      docH = Math.max(document.documentElement.scrollHeight, H);
       ctx.clearRect(0, 0, W, H);
 
-      // ambient glow follows viewport
-      const t = now * 0.00012;
+      // ambient glow that stays centered in viewport
+      const t = now * 0.00015;
       const g = ctx.createRadialGradient(
         W * (0.15 + Math.sin(t) * 0.08), H * (0.25 + Math.cos(t * 0.7) * 0.08), 0,
         W * 0.25, H * 0.35, W * 0.55
       );
-      g.addColorStop(0, `rgba(${ACCENT_RGB},0.06)`);
+      g.addColorStop(0, `rgba(${ACCENT_RGB},0.08)`);
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
@@ -1353,45 +1350,39 @@ body::after{
       for (let i = 0; i < particles.length; i++){
         const p = particles[i];
         p.x += p.vx;
-        p.wy += p.vy;
+        p.y += p.vy;
+        if (p.x < -12) p.x = W + 12;
+        if (p.x > W + 12) p.x = -12;
+        if (p.y < -12) p.y = H + 12;
+        if (p.y > H + 12) p.y = -12;
 
-        // wrap world coordinates
-        if (p.x < -10) p.x = W + 10;
-        if (p.x > W + 10) p.x = -10;
-        if (p.wy < -10) p.wy = docH + 10;
-        if (p.wy > docH + 10) p.wy = -10;
+        const pulse = Math.sin(now * 0.0025 + p.pulse) * 0.25 + 1;
+        const r = p.r * pulse;
 
-        // convert world Y to viewport Y
-        let sy = p.wy - scrollY;
-        // seamless vertical wrapping for fixed background feel
-        if (sy < -20) sy += docH;
-        if (sy > H + 20) sy -= docH;
-
-        // skip only if still far outside viewport
-        if (sy < -30 || sy > H + 30) continue;
-
-        const pulse = Math.sin(now * 0.002 + p.pulse) * 0.2 + 1;
+        // soft glow behind each particle
         ctx.beginPath();
-        ctx.arc(p.x, sy, p.r * pulse, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha * 0.12})`;
+        ctx.fill();
+
+        // core particle
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha})`;
         ctx.fill();
 
+        // connect nearby particles
         for (let j = i + 1; j < particles.length; j++){
           const q = particles[j];
-          let qsy = q.wy - scrollY;
-          if (qsy < -20) qsy += docH;
-          if (qsy > H + 20) qsy -= docH;
-          if (qsy < -30 || qsy > H + 30) continue;
-
           const dx = p.x - q.x;
-          const dy = sy - qsy;
+          const dy = p.y - q.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 140){
+          if (dist < 160){
             ctx.beginPath();
-            ctx.moveTo(p.x, sy);
-            ctx.lineTo(q.x, qsy);
-            ctx.strokeStyle = `rgba(${ACCENT_RGB},${0.12 * (1 - dist / 140)})`;
-            ctx.lineWidth = 0.5;
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = `rgba(${ACCENT_RGB},${0.18 * (1 - dist / 160)})`;
+            ctx.lineWidth = 0.6;
             ctx.stroke();
           }
         }
