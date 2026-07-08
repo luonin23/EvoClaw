@@ -225,10 +225,10 @@ class Database:
 
         return None
 
-    def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None):
+    def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None, contract_size: float = 1):
         now = datetime.now(timezone.utc).isoformat()
         if open_fee is None:
-            open_fee = entry_price * amount * 0.0005
+            open_fee = entry_price * amount * contract_size * 0.0005
         slot = self._allocate_slot(symbol, side)
         self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
         self.conn.execute(

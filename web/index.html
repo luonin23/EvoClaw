@@ -1100,12 +1100,21 @@ function toggleTrading() {
     ? '<i class="ph ph-pause-circle"></i> 停止交易'
     : '<i class="ph ph-play-circle"></i> 启动交易';
   btn.className = trading ? 'btn btn-danger' : 'btn btn-primary';
-  showToast(trading ? '交易已停止' : '交易已启动');
+  showToast(trading ? '交易已启动' : '交易已停止');
 }
 
 function clr(v) { return (v || 0) >= 0 ? 'text-green' : 'text-red'; }
 function fmtP(p) { return (p >= 0 ? '+' : '') + p.toFixed(4); }
 function fmtR(r) { return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 function _flash(el, isPositive) {
   el.classList.remove('value-flash-green', 'value-flash-red');
@@ -1169,7 +1178,7 @@ async function loadAccount() {
     if (oldSymText !== symText) {
       symEl.dataset.symbols = symText;
       if (d.active_symbols && d.active_symbols.length) {
-        symEl.innerHTML = d.active_symbols.map(s => '<span class="sym-tag">' + s + '</span>').join(' ');
+        symEl.innerHTML = d.active_symbols.map(s => '<span class="sym-tag">' + escapeHtml(s) + '</span>').join(' ');
       } else {
         symEl.innerHTML = '<span style="color:var(--text-muted)">无匹配币种</span>';
       }
@@ -1271,7 +1280,12 @@ async function loadPositionsMap(posData) {
         if (slot && slot.occupied) {
           const pnlCls = (slot.pnl_rate || 0) >= 0 ? 'text-green' : 'text-red';
           const sideCls = slot.side === 'long' ? 'text-green' : 'text-red';
-          tooltip.innerHTML = '<span style="color:var(--accent);font-weight:700">' + slot.symbol + '</span> <span class="' + sideCls + '">' + (slot.side === 'long' ? '多' : '空') + '</span><br>合约: ' + slot.contracts + '<br>盈亏: <span class="' + pnlCls + '">' + fmtP(slot.pnl) + '</span><br>盈亏率: <span class="' + pnlCls + '">' + fmtR(slot.pnl_rate) + '</span>';
+          tooltip.innerHTML =
+            '<span style="color:var(--accent);font-weight:700">' + escapeHtml(slot.symbol) + '</span> ' +
+            '<span class="' + sideCls + '">' + (slot.side === 'long' ? '多' : '空') + '</span><br>' +
+            '合约: ' + escapeHtml(slot.contracts) + '<br>' +
+            '盈亏: <span class="' + pnlCls + '">' + escapeHtml(fmtP(slot.pnl)) + '</span><br>' +
+            '盈亏率: <span class="' + pnlCls + '">' + escapeHtml(fmtR(slot.pnl_rate)) + '</span>';
           tooltip.style.display = 'block';
           const rect = cell.getBoundingClientRect();
           const ttRect = tooltip.getBoundingClientRect();
@@ -1428,7 +1442,7 @@ async function loadFullMatrix(posData) {
     cell.dataset.span = v.span;
 
     const displaySym = s.symbol.replace(/USDT$/, '').replace(/USDC$/, '');
-    cell.title = displaySym + '\n' + (isLong ? '多' : '空') + '\n' + (s.entry_price || 0).toFixed(4) + '\n' + (s.contracts || 0).toFixed(2) + '\n' + fmtP(s.pnl) + '\n' + fmtR(s.pnl_rate);
+    cell.title = escapeHtml(displaySym) + '\n' + (isLong ? '多' : '空') + '\n' + (s.entry_price || 0).toFixed(4) + '\n' + (s.contracts || 0).toFixed(2) + '\n' + fmtP(s.pnl) + '\n' + fmtR(s.pnl_rate);
 
     // 格子内只显示币名（小）和盈亏率（最大）
     const sym = document.createElement('div'); sym.className = 'fc-sym'; sym.textContent = displaySym;
@@ -1701,7 +1715,7 @@ async function loadLiquidations() {
     tbody.innerHTML = d.top10.map((r, i) =>
       '<tr>' +
       '<td class="rank">' + (i + 1) + '</td>' +
-      '<td>' + r.symbol.replace(/USDT$/, '') + '</td>' +
+      '<td>' + escapeHtml(r.symbol.replace(/USDT$/, '')) + '</td>' +
       '<td class="' + (r.side === 'LONG' ? 'side-long' : 'side-short') + '">' + (r.side === 'LONG' ? '多' : '空') + '</td>' +
       '<td>' + (r.avg_price || 0).toFixed(6) + '</td>' +
       '<td>' + (r.orig_qty || 0).toFixed(0) + '</td>' +
@@ -1715,10 +1729,10 @@ async function loadLiquidations() {
   if (eventsEl && d.events) {
     eventsEl.innerHTML = d.events.map(e =>
       '<div class="liq-event-row">' +
-      '<span class="liq-event-time">' + (e.time || '').replace('T', ' ').substring(0, 16) + '</span>' +
-      '<span class="liq-event-pairs">' + e.pair_count + ' 对</span>' +
+      '<span class="liq-event-time">' + escapeHtml((e.time || '').replace('T', ' ').substring(0, 16)) + '</span>' +
+      '<span class="liq-event-pairs">' + escapeHtml(e.pair_count) + ' 对</span>' +
       '<span class="liq-event-pnl">' + fmtP(e.total_pnl) + '</span>' +
-      '<span class="liq-event-top3">' + (e.top3 || []).join('  |  ') + '</span>' +
+      '<span class="liq-event-top3">' + (e.top3 || []).map(x => escapeHtml(x)).join('  |  ') + '</span>' +
       '</div>'
     ).join('');
   }

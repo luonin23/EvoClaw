@@ -98,10 +98,10 @@ class ExchangeClient:
             if m and m.get("swap") and m.get("quote") == "USDT":
                 self.market_info[symbol] = m
                 exchange_id = m.get("id", "")
-                if exchange_id and exchange_id not in self.market_info:
+                if exchange_id and exchange_id not in self.symbol_map:
                     self.symbol_map[exchange_id] = symbol
                 base = symbol.replace(":", "").replace("/", "")
-                if base and base not in self.market_info:
+                if base and base not in self.symbol_map:
                     self.symbol_map[base] = symbol
                 eid = m.get("id", "")
                 self._reverse_map[symbol] = eid if eid else base
@@ -500,4 +500,11 @@ class ExchangeClient:
         if not tasks:
             return []
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        return [r for r in results if not isinstance(r, BaseException)]
+        normalized = []
+        for r in results:
+            if isinstance(r, BaseException):
+                log.error(f"All-close task raised exception: {r}")
+                normalized.append({"symbol": "", "side": "", "amount": 0, "order": None, "error": str(r)})
+            else:
+                normalized.append(r)
+        return normalized

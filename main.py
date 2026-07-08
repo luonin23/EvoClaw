@@ -126,9 +126,13 @@ def _cleanup_stale_logs():
 
 
 def load_config():
+    """Load legacy config.json for first-run migration. Deprecated: DB is now source of truth."""
     try:
         with open("config.json", "r") as f:
             return json.load(f)
+    except FileNotFoundError:
+        log.info("config.json not found — using DB as source of truth")
+        return {"exchange": "binance", "exchange_kwargs": {}}
     except Exception:
         return {"exchange": "binance", "exchange_kwargs": {}}
 
@@ -241,8 +245,8 @@ async def main():
     except Exception as e:
         log.warning(f"DB repair failed (non-fatal): {e}")
 
-    trader = Trader(client, db, "config.json")
-    server = WebServer(client, db, "config.json", trader=trader)
+    trader = Trader(client, db)
+    server = WebServer(client, db, trader=trader)
 
     # === Phase 3: Health check endpoint ===
     async def health_handler(request):
@@ -279,9 +283,11 @@ async def main():
 
     # Open initial positions - track existing ones, open missing ones
     sides = get_sides(cfg.get("side", "both"))
+    positions_ok = False
     if symbols:
         try:
             positions = await client.get_positions()
+            positions_ok = True
         except Exception as e:
             log.warning(f"Initial get_positions() failed (non-fatal): {e}")
             positions = []
@@ -293,7 +299,9 @@ async def main():
                 entry_price = float(p.get("entryPrice", 0) or 0)
                 contracts = float(p.get("contracts", 0) or 0)
                 if contracts > 0:
-                    open_fee = entry_price * contracts * 0.0005
+                    market = client.get_market_info(sym)
+                    cs = market.get("contractSize", 1) or 1
+                    open_fee = entry_price * contracts * cs * 0.0005
                     db.record_open(
                         symbol=sym, side=pos_side,
                         order_id="startup",
@@ -316,7 +324,10 @@ async def main():
         stop_threshold = cfg.get("replenish_stop_threshold", 0)
         max_count = cfg.get("max_position_count", 0)
 
-        if max_count > 0 and len(positions) >= max_count:
+        if not positions_ok:
+            log.warning("STARTUP OPEN SKIP: cannot fetch live positions, refusing to open missing positions to avoid duplicates")
+            open_tasks = []
+        elif max_count > 0 and len(positions) >= max_count:
             log.info(f"STARTUP OPEN SKIP: total positions {len(positions)} >= limit {max_count}")
             open_tasks = []
         else:

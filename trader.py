@@ -12,10 +12,9 @@ log = logging.getLogger(__name__)
 
 
 class Trader:
-    def __init__(self, exchange_client, database, config_path: str = "config.json"):
+    def __init__(self, exchange_client, database):
         self.client = exchange_client
         self.db = database
-        self.config_path = config_path
         self.running = False
         self.config = self._load_config()
         self._candidate_symbols = []
@@ -93,12 +92,13 @@ class Trader:
                 if tick_count % 60 == 0:
                     self.db.checkpoint_restart()
                     elapsed = time.monotonic() - tick_start
+                    price_age = f"{time.monotonic() - self._last_price_ok:.0f}s" if self._last_price_ok > 0 else "N/A"
                     log.info(
                         f"HEARTBEAT: tick={tick_count} "
                         f"pos={len(self._system_pos_map)} "
                         f"skipped_2027={len(self._fail2027_skipped_at)} "
                         f"mc_cooldowns={len(self._mc_last_success)} "
-                        f"price_age={time.monotonic() - self._last_price_ok:.0f}s" if self._last_price_ok > 0 else "price_age=N/A"
+                        f"price_age={price_age}"
                     )
                     tick_start = time.monotonic()
 
@@ -263,7 +263,8 @@ class Trader:
 
         # === Phase 2: Warn if prices are stale ===
         if self._last_price_ok > 0 and (time.monotonic() - self._last_price_ok) > self._price_stale_seconds:
-            if tick_count := getattr(self, '_stale_warn_count', 0) == 0:
+            tick_count = getattr(self, '_stale_warn_count', 0)
+            if tick_count == 0:
                 log.warning(
                     f"STALE PRICES: last successful refresh was "
                     f"{time.monotonic() - self._last_price_ok:.0f}s ago. "
@@ -402,10 +403,12 @@ class Trader:
                     cs = market.get("contractSize", 1) or 1
                     open_fee = t["entry_price"] * t["contracts"] * cs * 0.0005
 
+                open_time = sp.get("entry_time", "") if sp else ""
                 await self._record_trade(
                     symbol=sym, side=pos_side,
                     entry_price=t["entry_price"], contracts=t["contracts"],
                     close_result=result, trade_type="all_close", open_fee=open_fee,
+                    open_time=open_time,
                 )
         await self.replenish_all(symbols, sides)
         return True
@@ -468,10 +471,12 @@ class Trader:
                                 sp["amount"] = remaining
                         except Exception:
                             pass
+                    open_time = sp.get("entry_time", "") if sp else ""
                     await self._record_trade(
                         symbol=symbol, side=pos_side,
                         entry_price=entry_price, contracts=close_contracts,
                         close_result=result, trade_type="single", open_fee=open_fee,
+                        open_time=open_time,
                     )
                     self._tier_executed[pos_key] = i
                     # Persist tier state to DB (survives restarts)
@@ -536,10 +541,12 @@ class Trader:
                             open_fee = sp.get("open_fee", 0)
                         self.db.remove_open(sym, side)
                         self._system_pos_map.pop(f"{sym}:{side}", None)
+                        open_time = sp.get("entry_time", "") if sp else ""
                         await self._record_trade(
                             symbol=sym, side=side,
                             entry_price=entry_map[side], contracts=contracts_map[side],
                             close_result=result, trade_type="pair_close", open_fee=open_fee,
+                            open_time=open_time,
                         )
                 closed_any = True
         return closed_any
@@ -806,7 +813,7 @@ class Trader:
 
     # ========== Record trade ==========
 
-    async def _record_trade(self, symbol, side, entry_price, contracts, close_result, trade_type, open_fee=0):
+    async def _record_trade(self, symbol, side, entry_price, contracts, close_result, trade_type, open_fee=0, open_time=""):
         try:
             market = self.client.get_market_info(symbol)
             contract_size = market.get("contractSize", 1) or 1
@@ -832,7 +839,7 @@ class Trader:
                 "symbol": symbol,
                 "side": side,
                 "type": trade_type,
-                "open_time": "",
+                "open_time": open_time,
                 "close_time": now,
                 "entry_price": entry_price,
                 "exit_price": exit_price,

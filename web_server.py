@@ -21,10 +21,9 @@ def _get_static(path):
 
 
 class WebServer:
-    def __init__(self, exchange_client, database, config_path: str = "config.json", trader=None):
+    def __init__(self, exchange_client, database, trader=None):
         self.client = exchange_client
         self.db = database
-        self.config_path = config_path
         self.trader = trader
         self.app = web.Application()
         self.app.router.add_get("/", self.handle_index)
@@ -385,7 +384,7 @@ class WebServer:
     async def api_system(self, request):
         try:
             now = time.time()
-            if self._system_cache[1] and now - self._system_cache[0] < 5:
+            if self._system_cache[1] is not None and now - self._system_cache[0] < 5:
                 return web.json_response(self._system_cache[1])
 
             cpu_percent = 0.0
@@ -540,11 +539,14 @@ class WebServer:
 
             # For each event, get top 3 worst PnL symbols
             for evt in events:
-                top3_rows = self.db.conn.execute(
-                    """SELECT symbol, side, pnl FROM liquidations
-                       WHERE batch_id = ? ORDER BY pnl ASC LIMIT 3""",
-                    (evt["batch_id"],),
-                ).fetchall()
+                def _get_top3(batch_id):
+                    return self.db.conn.execute(
+                        """SELECT symbol, side, pnl FROM liquidations
+                           WHERE batch_id = ? ORDER BY pnl ASC LIMIT 3""",
+                        (batch_id,),
+                    ).fetchall()
+
+                top3_rows = await self._db_sync(_get_top3, evt["batch_id"])
                 evt["top3"] = [f"{r[0]} {r[1]} {round(r[2], 2)}" for r in top3_rows]
 
             return web.json_response({
