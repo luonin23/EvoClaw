@@ -421,20 +421,20 @@ body::after{
 
 /* 全量矩阵网格 — USDT市值决定列宽 */
 /* 全量矩阵网格 — USDT市值决定列宽 */
-.full-matrix{display:grid;grid-template-columns:repeat(14,1fr);gap:var(--space-8);width:100%;max-width:100%}
+.full-matrix{display:grid;grid-template-columns:repeat(14,1fr);grid-auto-rows:minmax(44px,1fr);gap:var(--space-8);width:100%;max-width:100%}
 .full-cell{
   border-radius:6px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:var(--space-4) 2px;font-family:var(--font-mono);
   color:var(--text-primary);cursor:pointer;position:relative;overflow:hidden;text-align:center;line-height:1.15;
   border:1.5px solid transparent;transition:all 0.15s ease;
+  min-height:44px;height:100%;
 }
 @keyframes cellPulseProfit{0%,100%{box-shadow:0 0 0 rgba(0,208,132,0)}50%{box-shadow:0 0 12px rgba(0,208,132,0.25)}}
 @keyframes cellPulseLoss{0%,100%{box-shadow:0 0 0 rgba(255,71,87,0)}50%{box-shadow:0 0 12px rgba(255,71,87,0.2)}}
 .full-cell.is-profit{animation:cellPulseProfit 3s ease-in-out infinite 0.5s}
 .full-cell.is-loss{animation:cellPulseLoss 3s ease-in-out infinite 0.5s}
-.full-cell[data-span="1"]{aspect-ratio:1}
 .full-cell:hover{z-index:2;border-color:rgba(0,208,132,0.4);box-shadow:0 var(--space-4) var(--space-16) rgba(0,0,0,0.5), 0 0 16px rgba(0,208,132,0.15);transform:translateY(-1px) scale(1.02)}
-.full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary);aspect-ratio:1}
+.full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary)}
 .full-cell .fc-sym{
   font-size:clamp(6px,0.85vw,11px);font-weight:500;line-height:1.2;width:100%;
   opacity:0.9;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
