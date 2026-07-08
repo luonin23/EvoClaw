@@ -2,6 +2,8 @@
 
 > 生成时间：2026-07-08
 > 审计范围：`main.py`, `trader.py`, `exchange_client.py`, `database.py`, `web_server.py`, `web/index.html`, `web/intro.html`, `config.json`, `ecosystem.config.json`, `health_monitor.sh`, `restart.sh`
+>
+> **状态更新**：截至提交 `79fccb0`，本报告中大部分 bug 与缺陷已修复，包括 `trader.py` 两个高优先级 bug、手续费不一致、symbol map 错误、前端 XSS、`config.json` 移除等。Web API 鉴权与 SQLite 并发锁因用户明确排除未改动。
 
 ---
 
