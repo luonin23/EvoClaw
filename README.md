@@ -29,52 +29,32 @@
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 配置 API 密钥
-vim config.json
-# 填写 exchange_kwargs.apiKey 和 exchange_kwargs.secret
-
-# 3. 启动服务
+# 2. 启动服务（首次启动会用内置默认配置初始化 SQLite）
 python3 main.py
 
-# 4. 访问 Web UI
+# 3. 访问 Web UI，在「交易配置」页填写 API 密钥
 open http://localhost:8080
 ```
 
-## 配置文件
+## 配置说明
 
-```json
-{
-    "exchange": "binance",
-    "exchange_kwargs": {
-        "apiKey": "your-api-key",
-        "secret": "your-secret"
-    },
-    "side": "both",
-    "profit_threshold": 0.002,
-    "replenish_stop_threshold": 0.10,
-    "max_position_count": 100,
-    "enable_all_close": false,
-    "all_close_threshold": 0.002,
-    "enable_margin_call": false,
-    "margin_call_threshold_long": 0.25,
-    "margin_call_threshold_short": 0.25,
-    "margin_call_multiplier": 2,
-    "enable_single_pair_close": false,
-    "pair_close_threshold": 0.002,
-    "volume_threshold": 50000000,
-    "price_threshold": 2,
-    "symbol_refresh_interval": 43200
-}
-```
+所有配置均持久化在 `data/evoclaw.db` 中。首次启动时，`main.py` 会用内置默认配置初始化数据库；之后所有配置都通过 Web UI 或 `/api/config` 修改。
+
+首次使用必须在 Web UI 的「交易配置」页填写：
+- `exchange_kwargs.apiKey` — Binance API Key
+- `exchange_kwargs.secret` — Binance API Secret
+
+主要配置项：
 
 | 字段 | 说明 |
 |------|------|
 | `side` | 交易方向：`both` / `long` / `short` |
-| `profit_threshold` | 单币种平仓盈利率（如 0.002 = 0.2%） |
+| `profit_tiers` | 分层止盈档位，每档包含 `threshold`（盈利率）和 `close_pct`（平仓比例） |
 | `replenish_stop_threshold` | 停补阈值：对方仓位偏离≥此比例时停止补仓 |
 | `max_position_count` | 最高持仓数量上限 |
 | `enable_all_close` | 启用账户级全平 |
 | `enable_margin_call` | 启用亏损加仓 |
+| `margin_call_threshold_long/short` | 多空加仓亏损阈值 |
 | `volume_threshold` | 24h 成交量筛选（USDT） |
 | `price_threshold` | 币单价筛选（USDT），只选价格≤此值的币 |
 

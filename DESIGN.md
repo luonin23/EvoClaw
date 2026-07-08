@@ -34,13 +34,12 @@ EvoClaw 是一个基于 Binance USDT-M 永续合约的自动化交易系统，�
 /home/claudeuser/EvoClaw/
 ├── main.py                  # 入口：启动所有模块、信号处理、主循环
 ├── restart.sh               # 一键重启脚本（停止→清理→启动）
-├── config.json              # 交易配置（前端可修改，热加载）
 ├── web/config.json          # 前端显示配置（独立持久化）
 ├── DESIGN.md                # 本文档
 ├── requirements.txt         # 依赖清单
 ├── exchange_client.py       # 交易所客户端（符号解析、精度计算、下单、自动选币）
 ├── trader.py                # 交易引擎核心（动态选币、开仓、平仓、补仓、全平）
-├── database.py              # SQLite 数据库（三表 + 手续费 + 统计）
+├── database.py              # SQLite 数据库（配置 + 持仓 + 交易 + 统计）
 ├── web_server.py            # Web 服务（API + 前端 + 手动刷新币种）
 ├── data/
 │   ├── evoclaw.db           # SQLite 数据库文件
@@ -90,22 +89,23 @@ EvoClaw 是一个基于 Binance USDT-M 永续合约的自动化交易系统，�
 main.py
   ├── ExchangeClient (ccxt.binanceusdm)
   ├── Database (SQLite)
-  ├── Trader (依赖 ExchangeClient、Database、config.json)
-  └── WebServer (依赖 ExchangeClient、Database、config.json、Trader)
+  ├── Trader (依赖 ExchangeClient、Database)
+  └── WebServer (依赖 ExchangeClient、Database、Trader)
 ```
 
 ### 2.3 启动顺序与生命周期
 
 ```
-1. main.py 读取 config.json
-2. setup_logging() → 控制台 + trader.log（3MB × 5 备份）+ errors.log（2MB × 3 备份，仅 WARNING+）
-3. Database("data/evoclaw.db") → 建表 + 零停机迁移（ALTER TABLE）
-4. ExchangeClient(config) → load_markets() 缓存市场信息 + 符号映射
-5. ExchangeClient.get_candidate_symbols() → 动态选币
-6. ExchangeClient.refresh_prices(symbols) → 预取价格
-7. Trader(client, db, "config.json") → 初始化交易引擎
-8. WebServer(client, db, "config.json", trader=trader) → 初始化 Web 服务
-9. 启动时仓位对齐：遍历交易所持仓 → db.record_open() 追踪已有仓位
+1. setup_logging() → 控制台 + trader.log（3MB × 5 备份）+ errors.log（2MB × 3 备份，仅 WARNING+）
+2. Database("data/evoclaw.db") → 建表 + 零停机迁移（ALTER TABLE）
+3. Database.seed_config(DEFAULT_CONFIG) → 首次启动时写入默认配置
+4. Database.load_config() → 从数据库读取运行时配置（唯一真相源）
+5. ExchangeClient(config) → load_markets() 缓存市场信息 + 符号映射
+6. ExchangeClient.get_candidate_symbols() → 动态选币
+7. ExchangeClient.refresh_prices(symbols) → 预取价格
+8. Trader(client, db) → 初始化交易引擎
+9. WebServer(client, db, trader=trader) → 初始化 Web 服务
+10. 启动时仓位对齐：遍历交易所持仓 → db.record_open() 追踪已有仓位
 10. WebServer 启动（0.0.0.0:8080）
 11. 注册信号处理（SIGINT/SIGTERM → trader.stop()）
 12. Trader.run() 主循环启动（阻塞，直到信号关闭）
@@ -530,25 +530,27 @@ except sqlite3.OperationalError:
 - 保存成功后立即更新 `window.frontendConfig`，确保即时生效
 ## 四、配置体系
 
-### 4.1 交易配置 (config.json)
+### 4.1 交易配置（SQLite 数据库）
+
+交易配置持久化在 `data/evoclaw.db` 的 `config` 表中，是运行时唯一真相源。首次启动时由 `main.py` 中的 `DEFAULT_CONFIG` 种子化。
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `exchange` | str | `"binance"` | 交易所标识（实际使用 binanceusdm） |
+| `exchange` | str | `"binanceusdm"` | 交易所标识 |
 | `exchange_kwargs` | dict | — | API 密钥等参数 |
 | `side` | str | `"both"` | `"long"` / `"short"` / `"both"` |
 | `profit_threshold` | float | `0.002` | 单层止盈毛盈利率阈值（向后兼容） |
 | `profit_tiers` | list | — | 5 档分层止盈配置 |
 | `replenish_stop_threshold` | float | `0` | 补仓停补阈值：对方仓位偏离 ≥ 此值时停止补仓 |
-| `max_position_count` | int | `100` | 最大持仓数量上限，控制交易系统开仓上限 |
-| `enable_all_close` | bool | `false` | 账户级全平开关 |
-| `all_close_threshold` | float | `0.002` | 全平触发毛盈利率阈值 |
+| `max_position_count` | int | `150` | 最大持仓数量上限，控制交易系统开仓上限 |
+| `enable_all_close` | bool | `true` | 账户级全平开关 |
+| `all_close_threshold` | float | `0.0015` | 全平触发毛盈利率阈值 |
 | `skip_symbols` | list | `[]` | 跳过平仓/加仓/对平的白名单 |
-| `enable_margin_call` | bool | `false` | 亏损加仓开关 |
-| `margin_call_threshold_long` | float | `0.01` | 多单亏损加仓阈值 |
-| `margin_call_threshold_short` | float | `0.01` | 空单亏损加仓阈值 |
+| `enable_margin_call` | bool | `true` | 亏损加仓开关 |
+| `margin_call_threshold_long` | float | `0.25` | 多单亏损加仓阈值 |
+| `margin_call_threshold_short` | float | `0.25` | 空单亏损加仓阈值 |
 | `margin_call_multiplier` | float | `2` | 加仓倍数（基于当前持仓量） |
-| `enable_single_pair_close` | bool | `false` | 多空对平开关 |
+| `enable_single_pair_close` | bool | `true` | 多空对平开关 |
 | `pair_close_threshold` | float | `0.002` | 多空对平触发盈利率 |
 | `position_check_interval` | int | `1` | tick 间隔（秒） |
 | `volume_threshold` | float | `0` | 24h 成交量筛选阈值（动态选币） |
@@ -579,21 +581,22 @@ except sqlite3.OperationalError:
 ### 5.1 启动流程
 
 ```
-1. main.py 读取 config.json
-2. setup_logging() → 控制台 + 文件日志（5MB × 5 备份）
-3. Database("data/evoclaw.db") → 建表 + 自动迁移
-4. ExchangeClient(config) → load_markets() → 仅保留 USDT 计价 swap
-5. get_candidate_symbols(volume_threshold, price_threshold) → 动态选币
-6. refresh_prices(symbols) → 预取价格
-7. Trader(client, db, "config.json")
-8. WebServer(client, db, "config.json", trader=trader)
-9. 启动时仓位对齐：
+1. setup_logging() → 控制台 + 文件日志（5MB × 5 备份）
+2. Database("data/evoclaw.db") → 建表 + 自动迁移
+3. Database.seed_config(DEFAULT_CONFIG) → 首次启动写入默认配置
+4. Database.load_config() → 从数据库读取运行时配置
+5. ExchangeClient(config) → load_markets() → 仅保留 USDT 计价 swap
+6. get_candidate_symbols(volume_threshold, price_threshold) → 动态选币
+7. refresh_prices(symbols) → 预取价格
+8. Trader(client, db)
+9. WebServer(client, db, trader=trader)
+10. 启动时仓位对齐：
    a. 获取交易所当前持仓 → 构建 current 集合
    b. 获取 DB 跟踪持仓 → 合并到 current
    c. 对每个 candidate_symbol × side，若不在 current 中：
       - should_stop_replenish() 检查停补阈值
       - 通过 → safe_open() + record_open()
-10. WebServer 启动（0.0.0.0:8080）
+11. WebServer 启动（0.0.0.0:8080）
 11. 注册信号处理（SIGINT/SIGTERM → trader.stop()）
 12. Trader.run() 主循环启动
 ```
@@ -740,7 +743,7 @@ profit_rate = unrealized_pnl / position_value
 ### 6.3 前端架构
 
 - 单 HTML + 原生 JS：< 50KB、无构建、零依赖
-- 前端配置（`web/config.json`）与交易配置（`config.json`）完全分离
+- 前端配置（`web/config.json`）与交易配置（SQLite `config` 表）完全分离
 - `matrix_slots` 与 `max_position_count` 解耦：前者纯显示，后者控制交易
 
 ### 6.4 缓存策略
