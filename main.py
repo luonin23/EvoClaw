@@ -4,7 +4,6 @@ import logging
 import signal
 import os
 import sys
-import json
 import glob
 import time
 import logging.handlers
@@ -19,6 +18,49 @@ from exchange_client import ExchangeClient
 from database import Database
 from trader import Trader
 from web_server import WebServer
+
+
+# Default runtime configuration. DB is the source of truth; this is only used
+# to seed an empty database on first run.
+DEFAULT_CONFIG = {
+    "exchange": "binanceusdm",
+    "side": "both",
+    "symbols": [
+        "1000PEPEUSDT", "ADAUSDT", "AEROUSDT", "AGTUSDT", "AIOUSDT", "ALLOUSDT",
+        "ARBUSDT", "ASTERUSDT", "BABYUSDT", "BLESSUSDT", "BRUSDT", "BSBUSDT",
+        "CHIPUSDT", "CHZUSDT", "CLOUSDT", "CRVUSDT", "DOGEUSDT", "DOTUSDT",
+        "ENAUSDT", "EVAAUSDT", "FETUSDT", "FILUSDT", "IDUSDT", "JCTUSDT",
+        "JELLYJELLYUSDT", "JTOUSDT", "LITUSDT", "MAGMAUSDT", "MEGAUSDT",
+        "NOTUSDT", "ONDOUSDT", "OPGUSDT", "OPNUSDT", "PENGUUSDT", "PIPPINUSDT",
+        "PLAYUSDT", "PUMPUSDT", "RIFUSDT", "SAHARAUSDT", "SENTUSDT", "SIRENUSDT",
+        "SKYAIUSDT", "SPACEUSDT", "SPXUSDT", "STGUSDT", "SUIUSDT", "TIAUSDT",
+        "TONUSDT", "TRADOORUSDT", "TRIAUSDT", "TRUMPUSDT", "TRXUSDT",
+        "VELVETUSDT", "WLDUSDT", "WLFIUSDT", "XLMUSDT", "XPLUSDT", "XRPUSDT",
+        "ZKCUSDT", "ZROUSDT"
+    ],
+    "volume_threshold": 0,
+    "price_threshold": 0,
+    "symbol_refresh_interval": 86400,
+    "position_check_interval": 1,
+    "profit_tiers": [
+        {"threshold": 0.002, "close_pct": 0.3},
+        {"threshold": 0.01, "close_pct": 0.5},
+        {"threshold": 0.05, "close_pct": 1.0},
+        {"threshold": 0.4, "close_pct": 0.5},
+        {"threshold": 0.5, "close_pct": 1.0}
+    ],
+    "replenish_stop_threshold": 0.3,
+    "max_position_count": 150,
+    "enable_all_close": True,
+    "all_close_threshold": 0.0015,
+    "enable_margin_call": True,
+    "margin_call_threshold_long": 0.25,
+    "margin_call_threshold_short": 0.25,
+    "margin_call_multiplier": 2,
+    "enable_single_pair_close": True,
+    "pair_close_threshold": 0.002,
+    "skip_symbols": []
+}
 
 
 PID_FILE = "data/evoclaw.pid"
@@ -125,18 +167,6 @@ def _cleanup_stale_logs():
             pass
 
 
-def load_config():
-    """Load legacy config.json for first-run migration. Deprecated: DB is now source of truth."""
-    try:
-        with open("config.json", "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        log.info("config.json not found — using DB as source of truth")
-        return {"exchange": "binance", "exchange_kwargs": {}}
-    except Exception:
-        return {"exchange": "binance", "exchange_kwargs": {}}
-
-
 def get_sides(side: str) -> list[str]:
     if side == "both":
         return ["long", "short"]
@@ -149,42 +179,17 @@ async def main():
 
     setup_logging()
     log = logging.getLogger(__name__)
-    cfg = load_config()
 
     db = Database("data/evoclaw.db")
 
-    # === Phase 4: Migrate exchange_kwargs from config.json into database ===
-    exchange_kwargs = cfg.get("exchange_kwargs", {})
-    if exchange_kwargs:
-        db.upsert_config_key("exchange_kwargs", exchange_kwargs)
-        # Verify it was stored correctly
-        db_cfg = db.load_config()
-        if db_cfg.get("exchange_kwargs"):
-            log.info("exchange_kwargs stored in database (apiKey=***, secret=***)")
-            # Remove from in-memory config so we don't write it back
-            cfg.pop("exchange_kwargs", None)
-            # Remove from config.json file
-            try:
-                with open("config.json", "w") as f:
-                    json.dump(cfg, f, indent=2)
-                log.info("exchange_kwargs removed from config.json (migrated to DB)")
-            except Exception as e:
-                log.warning(f"Failed to update config.json (non-fatal): {e}")
-        else:
-            log.warning("exchange_kwargs migration to DB failed — keeping in config.json as fallback")
-    else:
-        log.warning("No exchange_kwargs in config.json — will try loading from DB")
-
-    # Migrate config from file to DB (first run / after reset)
-    # Note: exchange_kwargs was handled above, everything else goes through seed_config
-    db_config = {k: v for k, v in cfg.items()}
-    is_new = db.seed_config(db_config)
+    # Seed an empty database with built-in defaults on first run.
+    # After seeding, the database is the sole source of truth.
+    is_new = db.seed_config(DEFAULT_CONFIG)
     if is_new:
-        log.info("Config migrated from config.json to database")
+        log.info("Database seeded with default config")
 
-    # Load runtime config from DB (now includes exchange_kwargs)
-    runtime_cfg = db.load_config()
-    cfg = runtime_cfg
+    # Load runtime config from DB
+    cfg = db.load_config()
     log.info(f"Config loaded from DB: {len(cfg.get('symbols', []))} symbols, exchange_kwargs={'present' if cfg.get('exchange_kwargs') else 'MISSING'}")
 
     client = ExchangeClient(cfg)
