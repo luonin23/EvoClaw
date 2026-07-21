@@ -123,8 +123,11 @@ body::before{
 /* Subtle noise texture */
 body::after{
   content:'';
-  position:fixed;inset:0;z-index:9998;opacity:0.018;pointer-events:none;
+  position:fixed;inset:0;z-index:9998;opacity:0.012;pointer-events:none;
   background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@media (max-width:768px){
+  body::after{opacity:0.006}
 }
 
 /* ---- Grid background (subtle, fixed) ---- */
@@ -136,11 +139,6 @@ body::after{
   background-size:80px 80px;
   mask-image:radial-gradient(ellipse 80% 80% at 50% 50%, rgba(0,0,0,0.5), transparent 70%);
   -webkit-mask-image:radial-gradient(ellipse 80% 80% at 50% 50%, rgba(0,0,0,0.5), transparent 70%);
-  animation:gridFlow 30s linear infinite;
-}
-@keyframes gridFlow{
-  0%{background-position:0 0}
-  100%{background-position:80px 80px}
 }
 
 /* ---- Section layout ---- */
@@ -1295,7 +1293,7 @@ body::after{
     });
   });
 
-  /* ---- Background floating particles (fixed viewport, dense + bright) ---- */
+  /* ---- Background floating particles (fixed viewport, mobile-optimized) ---- */
   (function initBgParticles(){
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
@@ -1306,6 +1304,9 @@ body::after{
     const ctx = canvas.getContext('2d');
     let W, H;
     const particles = [];
+    const dpr = window.devicePixelRatio || 1;
+    const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768 || dpr < 2;
+    const FRAME_MS = isMobile ? 50 : 33; // ~20fps mobile, ~30fps desktop
 
     function resize(){
       W = canvas.width = window.innerWidth;
@@ -1314,38 +1315,46 @@ body::after{
     resize();
     window.addEventListener('resize', resize, { passive: true });
 
-    // High density in viewport so every scroll position sees plenty
-    const COUNT = Math.min(220, Math.max(100, Math.floor((W * H) / 9000)));
+    // Drastically reduce density on mobile; disable expensive connections
+    const COUNT = isMobile
+      ? 35
+      : Math.min(120, Math.max(60, Math.floor((W * H) / 18000)));
+    const CONNECT_DIST = isMobile ? 0 : 120;
+
     for (let i = 0; i < COUNT; i++){
       particles.push({
         x: Math.random() * W,
         y: Math.random() * H,
-        r: Math.random() * 2.6 + 1.2,
-        vx: (Math.random() - 0.5) * 1.1,
-        vy: (Math.random() - 0.5) * 1.1,
-        alpha: Math.random() * 0.5 + 0.4,
+        r: Math.random() * (isMobile ? 1.8 : 2.4) + (isMobile ? 0.8 : 1.0),
+        vx: (Math.random() - 0.5) * (isMobile ? 0.5 : 1.0),
+        vy: (Math.random() - 0.5) * (isMobile ? 0.5 : 1.0),
+        alpha: Math.random() * 0.45 + 0.3,
         pulse: Math.random() * Math.PI * 2
       });
     }
 
     let lastTime = 0;
+    let rafId = null;
     function draw(now){
-      requestAnimationFrame(draw);
-      if (now - lastTime < 33) return;
+      rafId = requestAnimationFrame(draw);
+      if (document.hidden) return;
+      if (now - lastTime < FRAME_MS) return;
       lastTime = now;
 
       ctx.clearRect(0, 0, W, H);
 
-      // ambient glow that stays centered in viewport
-      const t = now * 0.00015;
-      const g = ctx.createRadialGradient(
-        W * (0.15 + Math.sin(t) * 0.08), H * (0.25 + Math.cos(t * 0.7) * 0.08), 0,
-        W * 0.25, H * 0.35, W * 0.55
-      );
-      g.addColorStop(0, `rgba(${ACCENT_RGB},0.08)`);
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H);
+      // ambient glow (desktop only)
+      if (!isMobile) {
+        const t = now * 0.00015;
+        const g = ctx.createRadialGradient(
+          W * (0.15 + Math.sin(t) * 0.08), H * (0.25 + Math.cos(t * 0.7) * 0.08), 0,
+          W * 0.25, H * 0.35, W * 0.55
+        );
+        g.addColorStop(0, `rgba(${ACCENT_RGB},0.08)`);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
 
       for (let i = 0; i < particles.length; i++){
         const p = particles[i];
@@ -1359,11 +1368,13 @@ body::after{
         const pulse = Math.sin(now * 0.0025 + p.pulse) * 0.25 + 1;
         const r = p.r * pulse;
 
-        // soft glow behind each particle
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha * 0.12})`;
-        ctx.fill();
+        if (!isMobile) {
+          // soft glow behind each particle (desktop only)
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha * 0.12})`;
+          ctx.fill();
+        }
 
         // core particle
         ctx.beginPath();
@@ -1371,24 +1382,30 @@ body::after{
         ctx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha})`;
         ctx.fill();
 
-        // connect nearby particles
-        for (let j = i + 1; j < particles.length; j++){
-          const q = particles[j];
-          const dx = p.x - q.x;
-          const dy = p.y - q.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 160){
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(q.x, q.y);
-            ctx.strokeStyle = `rgba(${ACCENT_RGB},${0.18 * (1 - dist / 160)})`;
-            ctx.lineWidth = 0.6;
-            ctx.stroke();
+        // connect nearby particles (disabled on mobile)
+        if (CONNECT_DIST > 0) {
+          for (let j = i + 1; j < particles.length; j++){
+            const q = particles[j];
+            const dx = p.x - q.x;
+            const dy = p.y - q.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < CONNECT_DIST){
+              ctx.beginPath();
+              ctx.moveTo(p.x, p.y);
+              ctx.lineTo(q.x, q.y);
+              ctx.strokeStyle = `rgba(${ACCENT_RGB},${0.16 * (1 - dist / CONNECT_DIST)})`;
+              ctx.lineWidth = 0.6;
+              ctx.stroke();
+            }
           }
         }
       }
     }
-    requestAnimationFrame(draw);
+    rafId = requestAnimationFrame(draw);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      else if (!document.hidden && !rafId) { rafId = requestAnimationFrame(draw); }
+    });
   })();
 })();
 </script>

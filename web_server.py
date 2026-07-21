@@ -51,6 +51,7 @@ class WebServer:
         self._api_cache_max = 20
         self._balance_cache = (0, 0.0)
         self._system_cache = (0, None)
+        self._start_time = time.time()
 
     def _load_config(self):
         """Load config from database (source of truth for ALL settings including exchange_kwargs)."""
@@ -431,6 +432,7 @@ class WebServer:
             self._last_system_time = now
 
             data = {
+                "uptime_seconds": round(time.time() - self._start_time),
                 "cpu_percent": round(cpu_percent, 1),
                 "mem_total": mem_total,
                 "mem_used": mem_used,

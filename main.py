@@ -377,7 +377,7 @@ async def main():
     # Start web server
     runner = web.AppRunner(server.app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    site = web.TCPSite(runner, "127.0.0.1", 8080)
     await site.start()
     log.info("Web server started on :8080")
 

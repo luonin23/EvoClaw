@@ -63,6 +63,25 @@ class ExchangeClient:
         self._reverse_map = {}
         self._prices = {}
         self._closed = False
+        # Track position-limit blocks to avoid wasted API calls
+        self._blocked_until: dict[str, float] = {}
+        self._block_count: dict[str, int] = {}
+
+    def _mark_blocked(self, key: str) -> None:
+        """Mark a symbol+side as blocked due to -2027, with escalating cooldown."""
+        self._block_count[key] = self._block_count.get(key, 0) + 1
+        count = self._block_count[key]
+        durations = [60, 300, 900, 1800, 3600]  # 1min, 5min, 15min, 30min, 1hr
+        cooldown = durations[min(count - 1, len(durations) - 1)]
+        self._blocked_until[key] = time.monotonic() + cooldown
+
+    def is_position_blocked(self, symbol: str, side: str) -> bool:
+        """Check if a symbol+side is in cooldown after -2027 errors."""
+        key = f"{symbol}:{side}"
+        until = self._blocked_until.get(key, 0)
+        if time.monotonic() < until:
+            return True
+        return False
 
     async def _safe_call(self, coro, timeout=10):
         """Wrap ccxt call with hard timeout to prevent event loop blocking."""
@@ -304,6 +323,8 @@ class ExchangeClient:
 
     async def open_position(self, symbol: str, side: str) -> dict | None:
         resolved = self.resolve_symbol(symbol)
+        if self.is_position_blocked(resolved, side):
+            return None
         amount = self.calc_min_contracts(resolved)
         if amount <= 0:
             return None
@@ -339,6 +360,7 @@ class ExchangeClient:
                     await asyncio.sleep(0.2)
                     continue
                 if "-2027" in err or "exceeded" in err.lower():
+                    self._mark_blocked(f"{resolved}:{side}")
                     key = f"open_blocked:{resolved}:{side}"
                     s = _throttle_warn.emit(key)
                     if s is not None:
@@ -365,6 +387,8 @@ class ExchangeClient:
 
     async def add_position(self, symbol: str, side: str, amount: float) -> dict | None:
         resolved = self.resolve_symbol(symbol)
+        if self.is_position_blocked(resolved, side):
+            return None
         if amount <= 0:
             return None
         for attempt in range(3):
@@ -399,6 +423,7 @@ class ExchangeClient:
                     log.warning(f"Notional too small for add {resolved} {side}, retry {old} -> {amount}")
                     continue
                 if "-2027" in err or "exceeded" in err.lower():
+                    self._mark_blocked(f"{resolved}:{side}")
                     key = f"add_blocked:{resolved}:{side}"
                     s = _throttle_warn.emit(key)
                     if s is not None:
