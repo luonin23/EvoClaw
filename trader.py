@@ -76,7 +76,7 @@ class Trader:
     async def run(self):
         self.running = True
         tick_count = 0
-        interval = self._get_config().get("position_check_interval", 1)
+        interval = max(3, self._get_config().get("position_check_interval", 3))  # minimum 3s
         log.info("Trader started")
 
         # Track tick duration for health monitoring
@@ -108,7 +108,7 @@ class Trader:
 
                 # Re-read interval occasionally in case config changed
                 if tick_count % 100 == 0:
-                    interval = self._get_config().get("position_check_interval", 1)
+                    interval = max(3, self._get_config().get("position_check_interval", 3))
 
             except asyncio.TimeoutError:
                 # === Phase 1: Tick timeout — log and continue ===
@@ -332,8 +332,6 @@ class Trader:
 
         # STEP 5: Replenish
         await self.replenish_missing(exchange_positions, candidate_symbols, sides, all_positions)
-
-        self.db.checkpoint()
 
     # ========== Helpers ==========
 

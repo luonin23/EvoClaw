@@ -41,7 +41,7 @@ DEFAULT_CONFIG = {
     "volume_threshold": 0,
     "price_threshold": 0,
     "symbol_refresh_interval": 86400,
-    "position_check_interval": 1,
+    "position_check_interval": 3,
     "profit_tiers": [
         {"threshold": 0.002, "close_pct": 0.3},
         {"threshold": 0.01, "close_pct": 0.5},
@@ -385,12 +385,15 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, trader.stop)
 
-    await trader.run()
-    # Graceful shutdown: close exchange connections to prevent Unclosed connector errors
-    await client.close()
-    await runner.cleanup()
-    db.close()
-    log.info("Shutdown complete")
+    try:
+        await trader.run()
+    except Exception as e:
+        log.error(f"Fatal error in trader loop: {e}")
+    finally:
+        await client.close()
+        await runner.cleanup()
+        db.close()
+        log.info("Shutdown complete")
 
 
 if __name__ == "__main__":

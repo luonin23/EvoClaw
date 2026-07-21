@@ -328,62 +328,56 @@ class ExchangeClient:
         amount = self.calc_min_contracts(resolved)
         if amount <= 0:
             return None
-        for attempt in range(3):
-            try:
-                order = await self._safe_call(self.exchange.create_order(
-                    symbol=resolved, type="market", side=side, amount=amount,
-                    params={"positionSide": "LONG" if side == "buy" else "SHORT"},
-                ), timeout=15)
-                log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
-                avg = order.get("average") or order.get("price")
-                if not avg:
-                    info = order.get("info", {})
-                    avg = info.get("avgPrice") or info.get("averagePrice")
-                if not avg:
-                    cost = order.get("cost")
-                    filled = order.get("filled")
-                    if cost and filled and filled > 0:
-                        avg = cost / filled
-                if not avg:
-                    avg = self._prices.get(resolved, 0)
-                return {
-                    "order_id": str(order.get("id", "")),
-                    "average": float(avg or 0),
-                    "amount": amount,
-                }
-            except Exception as e:
-                err = str(e)
-                if "-4164" in err and attempt < 2:
-                    old = amount
-                    amount = max(amount + 1, int(amount * 1.3))
-                    log.warning(f"Notional too small for {resolved} {side}, retry {old} -> {amount}")
-                    await asyncio.sleep(0.2)
-                    continue
-                if "-2027" in err or "exceeded" in err.lower():
-                    self._mark_blocked(f"{resolved}:{side}")
-                    key = f"open_blocked:{resolved}:{side}"
-                    s = _throttle_warn.emit(key)
-                    if s is not None:
-                        log.warning(f"Open position blocked (max position) {resolved} {side}: {e}{s}")
-                else:
-                    key = f"open_err:{resolved}:{side}:{_extract_code(err)}"
-                    s = _throttle_error.emit(key)
-                    if s is not None:
-                        log.error(f"Open position failed {resolved} {side}: {e}{s}")
+        # Quick balance check — if available < 5 USDT (minimum notional), skip silently
+        try:
+            bal = await self.get_balance()
+            if bal.get('available_balance', 0) < 5.0:
                 return None
+        except Exception:
+            pass  # if balance check itself fails, try the actual order
+        try:
+            order = await self._safe_call(self.exchange.create_order(
+                symbol=resolved, type="market", side=side, amount=amount,
+                params={"positionSide": "LONG" if side == "buy" else "SHORT"},
+            ), timeout=15)
+            log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
+            avg = order.get("average") or order.get("price")
+            if not avg:
+                info = order.get("info", {})
+                avg = info.get("avgPrice") or info.get("averagePrice")
+            if not avg:
+                cost = order.get("cost")
+                filled = order.get("filled")
+                if cost and filled and filled > 0:
+                    avg = cost / filled
+            if not avg:
+                avg = self._prices.get(resolved, 0)
+            return {
+                "order_id": str(order.get("id", "")),
+                "average": float(avg or 0),
+                "amount": amount,
+            }
+        except Exception as e:
+            err = str(e)
+            if "-2027" in err or "exceeded" in err.lower():
+                self._mark_blocked(f"{resolved}:{side}")
+                key = f"open_blocked:{resolved}:{side}"
+                s = _throttle_warn.emit(key)
+                if s is not None:
+                    log.warning(f"Open position blocked (max position) {resolved} {side}: {e}{s}")
+            elif "-2019" in err or "insufficient" in err.lower():
+                # Margin insufficient — silent skip, balance may improve next tick
+                pass
+            else:
+                key = f"open_err:{resolved}:{side}:{_extract_code(err)}"
+                s = _throttle_error.emit(key)
+                if s is not None:
+                    log.error(f"Open position failed {resolved} {side}: {e}{s}")
+            return None
 
-    async def safe_open(self, symbol: str, side: str, retries: int = 1) -> dict | None:
-        for i in range(retries + 1):
-            result = await self.open_position(symbol, side)
-            if result:
-                return result
-            if i < retries:
-                await asyncio.sleep(0.5)
-        key = f"safe_open_gave_up:{symbol}:{side}"
-        s = _throttle_warn.emit(key)
-        if s is not None:
-            log.warning(f"safe_open gave up after {retries + 1} attempts: {symbol} {side}{s}")
-        return None
+    async def safe_open(self, symbol: str, side: str) -> dict | None:
+        """Open position once. No retries — tick loop is the retry mechanism."""
+        return await self.open_position(symbol, side)
 
     async def add_position(self, symbol: str, side: str, amount: float) -> dict | None:
         resolved = self.resolve_symbol(symbol)
@@ -391,49 +385,52 @@ class ExchangeClient:
             return None
         if amount <= 0:
             return None
-        for attempt in range(3):
-            try:
-                open_side = "buy" if side == "long" else "sell"
-                order = await self._safe_call(self.exchange.create_order(
-                    symbol=resolved, type="market", side=open_side, amount=amount,
-                    params={"positionSide": side.upper()},
-                ), timeout=15)
-                log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
-                avg = order.get("average") or order.get("price")
-                if not avg:
-                    info = order.get("info", {})
-                    avg = info.get("avgPrice") or info.get("averagePrice")
-                if not avg:
-                    cost = order.get("cost")
-                    filled = order.get("filled")
-                    if cost and filled and filled > 0:
-                        avg = cost / filled
-                if not avg:
-                    avg = self._prices.get(resolved, 0)
-                return {
-                    "order_id": str(order.get("id", "")),
-                    "average": float(avg or 0),
-                    "amount": amount,
-                }
-            except Exception as e:
-                err = str(e)
-                if "-4164" in err and attempt < 2:
-                    old = amount
-                    amount = max(amount + 1, int(amount * 1.3))
-                    log.warning(f"Notional too small for add {resolved} {side}, retry {old} -> {amount}")
-                    continue
-                if "-2027" in err or "exceeded" in err.lower():
-                    self._mark_blocked(f"{resolved}:{side}")
-                    key = f"add_blocked:{resolved}:{side}"
-                    s = _throttle_warn.emit(key)
-                    if s is not None:
-                        log.warning(f"Add position blocked (max position) {resolved} {side}: {e}{s}")
-                else:
-                    key = f"add_err:{resolved}:{side}:{_extract_code(err)}"
-                    s = _throttle_error.emit(key)
-                    if s is not None:
-                        log.error(f"Add position failed {resolved} {side}: {e}{s}")
+        # Quick balance check
+        try:
+            bal = await self.get_balance()
+            if bal.get('available_balance', 0) < 5.0:
                 return None
+        except Exception:
+            pass
+        try:
+            open_side = "buy" if side == "long" else "sell"
+            order = await self._safe_call(self.exchange.create_order(
+                symbol=resolved, type="market", side=open_side, amount=amount,
+                params={"positionSide": side.upper()},
+            ), timeout=15)
+            log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
+            avg = order.get("average") or order.get("price")
+            if not avg:
+                info = order.get("info", {})
+                avg = info.get("avgPrice") or info.get("averagePrice")
+            if not avg:
+                cost = order.get("cost")
+                filled = order.get("filled")
+                if cost and filled and filled > 0:
+                    avg = cost / filled
+            if not avg:
+                avg = self._prices.get(resolved, 0)
+            return {
+                "order_id": str(order.get("id", "")),
+                "average": float(avg or 0),
+                "amount": amount,
+            }
+        except Exception as e:
+            err = str(e)
+            if "-2027" in err or "exceeded" in err.lower():
+                self._mark_blocked(f"{resolved}:{side}")
+                key = f"add_blocked:{resolved}:{side}"
+                s = _throttle_warn.emit(key)
+                if s is not None:
+                    log.warning(f"Add position blocked (max position) {resolved} {side}: {e}{s}")
+            elif "-2019" in err or "insufficient" in err.lower():
+                pass  # silent skip
+            else:
+                key = f"add_err:{resolved}:{side}:{_extract_code(err)}"
+                s = _throttle_error.emit(key)
+                if s is not None:
+                    log.error(f"Add position failed {resolved} {side}: {e}{s}")
+            return None
 
     async def close_position(self, symbol: str, side: str, contracts: float | None = None) -> dict | None:
         resolved = self.resolve_symbol(symbol)
@@ -450,45 +447,32 @@ class ExchangeClient:
             contracts = float(target.get("contracts", 0) or 0)
 
         close_side = "sell" if side == "long" else "buy"
-        # Try with positionSide first, fallback to bare params
-        for attempt, params in enumerate([
-            {"positionSide": side.upper()},
-            None,
-        ]):
-            try:
-                kwargs = dict(symbol=resolved, type="market", side=close_side, amount=contracts)
-                if params is not None:
-                    kwargs["params"] = params
-                order = await self._safe_call(self.exchange.create_order(**kwargs), timeout=15)
-                tag = "no params" if params is None else side
-                log.info(f"Close {tag} {resolved} {contracts} -> {order.get('id')}")
-                # Get fill price via multiple fallbacks (ccxt may not set average)
-                avg = order.get("average")
-                if not avg:
-                    avg = order.get("price")
-                if not avg:
-                    info = order.get("info", {})
-                    avg = info.get("avgPrice") or info.get("averagePrice")
-                if not avg:
-                    # Last resort: cost/filled
-                    cost = order.get("cost")
-                    filled = order.get("filled")
-                    if cost and filled and filled > 0:
-                        avg = cost / filled
-                if not avg:
-                    avg = self._prices.get(resolved, 0)
-                return {
-                    "order_id": str(order.get("id", "")),
-                    "average": float(avg or 0),
-                    "closedPnL": order.get("closedPnL", 0),
-                    "contracts": contracts,
-                }
-            except Exception as e:
-                if attempt == 0:
-                    log.warning(f"Close with positionSide failed {resolved} {side}, trying fallback: {e}")
-                    continue
-                log.error(f"Close failed {resolved} {side}: {e}")
-                return None
+        try:
+            order = await self._safe_call(self.exchange.create_order(
+                symbol=resolved, type="market", side=close_side, amount=contracts,
+                params={"positionSide": side.upper()},
+            ), timeout=15)
+            log.info(f"Close {side} {resolved} {contracts} -> {order.get('id')}")
+            avg = order.get("average") or order.get("price")
+            if not avg:
+                info = order.get("info", {})
+                avg = info.get("avgPrice") or info.get("averagePrice")
+            if not avg:
+                cost = order.get("cost")
+                filled = order.get("filled")
+                if cost and filled and filled > 0:
+                    avg = cost / filled
+            if not avg:
+                avg = self._prices.get(resolved, 0)
+            return {
+                "order_id": str(order.get("id", "")),
+                "average": float(avg or 0),
+                "closedPnL": order.get("closedPnL", 0),
+                "contracts": contracts,
+            }
+        except Exception as e:
+            log.warning(f"Close failed {resolved} {side}: {e}")
+            return None
 
     async def close_all_positions(self, positions: list[dict]) -> list[dict]:
         tasks = []
