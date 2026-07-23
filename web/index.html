@@ -904,7 +904,7 @@ window.frontendConfig = { matrix_slots: 100, matrix_columns: 10 };
 
 async function loadFrontendConfig() {
   try {
-    const r = await fetch('/web/config.json', { cache: 'no-store' });
+    const r = await fetch('/api/web-config', { cache: 'no-store' });
     if (r.ok) {
       const cfg = await r.json();
       if (cfg.matrix_slots != null) window.frontendConfig.matrix_slots = cfg.matrix_slots;

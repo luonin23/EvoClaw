@@ -131,33 +131,22 @@ class WebServer:
         })
 
     async def handle_web_config(self, request):
-        config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
-        if os.path.exists(config_path):
-            return web.FileResponse(config_path)
-        return web.json_response({"matrix_slots": 100, "matrix_columns": 10})
+        """Legacy endpoint — reads from DB (file was migrated on startup)."""
+        cfg = await self._db_sync(self.db.load_web_config)
+        return web.json_response(cfg)
 
     async def api_web_config_get(self, request):
         try:
-            config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
-            if os.path.exists(config_path):
-                with open(config_path, "r") as f:
-                    return web.json_response(json.load(f))
-            return web.json_response({"matrix_slots": 100, "matrix_columns": 10})
+            cfg = await self._db_sync(self.db.load_web_config)
+            return web.json_response(cfg)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def api_web_config_set(self, request):
         try:
             data = await request.json()
-            config_path = os.path.join(os.path.dirname(__file__), "web", "config.json")
-            existing = {}
-            if os.path.exists(config_path):
-                with open(config_path, "r") as f:
-                    existing = json.load(f)
-            existing.update(data)
-            with open(config_path, "w") as f:
-                json.dump(existing, f, indent=4)
-            return web.json_response({"status": "ok", "message": "Frontend config saved"})
+            await self._db_sync(self.db.save_web_config, data)
+            return web.json_response({"status": "ok", "message": "Frontend config saved to database"})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 

@@ -313,6 +313,7 @@ async def main():
                         entry_price=entry_price,
                         amount=contracts,
                         open_fee=open_fee,
+                        max_slots=int(cfg.get('matrix_slots', 100)),
                     )
                     log.info(f"Tracking existing position: {sym} {pos_side} {contracts} @ {entry_price}")
 
@@ -370,6 +371,7 @@ async def main():
                         entry_price=result["average"],
                         amount=result["amount"],
                         open_fee=open_fee,
+                        max_slots=int(cfg.get('matrix_slots', 100)),
                     )
         else:
             log.info("All positions already exist, skipping open")

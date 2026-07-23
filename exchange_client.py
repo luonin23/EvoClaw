@@ -351,7 +351,13 @@ class ExchangeClient:
                 if cost and filled and filled > 0:
                     avg = cost / filled
             if not avg:
-                avg = self._prices.get(resolved, 0)
+                # Fallback to lastPrice from market info cache
+                market = self.market_info.get(resolved, {})
+                price_str = market.get("info", {}).get("lastPrice", "0")
+                if price_str and float(price_str) > 0:
+                    avg = float(price_str)
+                else:
+                    avg = self._prices.get(resolved, 0)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -366,7 +372,6 @@ class ExchangeClient:
                 if s is not None:
                     log.warning(f"Open position blocked (max position) {resolved} {side}: {e}{s}")
             elif "-2019" in err or "insufficient" in err.lower():
-                # Margin insufficient — silent skip, balance may improve next tick
                 pass
             else:
                 key = f"open_err:{resolved}:{side}:{_extract_code(err)}"
@@ -409,7 +414,13 @@ class ExchangeClient:
                 if cost and filled and filled > 0:
                     avg = cost / filled
             if not avg:
-                avg = self._prices.get(resolved, 0)
+                # Fallback to lastPrice from market info cache
+                market = self.market_info.get(resolved, {})
+                price_str = market.get("info", {}).get("lastPrice", "0")
+                if price_str and float(price_str) > 0:
+                    avg = float(price_str)
+                else:
+                    avg = self._prices.get(resolved, 0)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -463,7 +474,13 @@ class ExchangeClient:
                 if cost and filled and filled > 0:
                     avg = cost / filled
             if not avg:
-                avg = self._prices.get(resolved, 0)
+                # Fallback to lastPrice from market info cache (updated by refresh_prices)
+                market = self.market_info.get(resolved, {})
+                price_str = market.get("info", {}).get("lastPrice", "0")
+                if price_str and float(price_str) > 0:
+                    avg = float(price_str)
+                else:
+                    avg = self._prices.get(resolved, 0)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),

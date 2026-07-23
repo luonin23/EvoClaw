@@ -617,7 +617,7 @@ class Trader:
                         self.db.mark_margin_called(sym, side, new_total, added_fee)
                     else:
                         open_fee = entry * contracts * cs * 0.0005 + added_fee
-                        self.db.record_open(sym, side, "margin_call", entry, new_total, open_fee)
+                        self.db.record_open(sym, side, "margin_call", entry, new_total, open_fee, max_slots=self.config.get('matrix_slots', 100))
                     executed = True
                 else:
                     # === Phase 1: Record failure ===
@@ -802,6 +802,7 @@ class Trader:
                 symbol=symbol, side=side,
                 order_id=result["order_id"], entry_price=result["average"],
                 amount=result["amount"], open_fee=open_fee,
+                max_slots=self.config.get('matrix_slots', 100),
             )
         else:
             self._record_2027_failure(symbol)
@@ -813,6 +814,9 @@ class Trader:
 
     async def _record_trade(self, symbol, side, entry_price, contracts, close_result, trade_type, open_fee=0, open_time=""):
         try:
+            # Fallback: if caller didn't provide open_time, try DB directly
+            if not open_time:
+                open_time = self.db.get_open_entry_time(symbol, side)
             market = self.client.get_market_info(symbol)
             contract_size = market.get("contractSize", 1) or 1
 

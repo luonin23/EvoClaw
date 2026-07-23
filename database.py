@@ -100,6 +100,8 @@ class Database:
         """)
         self.conn.commit()
         self._rebuild_stats()
+        self._backfill_open_time()
+        self._migrate_web_config()
 
     def _rebuild_stats(self):
         self.conn.execute("DELETE FROM trade_stats")
@@ -200,7 +202,7 @@ class Database:
         ).fetchall()
         return {r[0] for r in rows}
 
-    def _allocate_slot(self, symbol: str, side: str) -> int | None:
+    def _allocate_slot(self, symbol: str, side: str, max_slots: int = 100) -> int | None:
         existing = self.get_slot(symbol, side)
         if existing is not None:
             return existing
@@ -211,25 +213,25 @@ class Database:
         opp_slot = self.get_slot(symbol, opposite)
         if opp_slot is not None:
             neighbor = opp_slot + 1 if opp_slot % 2 == 0 else opp_slot - 1
-            if 0 <= neighbor < 100 and neighbor not in used:
+            if 0 <= neighbor < max_slots and neighbor not in used:
                 return neighbor
 
         start = 0 if side == "long" else 1
-        for i in range(start, 100, 2):
+        for i in range(start, max_slots, 2):
             if i not in used:
                 return i
 
-        for i in range(100):
+        for i in range(max_slots):
             if i not in used:
                 return i
 
         return None
 
-    def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None, contract_size: float = 1):
+    def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None, contract_size: float = 1, max_slots: int = 100):
         now = datetime.now(timezone.utc).isoformat()
         if open_fee is None:
             open_fee = entry_price * amount * contract_size * 0.0005
-        slot = self._allocate_slot(symbol, side)
+        slot = self._allocate_slot(symbol, side, max_slots=max_slots)
         self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
         self.conn.execute(
             """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee, slot_index)
@@ -269,6 +271,43 @@ class Database:
             "SELECT 1 FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
         ).fetchone()
         return row is not None
+
+    def get_open_entry_time(self, symbol: str, side: str) -> str:
+        """Get entry_time from open_positions for a symbol+side (may be about to close)."""
+        row = self.conn.execute(
+            "SELECT entry_time FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
+        ).fetchone()
+        return row[0] if row else ""
+
+    def _backfill_open_time(self):
+        """One-time migration: fill empty open_time in trades from open_positions records."""
+        empty_count = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
+        if empty_count == 0:
+            return
+        log.info(f"Backfilling {empty_count} trades with empty open_time from open_positions...")
+        # For each trade with empty open_time where position still exists, copy entry_time
+        self.conn.execute("""
+            UPDATE trades SET open_time = (
+                SELECT entry_time FROM open_positions
+                WHERE open_positions.symbol = trades.symbol
+                  AND open_positions.side = trades.side
+                  AND open_positions.entry_time != ''
+                  AND open_positions.entry_time IS NOT NULL
+                LIMIT 1
+            )
+            WHERE (trades.open_time = '' OR trades.open_time IS NULL)
+              AND EXISTS (
+                SELECT 1 FROM open_positions
+                WHERE open_positions.symbol = trades.symbol
+                  AND open_positions.side = trades.side
+                  AND open_positions.entry_time != ''
+                  AND open_positions.entry_time IS NOT NULL
+              )
+        """)
+        self.conn.commit()
+        filled = empty_count - self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
+        remaining = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
+        log.info(f"Backfill complete: filled {filled} trades, {remaining} remain empty (position no longer in DB)")
 
     # ===== Stats =====
 
@@ -445,6 +484,42 @@ class Database:
             (key, json.dumps(value)),
         )
         self.conn.commit()
+
+    def load_web_config(self) -> dict:
+        """Load frontend display config (matrix_slots/matrix_columns) from DB."""
+        slots = self.get_runtime_stat("matrix_slots", 100)
+        cols = self.get_runtime_stat("matrix_columns", 10)
+        return {"matrix_slots": int(slots), "matrix_columns": int(cols)}
+
+    def save_web_config(self, cfg: dict):
+        """Save frontend display config to DB runtime_stats."""
+        if "matrix_slots" in cfg:
+            self.set_runtime_stat("matrix_slots", float(cfg["matrix_slots"]))
+        if "matrix_columns" in cfg:
+            self.set_runtime_stat("matrix_columns", float(cfg["matrix_columns"]))
+
+    def _migrate_web_config(self):
+        """One-time migration: read web/config.json and store in DB, then delete the file."""
+        import os
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "config.json")
+        if not os.path.exists(file_path):
+            return
+        try:
+            import json
+            with open(file_path) as f:
+                wc = json.load(f)
+            slots = int(wc.get("matrix_slots", 100))
+            cols = int(wc.get("matrix_columns", 10))
+            # Only write if not already in DB
+            db_slots = int(self.get_runtime_stat("matrix_slots", 0))
+            if db_slots <= 0:
+                self.set_runtime_stat("matrix_slots", float(slots))
+                self.set_runtime_stat("matrix_columns", float(cols))
+                log.info(f"Migrated web config from file: matrix_slots={slots}, matrix_columns={cols}")
+            os.remove(file_path)
+            log.info(f"Removed {file_path}")
+        except Exception as e:
+            log.warning(f"Web config migration failed (non-fatal): {e}")
 
     # ===== End App Config =====
 
