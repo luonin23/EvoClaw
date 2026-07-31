@@ -83,8 +83,8 @@ class WebServer:
         except Exception:
             data = resp
 
-        # Only cache dict data (not Response objects)
-        if isinstance(data, dict):
+        # Only cache successful dict data (not error/500 responses)
+        if isinstance(data, dict) and data.get("status") != "error":
             if len(self._api_cache) >= self._api_cache_max:
                 oldest = min(self._api_cache, key=lambda k: self._api_cache[k][0])
                 del self._api_cache[oldest]

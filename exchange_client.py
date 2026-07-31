@@ -58,6 +58,11 @@ class ExchangeClient:
         # Close any stale aiohttp sessions inside ccxt (prevents Unclosed connector)
         kwargs.setdefault("http_proxy", None)
         self.exchange = exchange_class(kwargs)
+        # Binance API clock tolerance:
+        # - recvWindow 20000ms: tolerate up to 20s of clock drift per request
+        # - adjustForTimeDifference: ccxt auto-syncs local timestamps with exchange server time
+        self.exchange.options['recvWindow'] = 20000
+        self.exchange.options['adjustForTimeDifference'] = True
         self.market_info = {}
         self.symbol_map = {}
         self._reverse_map = {}
