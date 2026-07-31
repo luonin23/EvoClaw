@@ -213,20 +213,16 @@ body::after{
 .bento-grid{display:grid;gap:var(--space-12)}
 .bento-dashboard{grid-template-columns:1fr 320px;grid-auto-flow:row}
 .bento-dashboard .tile{grid-column:1/3}
-.bento-dashboard .bento-trend{grid-column:1}
-.bento-dashboard .bento-side-top{grid-column:2}
-.bento-dashboard .bento-flow{grid-column:1/3}
+.bento-dashboard .bento-trend{grid-column:1/2}
+.bento-dashboard .bento-side-top{grid-column:2/3}
 .bento-dashboard .bento-side-bottom{grid-column:1/3}
 .bento-dashboard .bento-bottom-row{grid-column:1/3;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--space-12)}
 @media(max-width:900px){
   .bento-dashboard{grid-template-columns:1fr}
   .bento-dashboard .tile,
-  .bento-dashboard .bento-trend,.bento-dashboard .bento-flow,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1}
+  .bento-dashboard .bento-trend,.bento-dashboard .bento-side-top,.bento-dashboard .bento-side-bottom,.bento-dashboard .bento-bottom-row{grid-column:1}
   .bento-dashboard .bento-bottom-row{grid-template-columns:1fr}
   .tile{overflow:visible}
-  .pipeline-bar{flex-wrap:wrap}
-  .pipe-step{min-width:44px;padding:var(--space-8) var(--space-8);font-size:var(--font-xs)}
-  .pipe-step i{font-size:var(--font-md)}
 }
 
 .tile{
@@ -505,29 +501,6 @@ body::after{
   .full-matrix{grid-template-columns:repeat(4,1fr)!important}
 }
 
-/* ===== Pipeline Status Bar ===== */
-.pipeline-wrap{
-  position:relative;
-  background:var(--bg-elevated);border:1px solid var(--border-subtle);
-  border-radius:var(--radius-lg);padding:var(--space-16) var(--space-16);text-align:center;
-}
-.pipeline-bar{
-  display:flex;align-items:center;gap:var(--space-8);
-  justify-content:center;flex-wrap:wrap;margin-bottom:var(--space-12);
-}
-.pipe-step{
-  display:flex;flex-direction:column;align-items:center;gap:var(--space-4);
-  padding:var(--space-12) var(--space-12);border-radius:var(--radius-md);
-  background:var(--bg-surface);border:1px solid var(--border-subtle);
-  min-width:56px;transition:all .3s ease;
-  font-size:var(--font-sm);color:var(--text-muted);text-align:center;
-}
-.pipe-step i{font-size:var(--font-lg);transition:color .3s}
-.pipe-step.active{border-color:var(--warning);color:var(--warning);background:rgba(245,158,11,0.08)}
-.pipe-step.triggered{border-color:var(--success);color:var(--success);background:rgba(0,208,132,0.08)}
-.pipe-step i.glow{filter:drop-shadow(0 0 var(--space-4) currentColor)}
-.pipe-arrow{color:var(--text-muted);font-size:var(--font-base);flex-shrink:0}
-.pipeline-desc{font-size:var(--font-sm);color:var(--text-tertiary)}
 .log-time{color:var(--text-muted);white-space:nowrap}
 .log-msg{flex:1;word-break:break-all}
 .log-type-open{color:var(--accent)}
@@ -570,11 +543,6 @@ body::after{
 #bgParticles{
   position:fixed;inset:0;z-index:-1;pointer-events:none;
 }
-/* Pipeline particle canvas */
-#pipelineParticles{
-  position:absolute;inset:0;pointer-events:none;z-index:1;
-}
-
 @media (prefers-reduced-motion: reduce){
   *{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}
 }
@@ -649,29 +617,8 @@ body::after{
       </div>
     </div>
 
-    <div class="tile bento-flow">
-      <div class="tile-head">
-        <div class="icon-wrap"><i class="ph ph-brain"></i></div>
-        <h2>交易决策流图</h2>
-        <span style="margin-left:auto;font-size:var(--font-sm);color:var(--text-muted)">每 <span id="tickInterval">3</span> 秒执行一次 tick 循环</span>
-      </div>
-      <div class="pipeline-wrap">
-        <canvas id="pipelineParticles"></canvas>
-        <div class="pipeline-bar" id="pipelineBar">
-          <div class="pipe-step" id="pipeFetch"><i class="ph ph-download-simple"></i><span>获取仓位</span></div>
-          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-          <div class="pipe-step" id="pipeAllClose"><i class="ph ph-x-circle"></i><span>全平</span></div>
-          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-          <div class="pipe-step" id="pipeSingle"><i class="ph ph-chart-line-up"></i><span>止盈</span></div>
-          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-          <div class="pipe-step" id="pipePair"><i class="ph ph-arrows-in-line-horizontal"></i><span>对平</span></div>
-          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-          <div class="pipe-step" id="pipeMargin"><i class="ph ph-warning-circle"></i><span>加仓</span></div>
-          <div class="pipe-arrow"><i class="ph ph-caret-right"></i></div>
-          <div class="pipe-step" id="pipeReplenish"><i class="ph ph-plus-circle"></i><span>补仓</span></div>
-        </div>
-        <div class="pipeline-desc">高亮步骤 = 当前执行中 丨 绿色 = 本 tick 触发操作</div>
-      </div>
+    <div class="tile" style="grid-column:1/3;display:none">
+      <!-- Pipeline placeholder removed -->
     </div>
 
     <div class="tile">
@@ -1813,7 +1760,6 @@ async function refresh() {
     const tasks = [];
     if (currentTab === 'dashboard') {
       tasks.push(loadAccount(), loadStats(), loadProfitTrend(), loadLiquidations());
-      Promise.all(tasks).then(() => updatePipeline());
     } else if (currentTab === 'matrix') {
       const posData = await api('/api/positions-map');
       tasks.push(loadPositionsMap(posData), loadFullMatrix(posData));
@@ -1832,7 +1778,6 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (currentTab === 'dashboard') {
-      updatePipeline();
       drawChart();
     }
   }, 150);
@@ -1840,7 +1785,6 @@ window.addEventListener('resize', () => {
 
 let refreshTimer = null;
 let systemTimer = null;
-let _tickTimer = null;
 function startTimers() {
   if (!refreshTimer) refreshTimer = setInterval(refresh, 10000);
   if (!systemTimer) systemTimer = setInterval(loadSystem, 10000);
@@ -1931,48 +1875,13 @@ async function generatePoster() {
 }
 
 
-// ===== Pipeline Status Bar =====
-function updatePipeline(triggered) {
-  const steps = ['pipeFetch','pipeAllClose','pipeSingle','pipePair','pipeMargin','pipeReplenish'];
-  steps.forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('active','triggered');
-    const icon = el.querySelector('i');
-    if (icon) icon.classList.remove('glow');
-    if (triggered && triggered[id]) {
-      el.classList.add('triggered');
-      if (icon) icon.classList.add('glow');
-    }
-  });
-  const tick = Math.floor(Date.now() / 1000) % steps.length;
-  const activeEl = document.getElementById(steps[tick]);
-  if (activeEl && !activeEl.classList.contains('triggered')) {
-    activeEl.classList.add('active');
-  }
-}
-
-function startTickSimulation() {
-  if (_tickTimer) return;
-  const interval = parseInt(document.getElementById('tickInterval')?.textContent || '3');
-  _tickTimer = setInterval(() => {
-    if (currentTab !== 'dashboard') return;
-    refresh();
-  }, interval * 1000);
-}
-
 async function loadDashboardView() {
   const cfg = await api('/api/config');
-  if (cfg) {
-    document.getElementById('tickInterval').textContent = cfg.position_check_interval || 3;
-  }
   await loadAccount();
   await loadStats();
   loadLiquidations();
   _prevStats = JSON.parse(JSON.stringify(window._lastStats || {}));
   _prevAccount = JSON.parse(JSON.stringify(window._lastAccount || {}));
-  updatePipeline();
-  startTickSimulation();
 }
 
 
@@ -2113,108 +2022,6 @@ startTimers();
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && bgRafId) { cancelAnimationFrame(bgRafId); bgRafId = null; }
       else if (!document.hidden && !bgRafId) { bgRafId = requestAnimationFrame(drawBgParticles); }
-    });
-  }
-
-  // --- 2. Pipeline data-flow particles (follow the actual pipeline bar) ---
-  const pipeCanvas = document.getElementById('pipelineParticles');
-  const pipeBar = document.getElementById('pipelineBar');
-  if (pipeCanvas && pipeBar) {
-    const pipeCtx = pipeCanvas.getContext('2d');
-    const pipeWrap = pipeCanvas.parentElement;
-    let wrapW, wrapH;
-    const pipeParticles = [];
-
-    function resizePipe() {
-      const rect = pipeWrap.getBoundingClientRect();
-      wrapW = pipeCanvas.width = rect.width;
-      wrapH = pipeCanvas.height = rect.height;
-    }
-    resizePipe();
-    window.addEventListener('resize', resizePipe, { passive: true });
-
-    function getBarMetrics() {
-      const wrapRect = pipeWrap.getBoundingClientRect();
-      const barRect = pipeBar.getBoundingClientRect();
-      return {
-        x: barRect.left - wrapRect.left,
-        y: barRect.top - wrapRect.top,
-        w: barRect.width,
-        h: barRect.height
-      };
-    }
-
-    function spawnPipeParticle() {
-      if (document.hidden || currentTab !== 'dashboard') return;
-      const bar = getBarMetrics();
-      if (bar.w <= 0 || bar.h <= 0) return;
-      pipeParticles.push({
-        x: bar.x + 8,
-        y: bar.y + bar.h / 2 + (Math.random() - 0.5) * (bar.h * 0.35),
-        vx: Math.random() * (isMobile ? 0.9 : 1.2) + (isMobile ? 0.6 : 0.9),
-        r: Math.random() * (isMobile ? 1.6 : 2.0) + 1,
-        alpha: Math.random() * 0.35 + 0.45,
-        life: 1,
-        barY: bar.y + bar.h / 2,
-        barH: bar.h
-      });
-    }
-
-    let lastPipeSpawn = 0;
-    let lastPipeTime = 0;
-    let pipeRafId = null;
-    function drawPipeParticles(now) {
-      pipeRafId = requestAnimationFrame(drawPipeParticles);
-      if (document.hidden || currentTab !== 'dashboard') return;
-      if (now - lastPipeTime < (isMobile ? 33 : 16)) return;
-      lastPipeTime = now;
-
-      pipeCtx.clearRect(0, 0, wrapW, wrapH);
-
-      if (now - lastPipeSpawn > (isMobile ? 350 : 220)) {
-        spawnPipeParticle();
-        lastPipeSpawn = now;
-      }
-
-      const bar = getBarMetrics();
-
-      for (let i = pipeParticles.length - 1; i >= 0; i--) {
-        const p = pipeParticles[i];
-        p.x += p.vx;
-        p.life -= 0.004;
-
-        const targetY = bar.y + bar.h / 2;
-        const dy = targetY - p.y;
-        p.y += dy * 0.06 + (Math.random() - 0.5) * 0.3;
-
-        if (p.x > bar.x + bar.w - 8 || p.life <= 0) {
-          pipeParticles.splice(i, 1);
-          continue;
-        }
-
-        pipeCtx.beginPath();
-        pipeCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        pipeCtx.fillStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life})`;
-        if (!isMobile) {
-          pipeCtx.shadowColor = ACCENT;
-          pipeCtx.shadowBlur = 8;
-        }
-        pipeCtx.fill();
-        if (!isMobile) pipeCtx.shadowBlur = 0;
-
-        // trailing tail
-        pipeCtx.beginPath();
-        pipeCtx.moveTo(p.x, p.y);
-        pipeCtx.lineTo(p.x - p.vx * 14, p.y);
-        pipeCtx.strokeStyle = `rgba(${ACCENT_RGB},${p.alpha * p.life * 0.55})`;
-        pipeCtx.lineWidth = p.r * 0.55;
-        pipeCtx.stroke();
-      }
-    }
-    pipeRafId = requestAnimationFrame(drawPipeParticles);
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && pipeRafId) { cancelAnimationFrame(pipeRafId); pipeRafId = null; }
-      else if (!document.hidden && !pipeRafId) { pipeRafId = requestAnimationFrame(drawPipeParticles); }
     });
   }
 })();
