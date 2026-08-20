@@ -18,3 +18,4 @@ __pycache__/
 
 # Git junk
 .git-broken/
+.git-root-owned/
