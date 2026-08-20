@@ -379,9 +379,9 @@ async def main():
     # Start web server
     runner = web.AppRunner(server.app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    site = web.TCPSite(runner, "0.0.0.0", 8081)
     await site.start()
-    log.info("Web server started on :8080")
+    log.info("Web server started on :8081")
 
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

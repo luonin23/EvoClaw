@@ -638,10 +638,12 @@ class Trader:
             return
 
         position_map = {}
+        sym_has = {}  # symbol -> set of sides currently open
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])
             side = p.get("side")
             position_map[f"{sym}:{side}"] = p
+            sym_has.setdefault(sym, set()).add(side)
 
         current = set()
         for p in positions:
@@ -652,20 +654,45 @@ class Trader:
         max_new = max_count - len(all_positions) if max_count > 0 else None
         tasks = []
         skip = set(cfg.get('skip_symbols', []))
-        for sym in symbols:
+
+        def _should_open(sym, side):
+            key = f"{sym}:{side}"
+            if key in current or self.db.has_open(sym, side) or self._is_skipped_2027(sym):
+                return False
+            if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
+                return False
+            return True
+
+        def _add_task(sym, side):
+            open_side = "buy" if side == "long" else "sell"
+            tasks.append(self._do_open(sym, open_side, side))
+
+        # === Pass 1: complete partial pairs (symbol has one side open, open the other) ===
+        partial = {s: ss for s, ss in sym_has.items() if len(ss) == 1}
+        for sym in partial:
             if sym in skip:
                 continue
             for side in sides:
                 if max_new is not None and len(tasks) >= max_new:
                     break
-                key = f"{sym}:{side}"
-                if key not in current and not self.db.has_open(sym, side) and not self._is_skipped_2027(sym):
-                    if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
-                        continue
-                    open_side = "buy" if side == "long" else "sell"
-                    tasks.append(self._do_open(sym, open_side, side))
+                if _should_open(sym, side):
+                    _add_task(sym, side)
             if max_new is not None and len(tasks) >= max_new:
                 break
+
+        # === Pass 2: open brand-new symbols (both sides) ===
+        if max_new is None or len(tasks) < max_new:
+            for sym in symbols:
+                if sym in skip or sym in sym_has:
+                    continue
+                for side in sides:
+                    if max_new is not None and len(tasks) >= max_new:
+                        break
+                    if _should_open(sym, side):
+                        _add_task(sym, side)
+                if max_new is not None and len(tasks) >= max_new:
+                    break
+
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 

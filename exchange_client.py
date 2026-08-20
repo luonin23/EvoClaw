@@ -59,9 +59,9 @@ class ExchangeClient:
         kwargs.setdefault("http_proxy", None)
         self.exchange = exchange_class(kwargs)
         # Binance API clock tolerance:
-        # - recvWindow 20000ms: tolerate up to 20s of clock drift per request
+        # - recvWindow 60000ms: tolerate up to 60s of clock drift per request
         # - adjustForTimeDifference: ccxt auto-syncs local timestamps with exchange server time
-        self.exchange.options['recvWindow'] = 20000
+        self.exchange.options['recvWindow'] = 60000
         self.exchange.options['adjustForTimeDifference'] = True
         self.market_info = {}
         self.symbol_map = {}
@@ -361,8 +361,17 @@ class ExchangeClient:
                 price_str = market.get("info", {}).get("lastPrice", "0")
                 if price_str and float(price_str) > 0:
                     avg = float(price_str)
-                else:
-                    avg = self._prices.get(resolved, 0)
+            if not avg:
+                # Last resort: fetch live ticker
+                try:
+                    ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
+                    last = float(ticker.get("last", 0) or 0)
+                    if last > 0:
+                        avg = last
+                except Exception:
+                    pass
+            if not avg:
+                avg = self._prices.get(resolved, 0)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -424,8 +433,17 @@ class ExchangeClient:
                 price_str = market.get("info", {}).get("lastPrice", "0")
                 if price_str and float(price_str) > 0:
                     avg = float(price_str)
-                else:
-                    avg = self._prices.get(resolved, 0)
+            if not avg:
+                # Last resort: fetch live ticker
+                try:
+                    ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
+                    last = float(ticker.get("last", 0) or 0)
+                    if last > 0:
+                        avg = last
+                except Exception:
+                    pass
+            if not avg:
+                avg = self._prices.get(resolved, 0)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -484,8 +502,17 @@ class ExchangeClient:
                 price_str = market.get("info", {}).get("lastPrice", "0")
                 if price_str and float(price_str) > 0:
                     avg = float(price_str)
-                else:
-                    avg = self._prices.get(resolved, 0)
+            if not avg:
+                # Last resort: fetch live ticker so exit price is never 0
+                try:
+                    ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
+                    last = float(ticker.get("last", 0) or 0)
+                    if last > 0:
+                        avg = last
+                except Exception:
+                    pass
+            if not avg:
+                avg = self._prices.get(resolved, 0)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),

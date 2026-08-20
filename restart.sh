@@ -9,7 +9,7 @@ set -e
 
 PROJECT_DIR="/home/claudeuser/EvoClaw"
 LOG_DIR="$PROJECT_DIR/data"
-PORT=8080
+PORT=8081
 MAX_WAIT=10
 
 # ---- 颜色输出 ----
@@ -119,7 +119,7 @@ start_service() {
     sleep 3
     if ps -p "$PID" > /dev/null 2>&1; then
         echo -e "  ${GREEN}Service is running (PID $PID)${NC}"
-        echo "  Web UI: http://localhost:8080"
+        echo "  Web UI: http://localhost:8081"
         tail -3 "$LOG_DIR/trader.log" 2>/dev/null | sed 's/^/    /'
     else
         echo -e "  ${RED}ERROR: Service failed to start!${NC}"
