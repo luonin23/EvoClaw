@@ -528,6 +528,11 @@ body::after{
 /* Liquidation table */
 .liq-table{width:100%;border-collapse:collapse;font-size:var(--font-sm);font-family:var(--font-mono);margin-top:var(--space-12)}
 .liq-table th{text-align:left;padding:var(--space-8) var(--space-8);color:var(--text-tertiary);font-weight:500;border-bottom:1px solid var(--border-subtle);font-size:var(--font-sm);text-transform:none;letter-spacing:0.01em}
+.liq-table th.sortable{cursor:pointer;user-select:none;white-space:nowrap;transition:color 0.15s}
+.liq-table th.sortable:hover{color:var(--accent)}
+.liq-table th.sortable .sort-arrow{display:inline-block;margin-left:4px;opacity:0.4;font-size:10px}
+.liq-table th.sortable.sorted-asc .sort-arrow{opacity:1;color:var(--accent)}
+.liq-table th.sortable.sorted-desc .sort-arrow{opacity:1;color:var(--accent);transform:rotate(180deg)}
 .liq-table td{padding:var(--space-4) var(--space-8);border-bottom:1px solid var(--border-subtle);color:var(--text-secondary)}
 .liq-table tr:hover td{background:var(--bg-hover)}
 .liq-table .rank{color:var(--text-muted);width:30px;text-align:center}
@@ -773,10 +778,18 @@ body::after{
     <table class="liq-table" id="symbolSummaryTable">
       <thead>
         <tr>
-          <th>#</th><th>交易对</th><th>方向</th>
-          <th>开仓次数</th><th>总开仓量/额</th><th>加仓</th>
-          <th>平仓次数</th><th>总平仓量/额</th>
-          <th>剩余未平</th><th>盈利总额</th><th>手续费</th><th>均平仓盈利率</th>
+          <th data-key="idx" class="sortable">#</th>
+          <th data-key="symbol" class="sortable">交易对</th>
+          <th data-key="side" class="sortable">方向</th>
+          <th data-key="open_count" class="sortable">开仓次数</th>
+          <th data-key="open_value" class="sortable">总开仓量/额</th>
+          <th data-key="margin_count" class="sortable">加仓</th>
+          <th data-key="close_count" class="sortable">平仓次数</th>
+          <th data-key="close_value" class="sortable">总平仓量/额</th>
+          <th data-key="remaining_qty" class="sortable">剩余未平</th>
+          <th data-key="total_pnl" class="sortable">盈利总额</th>
+          <th data-key="close_fee" class="sortable">手续费</th>
+          <th data-key="avg_close_rate_pct" class="sortable">均平仓盈利率</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -1833,12 +1846,41 @@ async function loadDailyTrades() {
   if (elS) { elS.textContent = fmtP(pnlS); elS.className = 'stat-value ' + clr(pnlS); }
 }
 
+let _symSumSort = { key: 'total_pnl', dir: -1 }; // dir: 1 asc, -1 desc
+window._symbolSummaryData = [];
+
 async function loadSymbolSummary() {
   const d = await api('/api/symbol-summary');
   if (!d || !d.data) return;
+  window._symbolSummaryData = d.data;
+  renderSymbolSummary();
+  document.getElementById('symSumCount').textContent = d.total || 0;
+  const totalPnl = d.data.reduce((s, r) => s + (r.total_pnl || 0), 0);
+  const pnlEl = document.getElementById('symSumPnl');
+  if (pnlEl) {
+    pnlEl.textContent = fmtP(totalPnl);
+    pnlEl.className = 'num ' + (totalPnl >= 0 ? 'positive' : 'negative');
+  }
+}
+
+function renderSymbolSummary() {
   const tbody = document.querySelector('#symbolSummaryTable tbody');
   if (!tbody) return;
-  tbody.innerHTML = d.data.map((r, i) => {
+  const data = window._symbolSummaryData;
+  // Apply current sort
+  const { key, dir } = _symSumSort;
+  const sorted = data.slice();
+  sorted.sort((a, b) => {
+    let va, vb;
+    if (key === 'idx') { va = 0; vb = 0; } // idx filled at render time
+    else if (key === 'symbol') { va = (a.symbol || '').toLowerCase(); vb = (b.symbol || '').toLowerCase(); }
+    else if (key === 'side') { va = a.side === 'long' ? 0 : 1; vb = b.side === 'long' ? 0 : 1; }
+    else { va = a[key] || 0; vb = b[key] || 0; }
+    if (va < vb) return -1 * dir;
+    if (va > vb) return 1 * dir;
+    return 0;
+  });
+  tbody.innerHTML = sorted.map((r, i) => {
     const symDisplay = (r.symbol || '').replace(/USDT$/, '').replace(/USDC$/, '');
     const sideCls = r.side === 'long' ? 'side-long' : 'side-short';
     const sideText = r.side === 'long' ? '多' : '空';
@@ -1862,13 +1904,34 @@ async function loadSymbolSummary() {
       '<td>' + (r.avg_close_rate_pct || 0).toFixed(2) + '%</td>' +
       '</tr>';
   }).join('');
-  document.getElementById('symSumCount').textContent = d.total || 0;
-  const totalPnl = d.data.reduce((s, r) => s + (r.total_pnl || 0), 0);
-  const pnlEl = document.getElementById('symSumPnl');
-  if (pnlEl) {
-    pnlEl.textContent = fmtP(totalPnl);
-    pnlEl.className = 'num ' + (totalPnl >= 0 ? 'positive' : 'negative');
+  // Update header sort indicators
+  document.querySelectorAll('#symbolSummaryTable th.sortable').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.key === key) {
+      th.classList.add(dir === 1 ? 'sorted-asc' : 'sorted-desc');
+    }
+    let arrow = th.querySelector('.sort-arrow');
+    if (!arrow) { arrow = document.createElement('span'); arrow.className = 'sort-arrow'; th.appendChild(arrow); }
+    arrow.textContent = '▲';
+  });
+}
+
+function sortSymbolSummary(key) {
+  if (_symSumSort.key === key) {
+    _symSumSort.dir *= -1;
+  } else {
+    _symSumSort.key = key;
+    _symSumSort.dir = key === 'symbol' || key === 'side' ? 1 : -1;
   }
+  renderSymbolSummary();
+}
+
+// Bind sortable header clicks (idempotent — guard with a flag)
+if (!window._symSumBound) {
+  window._symSumBound = true;
+  document.querySelectorAll('#symbolSummaryTable th.sortable').forEach(th => {
+    th.addEventListener('click', () => sortSymbolSummary(th.dataset.key));
+  });
 }
 
 function fmtNum(n) {
