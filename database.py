@@ -98,6 +98,24 @@ class Database:
                 value TEXT NOT NULL
             )
         """)
+        # Open/margin position events — records every open and margin-call.
+        # trades table only stores closes; this table enables open-side stats.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS opens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                type TEXT NOT NULL,
+                open_time TEXT NOT NULL,
+                price REAL NOT NULL,
+                amount REAL NOT NULL,
+                order_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_opens_symbol ON opens(symbol);
+            CREATE INDEX IF NOT EXISTS idx_opens_side ON opens(side);
+            CREATE INDEX IF NOT EXISTS idx_opens_time ON opens(open_time);
+        """)
         self.conn.commit()
         self._rebuild_stats()
         self._backfill_open_time()
@@ -278,6 +296,59 @@ class Database:
             "SELECT entry_time FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
         ).fetchone()
         return row[0] if row else ""
+
+    # ===== Open/Margin event tracking (for open-side stats) =====
+
+    def record_open_event(self, symbol: str, side: str, event_type: str, price: float,
+                          amount: float, order_id: str = ''):
+        """Record an open ('open') or margin-call ('margin') event."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """INSERT INTO opens (symbol, side, type, open_time, price, amount, order_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, side, event_type, now, price, amount, order_id),
+        )
+        self.conn.commit()
+
+    def get_daily_open_stats(self, day_prefix: str) -> dict:
+        """Count open/margin events by side for a given day (YYYY-MM-DD prefix)."""
+        rows = self.conn.execute(
+            """SELECT side, type, COUNT(*)
+               FROM opens WHERE open_time LIKE ?
+               GROUP BY side, type""",
+            (day_prefix + '%',),
+        ).fetchall()
+        result = {"open": {"long": 0, "short": 0}, "margin": {"long": 0, "short": 0}}
+        for side, etype, cnt in rows:
+            if etype in result and side in result[etype]:
+                result[etype][side] = cnt
+        return result
+
+    def get_symbol_open_summary(self, contract_sizes: dict = None) -> list[dict]:
+        """Aggregate open/margin events per symbol+side for the symbol summary table."""
+        rows = self.conn.execute(
+            """SELECT symbol, side, type, COUNT(*) as cnt,
+                      COALESCE(SUM(amount),0) as qty,
+                      COALESCE(SUM(price*amount),0) as value
+               FROM opens GROUP BY symbol, side, type""",
+        ).fetchall()
+        grouped = {}
+        for symbol, side, etype, cnt, qty, value in rows:
+            key = f"{symbol}:{side}"
+            g = grouped.setdefault(key, {
+                "symbol": symbol, "side": side,
+                "open_count": 0, "open_qty": 0.0, "open_value": 0.0,
+                "margin_count": 0, "margin_qty": 0.0, "margin_value": 0.0,
+            })
+            if etype == "open":
+                g["open_count"] = cnt
+                g["open_qty"] = qty
+                g["open_value"] = value
+            elif etype == "margin":
+                g["margin_count"] = cnt
+                g["margin_qty"] = qty
+                g["margin_value"] = value
+        return list(grouped.values())
 
     def _backfill_open_time(self):
         """One-time migration: fill empty open_time in trades from open_positions records."""

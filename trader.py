@@ -618,6 +618,8 @@ class Trader:
                     else:
                         open_fee = entry * contracts * cs * 0.0005 + added_fee
                         self.db.record_open(sym, side, "margin_call", entry, new_total, open_fee, max_slots=self.config.get('matrix_slots', 100))
+                    # Record margin-call event for open-side statistics
+                    self.db.record_open_event(sym, side, "margin", result["average"], add_amount, result["order_id"])
                     executed = True
                 else:
                     # === Phase 1: Record failure ===
@@ -836,6 +838,8 @@ class Trader:
             # new position starts tier progression from scratch instead of being
             # permanently skipped because the old position already reached tier 5.
             self._tier_executed.pop(f"{symbol}:{side}", None)
+            # Record open event for open-side statistics
+            self.db.record_open_event(symbol, side, "open", result["average"], result["amount"], result["order_id"])
         else:
             self._record_2027_failure(symbol)
             s = _throttle_warn.emit(f"do_open_fail:{symbol}:{side}")
@@ -863,10 +867,12 @@ class Trader:
             position_value = self._position_value(entry_price, contracts, contract_size)
             pnl_rate = self._pnl_rate(pnl, position_value)
 
+            # Fee fix: trades.fee stores ONLY the close fee (taker fee on close order).
+            # Open fee is recorded separately at open time (open_positions.open_fee /
+            # opens table). Previously open_fee was added on EVERY tier close, so a
+            # position closed in 5 tiers was charged its open fee 5x — overstating fees.
             close_fee = exit_price * contracts * contract_size * 0.0005
-            if open_fee <= 0:
-                open_fee = entry_price * contracts * contract_size * 0.0005
-            fee = open_fee + close_fee
+            fee = close_fee
 
             now = datetime.now(timezone.utc).isoformat()
             self.db.insert_trade({

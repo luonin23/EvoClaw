@@ -35,6 +35,8 @@ class WebServer:
         self.app.router.add_get("/api/positions-map", self.api_positions_map_cached)
         self.app.router.add_get("/api/stats", self.api_stats_cached)
         self.app.router.add_get("/api/trades", self.api_trades)
+        self.app.router.add_get("/api/daily-trades", self.api_daily_trades)
+        self.app.router.add_get("/api/symbol-summary", self.api_symbol_summary)
         self.app.router.add_get("/api/system", self.api_system)
         self.app.router.add_get("/api/profit-trend", self.api_profit_trend_cached)
         self.app.router.add_get("/api/liquidations", self.api_liquidations)
@@ -293,6 +295,7 @@ class WebServer:
                 "margin_call_count": margin_call_count,
                 "realtime_profit_rate": round(realtime_rate, 6),
                 "active_symbols": symbols,
+                "held_symbols": sorted({self.client.user_symbol(p["symbol"]) for p in all_positions}),
                 "liquidation_event_count": liq_stats["event_count"],
                 "liquidation_total_pnl": liq_stats["total_pnl"],
                 "liquidation_pairs_count": liq_stats["pairs_count"],
@@ -468,12 +471,28 @@ class WebServer:
                     t = now - timedelta(hours=23 - i)
                     buckets.append((t.strftime("%Y-%m-%dT%H"), t.strftime("%H:00")))
                 start_iso = (now - timedelta(hours=24)).isoformat()
-            else:
+            elif period == "day":
                 buckets = []
                 for i in range(30):
                     t = now - timedelta(days=29 - i)
                     buckets.append((t.strftime("%Y-%m-%d"), t.strftime("%m-%d")))
                 start_iso = (now - timedelta(days=30)).isoformat()
+            elif period == "week":
+                buckets = []
+                for i in range(12):
+                    t = now - timedelta(weeks=11 - i)
+                    week_start = t - timedelta(days=t.weekday())  # Monday of that week
+                    buckets.append((week_start.strftime("%Y-%m-%d"), week_start.strftime("%m-%d")))
+                start_iso = (now - timedelta(weeks=12)).isoformat()
+            else:  # month
+                buckets = []
+                for i in range(12):
+                    t = now - timedelta(days=365)
+                    # Build year-month buckets stepping back month by month
+                    y = (now.year * 12 + now.month - 1 - (11 - i)) // 12
+                    m = (now.year * 12 + now.month - 1 - (11 - i)) % 12 + 1
+                    buckets.append((f"{y:04d}-{m:02d}", f"{y:02d}-{m:02d}"))
+                start_iso = (now - timedelta(days=400)).isoformat()
 
             def _fetch_trades():
                 return self.db.conn.execute(
@@ -486,7 +505,17 @@ class WebServer:
             for close_time, pnl in rows:
                 if period == "hour":
                     bucket_key = close_time[:13]
-                else:
+                elif period == "month":
+                    bucket_key = close_time[:7]
+                elif period == "week":
+                    # Map close_time to its week-start (Monday) key
+                    try:
+                        dt = datetime.fromisoformat(close_time[:10])
+                        ws = dt - timedelta(days=dt.weekday())
+                        bucket_key = ws.strftime("%Y-%m-%d")
+                    except Exception:
+                        bucket_key = close_time[:10]
+                else:  # day
                     bucket_key = close_time[:10]
                 bucket_pnls[bucket_key] += float(pnl)
 
@@ -517,6 +546,112 @@ class WebServer:
                 "limit": limit,
                 "offset": offset,
             })
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_daily_trades(self, request):
+        """Today's open/margin/close counts by side + realized PnL from closes."""
+        try:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            day_prefix = now.strftime("%Y-%m-%d")
+
+            open_stats = await self._db_sync(self.db.get_daily_open_stats, day_prefix)
+
+            def _close_stats():
+                return self.db.conn.execute(
+                    """SELECT side, COUNT(*), COALESCE(SUM(pnl),0)
+                       FROM trades WHERE close_time LIKE ?
+                       GROUP BY side""",
+                    (day_prefix + '%',),
+                ).fetchall()
+            rows = await self._db_sync(_close_stats)
+            close = {"long": 0, "short": 0}
+            pnl = {"long": 0.0, "short": 0.0}
+            for side, cnt, p in rows:
+                if side in close:
+                    close[side] = cnt
+                    pnl[side] = round(float(p), 4)
+
+            return web.json_response({
+                "date": day_prefix,
+                "open": open_stats["open"],
+                "margin": open_stats["margin"],
+                "close": close,
+                "pnl": pnl,
+            })
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_symbol_summary(self, request):
+        """Per-symbol+side aggregation: opens, closes, remaining, pnl, fees."""
+        try:
+            open_rows = await self._db_sync(self.db.get_symbol_open_summary)
+            opens = {f"{r['symbol']}:{r['side']}": r for r in open_rows}
+
+            def _close_rows():
+                return self.db.conn.execute(
+                    """SELECT symbol, side, COUNT(*) as close_cnt,
+                              COALESCE(SUM(amount),0) as close_qty,
+                              COALESCE(SUM(amount*exit_price),0) as close_value,
+                              COALESCE(SUM(pnl),0) as total_pnl,
+                              COALESCE(SUM(fee),0) as close_fee,
+                              ROUND(AVG(pnl_rate),6) as avg_rate
+                       FROM trades GROUP BY symbol, side
+                       ORDER BY total_pnl DESC""",
+                ).fetchall()
+            close_rows = await self._db_sync(_close_rows)
+
+            def _open_remaining():
+                return self.db.conn.execute(
+                    """SELECT symbol, side, amount FROM open_positions""",
+                ).fetchall()
+            remaining = await self._db_sync(_open_remaining)
+            remaining_map = {}
+            for symbol, side, amt in remaining:
+                remaining_map[f"{symbol}:{side}"] = float(amt)
+
+            result = []
+            seen = set()
+            all_keys = set(opens.keys()) | {f"{r[0]}:{r[1]}" for r in close_rows}
+            for key in all_keys:
+                symbol, side = key.split(":", 1)
+                if key in seen:
+                    continue
+                seen.add(key)
+                op = opens.get(key, {})
+                cr = next((r for r in close_rows if f"{r[0]}:{r[1]}" == key), None)
+
+                open_cnt = op.get("open_count", 0) if op else 0
+                open_qty = round(op.get("open_qty", 0), 4) if op else 0
+                open_val = round(op.get("open_value", 0), 4) if op else 0
+                margin_cnt = op.get("margin_count", 0) if op else 0
+                rem_qty = round(remaining_map.get(key, 0), 4)
+
+                close_cnt = cr[2] if cr else 0
+                close_qty = round(cr[3], 4) if cr else 0
+                close_val = round(cr[4], 4) if cr else 0
+                total_pnl = round(cr[5], 4) if cr else 0
+                close_fee = round(cr[6], 4) if cr else 0
+                avg_rate = round(cr[7] * 100, 4) if cr else 0
+
+                result.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "open_count": open_cnt,
+                    "open_qty": open_qty,
+                    "open_value": open_val,
+                    "margin_count": margin_cnt,
+                    "close_count": close_cnt,
+                    "close_qty": close_qty,
+                    "close_value": close_val,
+                    "remaining_qty": rem_qty,
+                    "total_pnl": total_pnl,
+                    "close_fee": close_fee,
+                    "avg_close_rate_pct": avg_rate,
+                })
+
+            return web.json_response({"data": result, "total": len(result)})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 

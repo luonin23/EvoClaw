@@ -376,6 +376,8 @@ async def main():
                     # New position — clear any leftover tier state from prior cycle
                     if hasattr(trader, '_tier_executed'):
                         trader._tier_executed.pop(f"{sym}:{side}", None)
+                    # Record open event for open-side statistics
+                    db.record_open_event(sym, side, "open", result["average"], result["amount"], result["order_id"])
         else:
             log.info("All positions already exist, skipping open")
 
