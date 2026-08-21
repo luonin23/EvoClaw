@@ -831,6 +831,11 @@ class Trader:
                 amount=result["amount"], open_fee=open_fee,
                 max_slots=self.config.get('matrix_slots', 100),
             )
+            # CRITICAL: this is a NEW position (e.g. re-opened after full close).
+            # Clear any leftover tier_executed state from the previous cycle so the
+            # new position starts tier progression from scratch instead of being
+            # permanently skipped because the old position already reached tier 5.
+            self._tier_executed.pop(f"{symbol}:{side}", None)
         else:
             self._record_2027_failure(symbol)
             s = _throttle_warn.emit(f"do_open_fail:{symbol}:{side}")

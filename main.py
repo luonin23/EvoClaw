@@ -373,6 +373,9 @@ async def main():
                         open_fee=open_fee,
                         max_slots=int(cfg.get('matrix_slots', 100)),
                     )
+                    # New position — clear any leftover tier state from prior cycle
+                    if hasattr(trader, '_tier_executed'):
+                        trader._tier_executed.pop(f"{sym}:{side}", None)
         else:
             log.info("All positions already exist, skipping open")
 
