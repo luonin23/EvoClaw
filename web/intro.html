@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EvoClaw v2 -- 智能量化交易系统</title>
+<title>EvoClaw v2.2 -- 智能量化交易系统</title>
 <link rel="preconnect" href="https://fonts.loli.net">
 <link rel="preconnect" href="https://gstatic.loli.net" crossorigin>
 <link href="https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -442,7 +442,7 @@ body::after{
 .engine-card p{font-size:var(--font-base);color:var(--text-secondary);line-height:1.7}
 
 /* ============================================================
-   SECTION 5: NEW FEATURES v2.1
+   SECTION 5: NEW FEATURES v2.2
    ============================================================ */
 #new-features{
   background:var(--bg-elevated);
@@ -807,10 +807,6 @@ body::after{
 #bgParticles{
   position:fixed;inset:0;z-index:0;pointer-events:none;
 }
-/* Pipeline particle canvas */
-#pipelineParticles{
-  position:absolute;inset:0;pointer-events:none;z-index:1;
-}
 
 </style>
 </head>
@@ -824,7 +820,7 @@ body::after{
      ========================================================= -->
 <section class="section" id="hero">
   <div class="section-inner reveal-hero">
-    <div class="hero-logo reveal">EVOCLAW TERMINAL v2</div>
+    <div class="hero-logo reveal">EVOCLAW TERMINAL v2.2</div>
     <h1 class="hero-title reveal">
       <span class="t-evo">EVO</span><span class="t-claw">CLAW</span>
     </h1>
@@ -862,7 +858,7 @@ body::after{
       <div class="cap-card reveal">
         <div class="cap-card__icon i-accent">&#9671;</div>
         <h3>实时市场感知</h3>
-        <p>每秒扫描全市场持仓状态，实时计算盈亏比率、波动偏离、资金健康度。
+        <p>每 3 秒扫描全市场持仓状态，实时计算盈亏比率、波动偏离、资金健康度。
         比人类交易员快数百倍的反应速度，任何微小的盈利窗口都逃不过它的感知。</p>
       </div>
       <div class="cap-card reveal">
@@ -985,13 +981,13 @@ body::after{
 </section>
 
 <!-- =========================================================
-     SECTION 5: NEW FEATURES -- v2.1 Enhancements
+     SECTION 5: NEW FEATURES -- v2.2 Enhancements
      ========================================================= -->
 <section class="section section--half" id="new-features">
   <div class="section-inner">
     <p class="section-label reveal">What's New</p>
     <h2 class="section-heading reveal">
-      v2.1 <span class="hl-accent">全新升级</span>
+      v2.2 <span class="hl-accent">全新升级</span>
     </h2>
     <p class="section-subtitle reveal">
       不仅是交易引擎的迭代，更是工程体系的全面进化。
@@ -1047,6 +1043,18 @@ body::after{
         <p>should_stop_replenish() 统一检查所有开仓路径。
         价格不可获取时默认 STOP，从源头杜绝无限开仓安全漏洞。</p>
       </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-green">&#9776;</div>
+        <h4>单币数据汇总</h4>
+        <p>所有交易过的币种按多空分别汇总，开仓/平仓/剩余/盈亏/手续费/均盈利率，
+        12 列点击排序，一手掌控每个币种的完整交易画像。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-accent">&#9782;</div>
+        <h4>当日交易统计</h4>
+        <p>今日多空开仓、加仓、平仓次数与已实现盈亏独立统计。
+        筛选币种红绿标记持仓状态，10 秒实时刷新，全局行情一目了然。</p>
+      </div>
     </div>
   </div>
 </section>
@@ -1062,7 +1070,7 @@ body::after{
     </h2>
     <p class="section-subtitle reveal">
       不是冰冷的后台，而是直观的作战地图。
-      持仓热力图、盈亏趋势图、策略决策流图 -- 三合一可视化终端。
+      持仓热力图、盈利趋势图、单币数据汇总 -- 一站式数据指挥终端。
     </p>
     <div class="section-divider reveal"></div>
 
@@ -1130,11 +1138,11 @@ body::after{
         绿色是盈利的阵地，红色是待收复的失地，空白是等待部署的战位。
         HSL 连续热力图着色，盈亏幅度一目了然。</p>
         <ul class="dash-checklist">
-          <li>多空盈亏独立统计，策略效能实时评估</li>
-          <li>历史最高亏损追踪，风险边界心中有数</li>
+          <li>多空盈亏独立统计，当日开平仓实时追踪</li>
+          <li>单币数据汇总表，开仓/平仓/剩余/盈亏一键排序</li>
+          <li>盈利趋势 Canvas 图表，时/日/周/月四档呈现</li>
+          <li>筛选币种红绿标记，持仓状态一眼识别</li>
           <li>爆仓检测 + Top10 排行，极端风险即时预警</li>
-          <li>盈利趋势 Canvas 图表，长期表现清晰呈现</li>
-          <li>策略决策流图 SVG 可视化，执行链路透明</li>
         </ul>
       </div>
     </div>
@@ -1146,12 +1154,12 @@ body::after{
      ========================================================= -->
 <section class="section section--half" id="flow">
   <div class="section-inner">
-    <p class="section-label reveal">The Pipeline</p>
+    <p class="section-label reveal">How It Works</p>
     <h2 class="section-heading reveal">
       从选币到盈利，<span class="hl-green">全自动闭环</span>
     </h2>
     <p class="section-subtitle reveal" style="margin-left:auto;margin-right:auto">
-      配置一次，剩下的交给 EvoClaw。每秒一次的 tick 循环覆盖完整交易生命周期。
+      配置一次，剩下的交给 EvoClaw。每 3 秒一次的 tick 循环覆盖完整交易生命周期。
     </p>
     <div class="section-divider reveal" style="margin-left:auto;margin-right:auto"></div>
 
@@ -1169,7 +1177,7 @@ body::after{
       <div class="flow-step reveal">
         <div class="flow-circle">3</div>
         <h4>实时扫描</h4>
-        <p>每秒遍历全部持仓，计算盈亏、检测止盈止损条件、识别加仓与对平机会</p>
+        <p>每 3 秒遍历全部持仓，计算盈亏、检测止盈条件、识别加仓与对平机会</p>
       </div>
       <div class="flow-step reveal">
         <div class="flow-circle">4</div>
@@ -1251,7 +1259,7 @@ body::after{
      FOOTER
      ========================================================= -->
 <footer class="footer">
-  <p>EvoClaw v2.1 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
+  <p>EvoClaw v2.2 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
 </footer>
 
 <!-- =========================================================
