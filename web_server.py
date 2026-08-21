@@ -613,7 +613,11 @@ class WebServer:
 
             result = []
             seen = set()
-            all_keys = set(opens.keys()) | {f"{r[0]}:{r[1]}" for r in close_rows}
+            # Include current open positions so symbols with no close history yet
+            # (e.g. opened before the opens table existed) still appear with remaining qty.
+            all_keys = (set(opens.keys())
+                        | {f"{r[0]}:{r[1]}" for r in close_rows}
+                        | set(remaining_map.keys()))
             for key in all_keys:
                 symbol, side = key.split(":", 1)
                 if key in seen:
