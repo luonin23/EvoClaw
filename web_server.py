@@ -62,6 +62,20 @@ class WebServer:
         except Exception:
             return {}
 
+    def _build_held_side_map(self, all_positions: list[dict]) -> dict:
+        """Build {user_symbol: {'long': bool, 'short': bool}} from exchange positions."""
+        side_map = {}
+        for p in all_positions:
+            side = p.get("side")
+            if side not in ("long", "short"):
+                continue
+            sym = self.client.user_symbol(p.get("symbol", ""))
+            if not sym:
+                continue
+            entry = side_map.setdefault(sym, {"long": False, "short": False})
+            entry[side] = True
+        return side_map
+
     async def _cached_response(self, key, handler, request):
         """Return cached response if within TTL, otherwise call handler and cache.
         Caches only pure dict data to prevent memory leaks from Response objects."""
@@ -296,6 +310,7 @@ class WebServer:
                 "realtime_profit_rate": round(realtime_rate, 6),
                 "active_symbols": symbols,
                 "held_symbols": sorted({self.client.user_symbol(p["symbol"]) for p in all_positions}),
+                "held_side_map": self._build_held_side_map(all_positions),
                 "liquidation_event_count": liq_stats["event_count"],
                 "liquidation_total_pnl": liq_stats["total_pnl"],
                 "liquidation_pairs_count": liq_stats["pairs_count"],

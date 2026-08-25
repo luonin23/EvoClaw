@@ -285,6 +285,26 @@ body::after{
   background:rgba(255,71,87,0.08);
   border-color:rgba(255,71,87,0.2);color:var(--error);
 }
+/* 候选但当前无持仓 → 置灰（外框保留，字体灰） */
+.sym-tag.dim{
+  background:rgba(255,255,255,0.02);
+  border-color:var(--border-subtle);
+  color:var(--text-tertiary);
+  font-weight:400;
+}
+/* 候选且有持仓 → 高亮（双边持仓） */
+.sym-tag.held{
+  background:rgba(0,208,132,0.14);
+  border-color:rgba(0,208,132,0.4);
+  color:var(--accent);
+  font-weight:700;
+}
+/* 候选且仅单边持仓 → 虚线边框 + 弱化背景，表示对冲不完整 */
+.sym-tag.held.single{
+  background:rgba(0,208,132,0.06);
+  border-style:dashed;
+  font-weight:600;
+}
 
 .btn-row{display:flex;gap:var(--space-8);margin-top:var(--space-12);flex-wrap:wrap}
 .btn{
@@ -1212,20 +1232,41 @@ async function loadAccount() {
   if (symEl) {
     // held_symbols = all symbols with an open position (deduped)
     // active_symbols = symbols matching the current filter
+    // held_side_map = { symbol: {long, short} } for single/double-side detection
     const heldSet = new Set(d.held_symbols || []);
     const activeSet = new Set(d.active_symbols || []);
-    const allSymbols = Array.from(heldSet).sort();
+    const sideMap = d.held_side_map || {};
+    // Show all candidate symbols first, then held-but-not-candidate ones.
+    const allSymbols = Array.from(new Set([...(d.active_symbols || []), ...heldSet])).sort();
     const symKey = allSymbols.join(' ');
     if (symEl.dataset.symbols !== symKey) {
       symEl.dataset.symbols = symKey;
       if (allSymbols.length) {
         symEl.innerHTML = allSymbols.map(s => {
+          const held = heldSet.has(s);
           const inActive = activeSet.has(s);
-          return '<span class="sym-tag' + (inActive ? '' : ' red') + '" title="' +
-            (inActive ? '在筛选清单' : '持仓但不在筛选清单') + '">' + escapeHtml(s) + '</span>';
+          const sides = sideMap[s] || {};
+          const hasLong = !!sides.long;
+          const hasShort = !!sides.short;
+          let cls = 'sym-tag';
+          let title;
+          if (held && !inActive) {
+            cls += ' red';
+            title = '持仓但不在筛选清单（' + (hasLong && hasShort ? '多空' : hasLong ? '仅多' : '仅空') + '）';
+          } else if (held && hasLong && hasShort) {
+            cls += ' held';
+            title = '筛选中 + 多空双边持仓';
+          } else if (held && (hasLong || hasShort)) {
+            cls += ' held single';
+            title = '筛选中 + 单边持仓（' + (hasLong ? '仅多' : '仅空') + '）';
+          } else {
+            cls += ' dim';
+            title = '筛选候选，当前无持仓';
+          }
+          return '<span class="' + cls + '" title="' + title + '">' + escapeHtml(s) + '</span>';
         }).join(' ');
       } else {
-        symEl.innerHTML = '<span style="color:var(--text-muted)">无持仓币种</span>';
+        symEl.innerHTML = '<span style="color:var(--text-muted)">无筛选币种</span>';
       }
     }
     const countEl = document.getElementById('symCount');
