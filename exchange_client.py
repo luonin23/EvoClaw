@@ -88,6 +88,64 @@ class ExchangeClient:
             return True
         return False
 
+    @staticmethod
+    def _extract_order_price(order: dict) -> float | None:
+        """Extract fill price from a ccxt order dict, or None if absent.
+
+        Binance futures market orders returned by create_order() are often just
+        ACK responses with NO average/price/fill data — the real avg fill price
+        is only available via fetch_order()/queryOrder.
+        """
+        avg = order.get("average") or order.get("price")
+        if not avg:
+            info = order.get("info", {})
+            avg = info.get("avgPrice") or info.get("averagePrice")
+        if not avg:
+            cost = order.get("cost")
+            filled = order.get("filled")
+            if cost and filled and filled > 0:
+                avg = cost / filled
+        if not avg:
+            return None
+        try:
+            return float(avg)
+        except (TypeError, ValueError):
+            return None
+
+    async def _resolve_fill_price(self, order: dict, symbol: str) -> float:
+        """Best-effort resolution of actual fill price for an order.
+
+        Order of preference:
+          1. fill price embedded in the order response
+          2. fetch_order() to query the real avgPrice (authoritative)
+          3. live fetch_ticker() (realtime, but not the exact fill)
+          4. last cached price
+        """
+        avg = self._extract_order_price(order)
+        if avg:
+            return avg
+        oid = str(order.get("id", ""))
+        if oid:
+            try:
+                filled_order = await self._safe_call(
+                    self.exchange.fetch_order(oid, symbol), timeout=10
+                )
+                avg = self._extract_order_price(filled_order)
+                if avg:
+                    return avg
+            except Exception:
+                pass
+        # Fallback: live ticker (better than stale refresh cache)
+        try:
+            ticker = await self._safe_call(self.exchange.fetch_ticker(symbol), timeout=10)
+            last = float(ticker.get("last", 0) or 0)
+            if last > 0:
+                return last
+        except Exception:
+            pass
+        # Last resort: refresh_prices cache
+        return float(self._prices.get(symbol, 0) or 0)
+
     async def _safe_call(self, coro, timeout=10):
         """Wrap ccxt call with hard timeout to prevent event loop blocking."""
         if self._closed:
@@ -346,32 +404,7 @@ class ExchangeClient:
                 params={"positionSide": "LONG" if side == "buy" else "SHORT"},
             ), timeout=15)
             log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
-            avg = order.get("average") or order.get("price")
-            if not avg:
-                info = order.get("info", {})
-                avg = info.get("avgPrice") or info.get("averagePrice")
-            if not avg:
-                cost = order.get("cost")
-                filled = order.get("filled")
-                if cost and filled and filled > 0:
-                    avg = cost / filled
-            if not avg:
-                # Fallback to lastPrice from market info cache
-                market = self.market_info.get(resolved, {})
-                price_str = market.get("info", {}).get("lastPrice", "0")
-                if price_str and float(price_str) > 0:
-                    avg = float(price_str)
-            if not avg:
-                # Last resort: fetch live ticker
-                try:
-                    ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
-                    last = float(ticker.get("last", 0) or 0)
-                    if last > 0:
-                        avg = last
-                except Exception:
-                    pass
-            if not avg:
-                avg = self._prices.get(resolved, 0)
+            avg = await self._resolve_fill_price(order, resolved)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -418,32 +451,7 @@ class ExchangeClient:
                 params={"positionSide": side.upper()},
             ), timeout=15)
             log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
-            avg = order.get("average") or order.get("price")
-            if not avg:
-                info = order.get("info", {})
-                avg = info.get("avgPrice") or info.get("averagePrice")
-            if not avg:
-                cost = order.get("cost")
-                filled = order.get("filled")
-                if cost and filled and filled > 0:
-                    avg = cost / filled
-            if not avg:
-                # Fallback to lastPrice from market info cache
-                market = self.market_info.get(resolved, {})
-                price_str = market.get("info", {}).get("lastPrice", "0")
-                if price_str and float(price_str) > 0:
-                    avg = float(price_str)
-            if not avg:
-                # Last resort: fetch live ticker
-                try:
-                    ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
-                    last = float(ticker.get("last", 0) or 0)
-                    if last > 0:
-                        avg = last
-                except Exception:
-                    pass
-            if not avg:
-                avg = self._prices.get(resolved, 0)
+            avg = await self._resolve_fill_price(order, resolved)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -487,32 +495,7 @@ class ExchangeClient:
                 params={"positionSide": side.upper()},
             ), timeout=15)
             log.info(f"Close {side} {resolved} {contracts} -> {order.get('id')}")
-            avg = order.get("average") or order.get("price")
-            if not avg:
-                info = order.get("info", {})
-                avg = info.get("avgPrice") or info.get("averagePrice")
-            if not avg:
-                cost = order.get("cost")
-                filled = order.get("filled")
-                if cost and filled and filled > 0:
-                    avg = cost / filled
-            if not avg:
-                # Fallback to lastPrice from market info cache (updated by refresh_prices)
-                market = self.market_info.get(resolved, {})
-                price_str = market.get("info", {}).get("lastPrice", "0")
-                if price_str and float(price_str) > 0:
-                    avg = float(price_str)
-            if not avg:
-                # Last resort: fetch live ticker so exit price is never 0
-                try:
-                    ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
-                    last = float(ticker.get("last", 0) or 0)
-                    if last > 0:
-                        avg = last
-                except Exception:
-                    pass
-            if not avg:
-                avg = self._prices.get(resolved, 0)
+            avg = await self._resolve_fill_price(order, resolved)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
