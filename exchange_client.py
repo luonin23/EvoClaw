@@ -72,6 +72,20 @@ class ExchangeClient:
         self._blocked_until: dict[str, float] = {}
         self._block_count: dict[str, int] = {}
 
+        # === Delisting watch state ===
+        # market_status: exchange symbol -> status from exchangeInfo
+        #   (TRADING / SETTLING / BREAK / CLOSE_DELIVERY / PENDING_TRADING ...)
+        # market_delivery_ms: exchange symbol -> scheduled delivery/settlement ms
+        self.market_status: dict[str, str] = {}
+        self.market_delivery_ms: dict[str, int] = {}
+        self._market_status_ts = 0.0
+        self._market_status_ttl = 300.0   # re-check exchangeInfo every 5 min
+        # Upcoming delist schedule from SAPI (spot/margin) — advance notice.
+        self._schedule_cache: list[dict] = []
+        self._schedule_ts = 0.0
+        self._schedule_ttl = 21600.0      # re-fetch schedule every 6 h
+        self.delist_schedule_bases: set[str] = set()
+
     def _mark_blocked(self, key: str) -> None:
         """Mark a symbol+side as blocked due to -2027, with escalating cooldown."""
         self._block_count[key] = self._block_count.get(key, 0) + 1
@@ -341,6 +355,146 @@ class ExchangeClient:
         except Exception as e:
             log.warning(f"fetch_liquidations failed: {e}")
             return []
+
+    # ===== Delisting watch =====
+
+    async def refresh_market_statuses(self, force: bool = False) -> bool:
+        """Refresh the per-symbol contract status map from exchangeInfo.
+
+        Binance does not expose a USDT-M *futures* delist-schedule endpoint
+        anymore (fapi/v1/futures/data/delist-schedule returns 404), so the
+        reliable realtime signal we poll is the contract `status` field:
+        a normal perp is TRADING; when Binance stops trading before a
+        settlement it flips to SETTLING (and after a permanent delisting the
+        symbol disappears from exchangeInfo entirely).  TTL ~5 min.
+        """
+        now = time.monotonic()
+        if not force and self._market_status_ts and (now - self._market_status_ts) < self._market_status_ttl:
+            return False
+        try:
+            info = await self._safe_call(self.exchange.fapiPublicGetExchangeInfo(), timeout=20)
+        except Exception as e:
+            log.warning(f"refresh_market_statuses failed: {e}")
+            return False
+        status_map = {}
+        delivery_map = {}
+        for s in info.get("symbols", []):
+            ct = s.get("contractType", "")
+            if ct in ("PERPETUAL", "TRADIFI_PERPETUAL"):
+                sym = s.get("symbol", "")
+                if not sym:
+                    continue
+                status_map[sym] = s.get("status", "")
+                d = s.get("deliveryDate")
+                try:
+                    delivery_map[sym] = int(d) if d else 0
+                except (TypeError, ValueError):
+                    delivery_map[sym] = 0
+        self.market_status = status_map
+        self.market_delivery_ms = delivery_map
+        self._market_status_ts = now
+        return True
+
+    def get_market_status(self, symbol: str) -> str:
+        """Contract status for a user symbol ('' if unknown / not refreshed)."""
+        return self.market_status.get(symbol, "")
+
+    def get_market_delivery_ms(self, symbol: str) -> int:
+        return self.market_delivery_ms.get(symbol, 0)
+
+    @staticmethod
+    def _base_asset(symbol: str) -> str:
+        """Strip the quote currency to get the underlying base asset."""
+        sym = symbol.split(":")[0]
+        for q in ("USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH"):
+            if sym.endswith(q) and len(sym) > len(q):
+                return sym[:-len(q)]
+        return sym
+
+    async def fetch_delist_schedule(self) -> list[dict]:
+        """Fetch upcoming delist schedule from Binance SAPI (spot + margin).
+
+        There is no perp-specific feed, but when Binance delists a token it
+        normally removes the coin from spot/margin AND settles its USDⓈ-M
+        perpetual around the same time — so the spot/margin schedule works as
+        advance notice for the underlying base asset.  Cached for 6 h.
+        """
+        now = time.monotonic()
+        if self._schedule_ts and (now - self._schedule_ts) < self._schedule_ttl:
+            return self._schedule_cache
+        entries: list[dict] = []
+        ok = False
+        try:
+            for method, market_type in (("sapiGetSpotDelistSchedule", "spot"),
+                                        ("sapiGetMarginDelistSchedule", "margin")):
+                fn = getattr(self.exchange, method, None)
+                if not fn:
+                    continue
+                raw = await self._safe_call(fn(), timeout=20)
+                if not isinstance(raw, list):
+                    continue
+                for s in raw:
+                    sym = s.get("symbol", "")
+                    if not sym:
+                        continue
+                    base = self._base_asset(sym)
+                    dt = s.get("delistTime")
+                    try:
+                        ms = int(dt) if dt else 0
+                    except (TypeError, ValueError):
+                        ms = 0
+                    entries.append({
+                        "market": market_type,
+                        "symbol": sym,
+                        "base": base,
+                        "delist_time": datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat() if ms else "",
+                        "delist_ms": ms,
+                        "status": s.get("delistStatus", ""),
+                    })
+            ok = True
+        except Exception as e:
+            log.warning(f"fetch_delist_schedule failed: {e}")
+        if ok:
+            self._schedule_cache = entries
+            self._schedule_ts = now
+            self.delist_schedule_bases = {e["base"] for e in entries}
+            if entries:
+                log.info(f"Delist schedule: {len(entries)} entries across {len(self.delist_schedule_bases)} base assets")
+        return self._schedule_cache
+
+    def get_delist_schedule(self) -> list[dict]:
+        """Cached schedule entries (may be stale up to the 6 h TTL)."""
+        return self._schedule_cache or []
+
+    def delist_schedule_hit(self, symbol: str) -> dict | None:
+        """Return the schedule entry whose base asset matches symbol, if any."""
+        base = self._base_asset(symbol)
+        for e in self.get_delist_schedule():
+            if e.get("base") == base:
+                return e
+        return None
+
+    async def fetch_user_trades(self, symbol: str, since_ms: int) -> list:
+        """Fetch user trades for a symbol since since_ms (Binance id format).
+
+        Used to reconcile a delisting settlement with the authoritative
+        realized PnL.  Returns [] if the call fails (e.g. symbol fully
+        delisted and history pruned).
+        """
+        try:
+            return await self._safe_call(self.exchange.fapiPrivateGetUserTrades({
+                "symbol": symbol,
+                "startTime": int(since_ms),
+                "limit": 1000,
+            }), timeout=20)
+        except Exception as e:
+            log.warning(f"fetch_user_trades {symbol}: {e}")
+            return []
+
+    def get_last_price(self, symbol: str) -> float:
+        """Last cached price for a symbol (0 if never seen)."""
+        resolved = self.resolve_symbol(symbol)
+        return float(self._prices.get(resolved, 0) or 0)
 
     async def get_positions(self, symbols: list = None) -> list[dict]:
         resolved = [self.resolve_symbol(s) for s in symbols] if symbols else None

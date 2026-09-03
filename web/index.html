@@ -266,6 +266,33 @@ body::after{
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;letter-spacing:0.02em;
 }
 
+/* Clickable "delisted coins" card inside the liquidation tile */
+.delist-card{
+  display:flex;align-items:center;justify-content:space-between;gap:var(--space-12);
+  margin-top:var(--space-12);padding:var(--space-12) var(--space-16);
+  background:linear-gradient(90deg, rgba(0,208,132,0.05), rgba(0,208,132,0.015));
+  border:1px solid rgba(0,208,132,0.16);border-radius:12px;
+  cursor:pointer;text-decoration:none;color:var(--text-primary);
+  transition:all 0.2s;position:relative;overflow:hidden;
+}
+.delist-card:hover{
+  background:rgba(0,208,132,0.09);border-color:rgba(0,208,132,0.38);
+  box-shadow:0 0 24px rgba(0,208,132,0.07);transform:translateY(-1px);
+}
+.delist-card::after{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg, transparent, var(--border-strong), transparent);
+  opacity:0;transition:opacity 0.3s;
+}
+.delist-card:hover::after{opacity:0.6}
+.delist-card-left{display:flex;align-items:center;gap:var(--space-12);min-width:0}
+.delist-card .dl-meta{display:flex;flex-direction:column;gap:2px;min-width:0}
+.delist-card .dl-count{font-size:clamp(17px,2.4vw,24px);font-weight:700;font-family:var(--font-mono);color:var(--accent);line-height:1;letter-spacing:-0.02em}
+.delist-card .dl-count-unit{font-size:var(--font-xs);color:var(--text-tertiary);margin-left:5px;font-weight:500}
+.delist-card-right{display:flex;align-items:center;gap:var(--space-8);color:var(--text-secondary);font-size:var(--font-sm);white-space:nowrap;min-width:0}
+.delist-card-right .dl-hint{color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis}
+.delist-card-right i{font-size:15px;color:var(--accent);flex-shrink:0}
+
 .chart-wrap{position:relative;width:100%;height:220px}
 #profitChart{width:100%;height:220px;display:block;animation:chartEnter 0.6s ease-out}
 @keyframes chartEnter{from{opacity:0;transform:scaleY(0.95)}to{opacity:1;transform:scaleY(1)}}
@@ -752,6 +779,20 @@ body::after{
         <div class="stat-cell"><div class="stat-value" id="liqPairsCount">-</div><div class="stat-label">强平对数量</div></div>
         <div class="stat-cell"><div class="stat-value" id="liqTotalQty">-</div><div class="stat-label">强平总张数</div></div>
       </div>
+      <!-- Clickable delisted-coins summary card (opens hidden detail page) -->
+      <a class="delist-card" href="/delist.html" target="_blank" title="查看下架币种平仓/结算明细">
+        <div class="delist-card-left">
+          <div class="icon-wrap" style="background:rgba(0,208,132,0.1);border-color:rgba(0,208,132,0.2);color:var(--accent)"><i class="ph ph-archive"></i></div>
+          <div class="dl-meta">
+            <div class="stat-label">下架币种数量</div>
+            <div><span class="dl-count" id="delistCoinCount">-</span><span class="dl-count-unit">个币种</span></div>
+          </div>
+        </div>
+        <div class="delist-card-right">
+          <span class="dl-hint" id="delistHint">加载中...</span>
+          <i class="ph ph-arrow-square-out"></i>
+        </div>
+      </a>
       <!-- Top10 Table -->
       <table class="liq-table" id="liqTop10">
         <thead><tr><th>#</th><th>交易对</th><th>方向</th><th>平仓价</th><th>数量</th><th>PnL</th></tr></thead>
@@ -1868,6 +1909,22 @@ async function loadLiquidations() {
   document.getElementById('liqUpdateTime').textContent = new Date().toLocaleTimeString();
 }
 
+async function loadDelistings() {
+  const d = await api('/api/delistings');
+  if (!d || !d.stats) return;
+  const el = document.getElementById('delistCoinCount');
+  if (el) el.textContent = d.stats.coin_count || 0;
+  const hint = document.getElementById('delistHint');
+  if (hint) {
+    const st = d.stats;
+    if ((st.record_count || 0) > 0) {
+      hint.textContent = st.record_count + ' 笔记录 · 盈亏 ' + fmtP(st.total_pnl || 0) + ' U';
+    } else {
+      hint.textContent = '暂无记录 · 自动检测下架自动平仓';
+    }
+  }
+}
+
 async function loadDailyTrades() {
   const d = await api('/api/daily-trades');
   if (!d) return;
@@ -1988,7 +2045,7 @@ async function refresh() {
   try {
     const tasks = [];
     if (currentTab === 'dashboard') {
-      tasks.push(loadAccount(), loadStats(), loadProfitTrend(), loadLiquidations(), loadDailyTrades());
+      tasks.push(loadAccount(), loadStats(), loadProfitTrend(), loadLiquidations(), loadDelistings(), loadDailyTrades());
     } else if (currentTab === 'matrix') {
       const posData = await api('/api/positions-map');
       tasks.push(loadPositionsMap(posData), loadFullMatrix(posData));
@@ -2111,6 +2168,7 @@ async function loadDashboardView() {
   await loadAccount();
   await loadStats();
   loadLiquidations();
+  loadDelistings();
   _prevStats = JSON.parse(JSON.stringify(window._lastStats || {}));
   _prevAccount = JSON.parse(JSON.stringify(window._lastAccount || {}));
 }

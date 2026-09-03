@@ -28,6 +28,7 @@ class WebServer:
         self.app = web.Application()
         self.app.router.add_get("/", self.handle_index)
         self.app.router.add_get("/intro.html", self.handle_intro)
+        self.app.router.add_get("/delist.html", self.handle_delist)
         self.app.router.add_get("/api/config", self.api_config_get)
         self.app.router.add_post("/api/config", self.api_config_set)
         self.app.router.add_get("/api/account", self.api_account_cached)
@@ -40,6 +41,7 @@ class WebServer:
         self.app.router.add_get("/api/system", self.api_system)
         self.app.router.add_get("/api/profit-trend", self.api_profit_trend_cached)
         self.app.router.add_get("/api/liquidations", self.api_liquidations)
+        self.app.router.add_get("/api/delistings", self.api_delistings)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
         self.app.router.add_get("/web/config.json", self.handle_web_config)
         self.app.router.add_get("/api/web-config", self.api_web_config_get)
@@ -139,6 +141,16 @@ class WebServer:
 
     async def handle_intro(self, request):
         web_path = os.path.join(os.path.dirname(__file__), "web", "intro.html")
+        content = _get_static(web_path)
+        return web.Response(text=content, content_type="text/html", headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
+
+    async def handle_delist(self, request):
+        """Hidden detail page for the delisting ledger (not linked in main nav)."""
+        web_path = os.path.join(os.path.dirname(__file__), "web", "delist.html")
         content = _get_static(web_path)
         return web.Response(text=content, content_type="text/html", headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -702,6 +714,23 @@ class WebServer:
                 "pairs_count": stats["pairs_count"],
                 "total_qty": stats["total_qty"],
                 "top10": top10,
+            })
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_delistings(self, request):
+        """Delisting ledger: summary stats + paginated records."""
+        try:
+            limit = min(int(request.query.get("limit", "50")), 200)
+            offset = max(int(request.query.get("offset", "0")), 0)
+            stats = await self._db_sync(self.db.get_delisting_summary)
+            rows, total = await self._db_sync(self.db.get_delistings, limit, offset)
+            return web.json_response({
+                "stats": stats,
+                "list": rows,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
             })
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)

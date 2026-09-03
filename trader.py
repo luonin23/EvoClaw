@@ -4,7 +4,7 @@ import logging
 import math
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from exchange_client import _throttle_warn
 
@@ -41,6 +41,10 @@ class Trader:
 
         # === Phase 2: Heartbeat ===
         self._last_heartbeat_tick: int = 0
+
+        # === Delisting watch ===
+        self._delist_attempt: dict[str, float] = {}   # symbol:side -> last close attempt (monotonic)
+        self._delist_cooldown = 120                   # 2 min between close attempts per symbol+side
 
         # Load persisted tier states from DB (survives restarts)
         try:
@@ -243,6 +247,11 @@ class Trader:
         if not candidate_symbols:
             return
 
+        # === Delisting watch: refresh status/schedule (no-op inside cache TTL)
+        # so every close & replenish step below can skip settling/removed coins.
+        await self.client.refresh_market_statuses()
+        await self.client.fetch_delist_schedule()
+
         # === Phase 2: Price refresh with staleness detection ===
         try:
             await self.client.refresh_prices(candidate_symbols)
@@ -288,6 +297,13 @@ class Trader:
 
         # STEP 1.5: Liquidation detection — find positions that vanished from exchange
         await self._detect_liquidations(all_positions)
+
+        # STEP 1.6: Delisting detection — proactively close positions on coins
+        # that are being delisted/settled before Binance force-settles them.
+        if await self._check_delisting(all_positions):
+            did_change = True
+            all_positions = await self.client.get_positions()
+            exchange_positions = [p for p in all_positions if self.client.user_symbol(p["symbol"]) in candidate_symbols]
 
         # STEP 2: All-close
         if cfg.get("enable_all_close", False):
@@ -361,7 +377,7 @@ class Trader:
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])
             pos_side = p.get("side")
-            if sym in skip:
+            if sym in skip or self._delist_risk_symbol(sym):
                 continue
 
             pnl = float(p.get("unrealizedPnl", 0) or 0)
@@ -420,6 +436,10 @@ class Trader:
         if not tiers:
             threshold = cfg.get("profit_threshold", 0.002)
             tiers = [{"threshold": threshold, "close_pct": 1.0}]
+
+        # Delisting watch owns exits of settling coins — don't partial-close here.
+        if self._delist_risk_symbol(symbol):
+            return False
 
         unrealized_pnl = float(position.get("unrealizedPnl", 0) or 0)
         entry_price = float(position.get("entryPrice", 0) or 0)
@@ -503,6 +523,8 @@ class Trader:
         for sym, pair in by_symbol.items():
             if not pair or "long" not in pair or "short" not in pair:
                 continue
+            if self._delist_risk_symbol(sym):
+                continue
 
             rates = []
             entry_map = {}
@@ -567,7 +589,7 @@ class Trader:
         executed = False
         for p in all_positions:
             sym = self.client.user_symbol(p["symbol"])
-            if sym in skip:
+            if sym in skip or self._delist_risk_symbol(sym):
                 continue
 
             # === Phase 1: Check -2027 circuit breaker ===
@@ -661,6 +683,8 @@ class Trader:
             key = f"{sym}:{side}"
             if key in current or self.db.has_open(sym, side) or self._is_skipped_2027(sym):
                 return False
+            if self._delist_risk_symbol(sym):
+                return False
             if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
                 return False
             return True
@@ -719,7 +743,7 @@ class Trader:
         tasks = []
         skip = set(cfg.get('skip_symbols', []))
         for sym in symbols:
-            if sym in skip:
+            if sym in skip or self._delist_risk_symbol(sym):
                 continue
             for side in sides:
                 if max_new is not None and len(tasks) >= max_new:
@@ -762,10 +786,12 @@ class Trader:
             self._liq_cache = await self.client.fetch_liquidations(since_minutes=10)
             self._last_liq_fetch_ts = now_ts
 
-        # Build lookup from force orders: (symbol, side) -> liquidation info
+        # Build lookup from force orders: (symbol, side) -> liquidation info.
+        # fetch_liquidations() returns side in upper case ("LONG"/"SHORT") while
+        # DB positions use lower case — normalize so vanish keys actually match.
         force_map = {}
         for fo in self._liq_cache:
-            key = f"{fo['symbol']}:{fo['side']}"
+            key = f"{fo['symbol']}:{fo['side'].lower()}"
             # Keep the earliest (or most recent) match
             if key not in force_map:
                 force_map[key] = fo
@@ -812,11 +838,225 @@ class Trader:
                     f"entry={entry_price:.6f} liq_price={liq_price:.6f} pnl={pnl:.4f}"
                 )
             else:
-                # Vanished from exchange but no force order found — could be
-                # a stale DB entry or exchange API inconsistency. Clean up.
-                log.warning(f"VANISHED POSITION (not in force orders): {sym} {side}, removing from DB")
-                self.db.remove_open(sym, side)
+                # Vanished from exchange but no force order found. Could be a
+                # stale DB entry / API inconsistency — OR the coin was delisted
+                # and Binance settled the position outside the force-order feed.
+                # Try to classify it as a delisting settlement first.
+                recorded = await self._handle_vanished_settlement(key, sym, side, db_pos, entry_price, amount)
+                if not recorded:
+                    log.warning(f"VANISHED POSITION (not in force orders): {sym} {side}, removing from DB")
+                    self.db.remove_open(sym, side)
                 self._system_pos_map.pop(key, None)
+
+    async def _handle_vanished_settlement(self, key: str, sym: str, side: str, db_pos: dict | None,
+                                          entry_price: float, amount: float) -> bool:
+        """When a DB position disappears with no force order, check whether the
+        symbol is being delisted/settled.  If so, reconcile the settlement PnL
+        against Binance userTrades (authoritative realizedPnl) and record a
+        'settled' entry in the delisting ledger so statistics stay complete.
+
+        Returns True when the position was handled as a delisting settlement.
+        """
+        await self.client.refresh_market_statuses()
+        await self.client.fetch_delist_schedule()
+        if not self._delist_risk_symbol(sym):
+            return False
+
+        open_time = db_pos.get("entry_time", "") if db_pos else ""
+        since_dt = None
+        if open_time:
+            try:
+                since_dt = datetime.fromisoformat(open_time.replace("Z", "+00:00"))
+                if since_dt.tzinfo is None:
+                    since_dt = since_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                since_dt = None
+        if since_dt is None:
+            since_dt = datetime.now(timezone.utc) - timedelta(hours=24)
+        # Guard: don't re-record a settlement that was already booked recently.
+        if self.db.has_delisting_recent(sym, side, since_iso=(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()):
+            self.db.remove_open(sym, side)
+            return True
+
+        since_ms = int(since_dt.timestamp() * 1000)
+        trades_rows = await self.client.fetch_user_trades(sym, since_ms)
+        total_real = 0.0
+        for t in trades_rows:
+            ps = (t.get("positionSide") or "").upper()
+            if ps == side.upper():
+                total_real += float(t.get("realizedPnl", 0) or 0)
+        own_pnl = self.db.sum_trades_pnl(sym, side, since_dt.isoformat())
+        market = self.client.get_market_info(sym)
+        cs = float(market.get("contractSize", 1) or 1)
+        position_value = self._position_value(entry_price, amount, cs)
+        pnl = total_real - own_pnl
+        exit_price = 0.0
+        if amount > 0 and cs > 0 and abs(pnl) > 1e-12:
+            delta = pnl / (amount * cs)
+            exit_price = entry_price + (delta if side == "long" else -delta)
+        if exit_price <= 0:
+            # No authoritative figure — fall back to last known price so the
+            # ledger row still has a close price (best-effort).
+            last = self.client.get_last_price(sym)
+            if last and last > 0:
+                exit_price = last
+                pnl = (exit_price - entry_price) * amount * cs if side == "long" else (entry_price - exit_price) * amount * cs
+            else:
+                exit_price = entry_price
+                pnl = 0.0
+        pnl_rate = self._pnl_rate(pnl, position_value) if position_value > 0 else 0
+        fee = exit_price * amount * cs * 0.0005
+        delist_time = await self._delist_schedule_time(sym)
+        await self._record_delisting(
+            symbol=sym, side=side, entry_price=entry_price, exit_price=exit_price,
+            amount=amount, contract_size=cs, position_value=position_value,
+            pnl=pnl, pnl_rate=pnl_rate, fee=fee, source="settled",
+            delist_time=delist_time, open_time=open_time,
+        )
+        self.db.remove_open(sym, side)
+        log.warning(
+            f"DELIST SETTLED {sym} {side}: qty={amount} entry={entry_price:.6f} "
+            f"exit={exit_price:.6f} pnl={pnl:.4f} source=settled"
+        )
+        return True
+
+    # ========== Delisting handling ==========
+
+    def _delist_risk_symbol(self, symbol: str) -> bool:
+        """True when a symbol is (or is about to be) delisted/settled.
+
+        Signals, cheapest first:
+          1. The underlying base appears on Binance's spot/margin delist
+             schedule — advance notice (Binance normally settles the USDⓈ-M
+             perp at the same time as the spot/margin delisting).
+          2. The contract status (fresh exchangeInfo snapshot) left TRADING —
+             Binance sets SETTLING when trading stops before settlement.
+          3. The symbol is absent from the latest exchangeInfo entirely —
+             permanently delisted/removed (only trusted once a snapshot loaded).
+        """
+        if self.client.delist_schedule_hit(symbol):
+            return True
+        status = self.client.get_market_status(symbol)
+        if status:
+            return status != "TRADING"
+        # Absent from the current exchangeInfo snapshot → removed from market.
+        # market_status is only trusted once a refresh has succeeded; before the
+        # first refresh market_status is empty and we treat the coin as normal.
+        if self.client.market_status:
+            return True
+        return False
+
+    async def _delist_schedule_time(self, symbol: str) -> str:
+        """Best available scheduled delist/settlement time for the ledger."""
+        hit = self.client.delist_schedule_hit(symbol)
+        if hit and hit.get("delist_time"):
+            return hit["delist_time"]
+        ms = self.client.get_market_delivery_ms(symbol)
+        if ms:
+            try:
+                return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+        return datetime.now(timezone.utc).isoformat()
+
+    async def _record_delisting(self, *, symbol: str, side: str, entry_price: float,
+                                exit_price: float, amount: float, contract_size: float,
+                                position_value: float, pnl: float, pnl_rate: float,
+                                fee: float, source: str, delist_time: str, open_time: str = ""):
+        """Write a row to the dedicated delisting ledger AND to the trades table
+        (type='delist') so aggregate PnL statistics remain complete."""
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            self.db.record_delisting({
+                "symbol": symbol, "side": side,
+                "delist_time": delist_time, "close_time": now,
+                "entry_price": entry_price, "exit_price": exit_price,
+                "amount": amount, "contract_size": contract_size,
+                "position_value": position_value,
+                "pnl": pnl, "pnl_rate": pnl_rate, "fee": fee, "source": source,
+            })
+        except Exception as e:
+            log.error(f"record_delisting failed: {e}")
+        try:
+            self.db.insert_trade({
+                "symbol": symbol, "side": side, "type": "delist",
+                "open_time": open_time, "close_time": now,
+                "entry_price": entry_price, "exit_price": exit_price,
+                "amount": amount, "pnl": pnl, "pnl_rate": pnl_rate, "fee": fee,
+            })
+        except Exception as e:
+            log.error(f"record delist trade failed: {e}")
+
+    async def _check_delisting(self, all_positions: list[dict]) -> bool:
+        """Proactively close positions on coins that are being delisted/settled.
+
+        Binance offers no USDT-M delist-schedule feed (the documented
+        /fapi/v1/futures/data/delist-schedule endpoint no longer exists), so we
+        combine two realtime signals:
+          1. spot/margin delist schedule (advance notice for the underlying);
+          2. the contract's exchange status leaving TRADING.
+        Either one while we still hold a position triggers a full market close,
+        booked as source='proactive' (preferred over a forced settlement whose
+        exit price we cannot control).
+        """
+        cfg = self._get_config()
+        if not cfg.get("enable_delist_close", True):
+            return False
+        skip = set(cfg.get("skip_symbols", []))
+        await self.client.refresh_market_statuses()
+        await self.client.fetch_delist_schedule()
+        did = False
+        for p in all_positions:
+            sym = self.client.user_symbol(p.get("symbol", ""))
+            pos_side = p.get("side")
+            if not sym or pos_side not in ("long", "short"):
+                continue
+            if sym in skip or self._is_skipped_2027(sym):
+                continue
+            if not self._delist_risk_symbol(sym):
+                continue
+            key = f"{sym}:{pos_side}"
+            now = time.monotonic()
+            if now - self._delist_attempt.get(key, 0) < self._delist_cooldown:
+                continue
+            contracts = float(p.get("contracts", 0) or 0)
+            if contracts <= 0:
+                continue
+            status = self.client.get_market_status(sym)
+            log.warning(
+                f"DELIST CLOSE {sym} {pos_side}: status={status or 'scheduled'} "
+                f"contracts={contracts} — closing to avoid forced settlement"
+            )
+            result = await self.client.close_position(sym, pos_side, contracts)
+            self._delist_attempt[key] = time.monotonic()
+            if not result:
+                continue
+            did = True
+            sp = self._system_pos_map.get(key)
+            entry_price = float(sp["entry_price"]) if sp and sp.get("entry_price") else float(p.get("entryPrice", 0) or 0)
+            open_time = sp.get("entry_time", "") if sp else ""
+            market = self.client.get_market_info(sym)
+            cs = float(market.get("contractSize", 1) or 1)
+            exit_price = float(result.get("average", 0) or 0)
+            raw_pnl = float(result.get("closedPnL", 0) or 0)
+            if raw_pnl == 0 and exit_price > 0 and entry_price > 0:
+                raw_pnl = (exit_price - entry_price) * contracts * cs if pos_side == "long" else (entry_price - exit_price) * contracts * cs
+            position_value = self._position_value(entry_price, contracts, cs)
+            pnl_rate = self._pnl_rate(raw_pnl, position_value) if position_value > 0 else 0
+            close_fee = exit_price * contracts * cs * 0.0005
+            delist_time = await self._delist_schedule_time(sym)
+            # Records BOTH the dedicated ledger row AND a trades-table entry
+            # (type='delist') so aggregate PnL statistics stay complete.
+            await self._record_delisting(
+                symbol=sym, side=pos_side, entry_price=entry_price, exit_price=exit_price,
+                amount=contracts, contract_size=cs, position_value=position_value,
+                pnl=raw_pnl, pnl_rate=pnl_rate, fee=close_fee, source="proactive",
+                delist_time=delist_time, open_time=open_time,
+            )
+            self.db.remove_open(sym, pos_side)
+            self._system_pos_map.pop(key, None)
+            self._tier_executed.pop(key, None)
+        return did
 
     async def _do_open(self, symbol: str, open_side: str, side: str):
         if self._is_skipped_2027(symbol):

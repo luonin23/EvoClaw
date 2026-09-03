@@ -59,6 +59,7 @@ DEFAULT_CONFIG = {
     "margin_call_multiplier": 2,
     "enable_single_pair_close": True,
     "pair_close_threshold": 0.002,
+    "enable_delist_close": True,
     "skip_symbols": []
 }
 
@@ -198,6 +199,13 @@ async def main():
     except Exception as e:
         log.warning(f"load_markets() failed (will retry on next API call): {e}")
         # Don't crash — the exchange will lazy-load markets on first use
+    # Delisting watch: pull a fresh contract-status snapshot so startup logic
+    # and the first tick can already skip/settle coins that left TRADING.
+    try:
+        await client.refresh_market_statuses()
+        await client.fetch_delist_schedule()
+    except Exception as e:
+        log.warning(f"Delisting intel refresh failed (non-fatal): {e}")
 
     # Backfill historical liquidations (last 7 days)
     try:
@@ -234,19 +242,23 @@ async def main():
                 ex_map[f"{sym}:{side}"] = float(p.get("contracts", 0) or 0)
 
             repaired = 0
-            removed = 0
+            pending = 0
             for sp in db_positions:
                 key = f"{sp['symbol']}:{sp['side']}"
                 ex_amt = ex_map.get(key)
                 if ex_amt is None or ex_amt <= 0:
-                    db.remove_open(sp['symbol'], sp['side'])
-                    removed += 1
+                    # Do NOT remove here — a vanished position may be a delisting
+                    # settlement that happened while we were down. The trader's
+                    # first tick runs _detect_liquidations, which classifies it
+                    # (records delisting settlements / force-order liquidations,
+                    # or cleans up genuinely stale entries).
+                    pending += 1
                 elif abs(sp['amount'] - ex_amt) > 1:
                     db.update_open_amount(sp['symbol'], sp['side'], ex_amt)
                     repaired += 1
 
-            if repaired > 0 or removed > 0:
-                log.info(f"DB repair: {repaired} amounts synced, {removed} stale entries removed")
+            if repaired > 0 or pending > 0:
+                log.info(f"DB repair: {repaired} amounts synced, {pending} vanished entries deferred to first tick detector")
     except Exception as e:
         log.warning(f"DB repair failed (non-fatal): {e}")
 
@@ -340,6 +352,10 @@ async def main():
             max_new = max_count - len(positions) if max_count > 0 else None
             open_tasks = []
             for sym in symbols:
+                # Don't open positions on coins that are settling/being delisted.
+                st = client.get_market_status(sym)
+                if (st and st != "TRADING") or (not st and client.market_status and sym not in client.market_status):
+                    continue
                 for side in sides:
                     if max_new is not None and len(open_tasks) >= max_new:
                         log.info(f"STARTUP OPEN LIMIT: stop at {max_count} positions")

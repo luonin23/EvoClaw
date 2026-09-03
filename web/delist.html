@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>下架币种记录 · EvoClaw</title>
+<link href="https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.loli.net/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+<style>
+  :root{
+    --bg-base:#0a0a0a;--bg-elevated:#141414;--bg-surface:#1a1a1a;--bg-hover:#242424;
+    --accent:#00d084;--success:#00d084;--error:#ff4757;--warning:#f59e0b;
+    --border-subtle:rgba(255,255,255,0.08);--border-medium:rgba(255,255,255,0.12);--border-strong:rgba(255,255,255,0.16);
+    --text-primary:#f5f5f5;--text-secondary:#a1a1aa;--text-tertiary:#71717a;
+    --font-ui:'Inter',-apple-system,'PingFang SC','Segoe UI',sans-serif;
+    --font-mono:'JetBrains Mono','SF Mono',monospace;
+    --space-8:8px;--space-12:12px;--space-16:16px;--space-24:24px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--font-ui);background:var(--bg-base);color:var(--text-primary);line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh}
+  body::before{content:'';position:fixed;inset:0;z-index:-1;background:
+    radial-gradient(ellipse 70% 50% at 15% 0%, rgba(0,208,132,0.05) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 90% 100%, rgba(0,208,132,0.04) 0%, transparent 55%);}
+  .wrap{max-width:1280px;margin:0 auto;padding:var(--space-24)}
+  .topbar{display:flex;align-items:center;gap:var(--space-12);flex-wrap:wrap;margin-bottom:var(--space-16)}
+  .logo{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text-primary)}
+  .logo .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),#00b86b);color:#fff;font-size:18px}
+  .logo h1{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+  .logo .ver{font-size:10px;color:var(--text-tertiary);font-family:var(--font-mono);border:1px solid var(--border-subtle);padding:2px 6px;border-radius:6px;margin-left:4px}
+  .topbar .back{margin-left:auto;display:inline-flex;align-items:center;gap:6px;color:var(--text-secondary);font-size:13px;text-decoration:none;border:1px solid var(--border-subtle);padding:8px 14px;border-radius:10px;transition:all .2s}
+  .topbar .back:hover{color:var(--accent);border-color:rgba(0,208,132,0.4)}
+  h2.title{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:600;margin-bottom:4px}
+  .sub{color:var(--text-tertiary);font-size:12px;margin-bottom:var(--space-16)}
+  .sub b{color:var(--text-secondary);font-weight:500}
+  .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-12);margin-bottom:var(--space-24)}
+  .chip{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:14px;padding:14px 16px}
+  .chip .lbl{font-size:11px;color:var(--text-tertiary);margin-bottom:6px}
+  .chip .val{font-size:20px;font-weight:700;font-family:var(--font-mono);line-height:1}
+  .chip .val.pos{color:var(--success)} .chip .val.neg{color:var(--error)}
+  .table-card{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:16px;overflow:hidden}
+  .tbl-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--font-mono);min-width:1180px}
+  thead th{position:sticky;top:0;background:var(--bg-surface);text-align:left;padding:10px 12px;color:var(--text-tertiary);font-weight:500;font-size:11px;border-bottom:1px solid var(--border-subtle);white-space:nowrap;letter-spacing:0.02em}
+  tbody td{padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.04);color:var(--text-secondary);white-space:nowrap}
+  tbody tr:hover td{background:var(--bg-hover)}
+  .rank{color:var(--text-tertiary);text-align:center;width:40px}
+  .sym{color:var(--text-primary);font-weight:600}
+  .side-long{color:var(--success)} .side-short{color:var(--error)}
+  .pnl-pos{color:var(--success)} .pnl-neg{color:var(--error)}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-family:var(--font-ui);font-weight:500}
+  .badge.proactive{background:rgba(0,208,132,0.12);color:var(--success);border:1px solid rgba(0,208,132,0.25)}
+  .badge.settled{background:rgba(245,158,11,0.12);color:var(--warning);border:1px solid rgba(245,158,11,0.25)}
+  .empty{padding:60px 20px;text-align:center;color:var(--text-tertiary)}
+  .empty i{font-size:40px;color:var(--text-tertiary);opacity:.4;display:block;margin-bottom:14px}
+  .pager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:var(--space-16);font-size:12px;color:var(--text-tertiary)}
+  .pager button{background:var(--bg-surface);border:1px solid var(--border-subtle);color:var(--text-secondary);border-radius:8px;padding:7px 14px;cursor:pointer;font-family:var(--font-ui);transition:all .2s}
+  .pager button:hover:not(:disabled){border-color:rgba(0,208,132,0.4);color:var(--accent)}
+  .pager button:disabled{opacity:.3;cursor:not-allowed}
+  .foot{color:var(--text-tertiary);font-size:11px;text-align:center;margin-top:var(--space-24)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px;vertical-align:middle;box-shadow:0 0 8px rgba(0,208,132,.6)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a class="logo" href="/">
+      <div class="ic"><i class="ph-fill ph-archive"></i></div>
+      <h1>EvoClaw</h1><span class="ver">DELIST LEDGER</span>
+    </a>
+    <a class="back" href="/"><i class="ph ph-arrow-left"></i> 返回数据仪表盘</a>
+  </div>
+
+  <h2 class="title"><i class="ph ph-archive" style="color:var(--accent)"></i>下架币种平仓 / 结算明细</h2>
+  <div class="sub">自动检测币种下架/强制结算并主动平仓，完整记录盈亏。数据来源：<b>主动平仓(实时成交价)</b> 或 <b>交易所结算(Binance realizedPnl)</b>。更新时间：<span class="dot" id="updateTime">-</span></div>
+
+  <div class="chips" id="chips">
+    <div class="chip"><div class="lbl">下架币种数量</div><div class="val" id="cCoin">-</div></div>
+    <div class="chip"><div class="lbl">记录总数</div><div class="val" id="cRec">-</div></div>
+    <div class="chip"><div class="lbl">累计盈亏</div><div class="val" id="cPnl">-</div></div>
+    <div class="chip"><div class="lbl">累计本金价值</div><div class="val" id="cValue">-</div></div>
+    <div class="chip"><div class="lbl">主动平仓 / 强制结算</div><div class="val" id="cSrc">-</div></div>
+  </div>
+
+  <div class="table-card">
+    <div class="tbl-scroll">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>#</th><th>币种</th><th>方向</th><th>下架时间</th><th>平仓/结算时间</th>
+            <th>开仓价</th><th>平仓价</th><th>数量(张)</th><th>本金价值(U)</th>
+            <th>盈亏(U)</th><th>盈亏率</th><th>手续费</th><th>来源</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" style="display:none"><i class="ph ph-archive"></i>暂无下架币种记录 —— 当系统检测到持有的币种即将下架时会自动平仓并在这里记录</div>
+  </div>
+
+  <div class="pager">
+    <button id="btnPrev" onclick="page(-1)">上一页</button>
+    <span id="pageInfo">-</span>
+    <button id="btnNext" onclick="page(1)">下一页</button>
+  </div>
+  <div class="foot">EvoClaw · 隐藏页面（不在导航中显示）· 仅供下架风控追溯</div>
+</div>
+
+<script>
+const PAGE_SIZE = 60;
+let curPage = 0;
+let total = 0;
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmtNum(n,d){
+  if(n==null||isNaN(n)) return '-';
+  d = d==null?4:d;
+  const v = Number(n);
+  if (Math.abs(v)>=1000000) return (v/1000000).toFixed(2)+'M';
+  if (Math.abs(v)>=10000) return (v/1000).toFixed(1)+'k';
+  return v.toFixed(d);
+}
+function fmtPnl(n){n=Number(n||0);return (n>=0?'+':'')+n.toFixed(2);}
+function fmtRate(r){r=Number(r||0);return (r>=0?'+':'')+(r*100).toFixed(2)+'%';}
+function fmtTime(t){if(!t) return '-'; try{return new Date(t).toLocaleString('zh-CN',{hour12:false});}catch(e){return esc(t);}}
+function symDisp(s){return (s||'').replace(/USDT$/,'').replace(/USDC$/,'');}
+function sideCls(s){return s==='long'?'side-long':'side-short';}
+function sideTxt(s){return s==='long'?'多':'空';}
+function srcBadge(s){return s==='settled'?'<span class="badge settled">强制结算</span>':'<span class="badge proactive">主动平仓</span>';}
+
+async function load(){
+  const r = await fetch('/api/delistings?limit='+PAGE_SIZE+'&offset='+(curPage*PAGE_SIZE),{cache:'no-store'});
+  const d = await r.json();
+  if(!d) return;
+  const st = d.stats||{};
+  total = d.total||0;
+  const set = (id,val,cls)=>{const el=document.getElementById(id); if(el){el.textContent=val; if(cls) el.className='val '+cls;}};
+  set('cCoin', st.coin_count||0);
+  set('cRec', st.record_count||0);
+  const pnl = st.total_pnl||0;
+  set('cPnl', fmtPnl(pnl), pnl>=0?'pos':'neg');
+  set('cValue', fmtNum(st.total_value,2));
+  set('cSrc', (st.proactive_count||0)+' / '+(st.settled_count||0));
+
+  const tbody = document.getElementById('tbody');
+  const empty = document.getElementById('empty');
+  const list = d.list||[];
+  tbody.innerHTML = '';
+  if(!list.length){
+    empty.style.display='block';
+  }else{
+    empty.style.display='none';
+    list.forEach((r,i)=>{
+      const pnlN = Number(r.pnl||0);
+      const row = document.createElement('tr');
+      row.innerHTML =
+        '<td class="rank">'+(d.offset+i+1)+'</td>'+
+        '<td class="sym">'+esc(symDisp(r.symbol))+'</td>'+
+        '<td class="'+sideCls(r.side)+'">'+sideTxt(r.side)+'</td>'+
+        '<td>'+fmtTime(r.delist_time)+'</td>'+
+        '<td>'+fmtTime(r.close_time)+'</td>'+
+        '<td>'+fmtNum(r.entry_price,6)+'</td>'+
+        '<td>'+fmtNum(r.exit_price,6)+'</td>'+
+        '<td>'+fmtNum(r.amount,0)+'</td>'+
+        '<td>'+fmtNum(r.position_value,2)+'</td>'+
+        '<td class="'+(pnlN>=0?'pnl-pos':'pnl-neg')+'">'+fmtPnl(pnlN)+'</td>'+
+        '<td class="'+(pnlN>=0?'pnl-pos':'pnl-neg')+'">'+fmtRate(r.pnl_rate)+'</td>'+
+        '<td>'+fmtNum(r.fee,4)+'</td>'+
+        '<td>'+srcBadge(r.source)+'</td>';
+      tbody.appendChild(row);
+    });
+  }
+  document.getElementById('pageInfo').textContent = total ? ((d.offset||0)+1)+' - '+((d.offset||0)+list.length)+' / 共 '+total+' 条' : '共 0 条';
+  document.getElementById('btnPrev').disabled = curPage<=0;
+  document.getElementById('btnNext').disabled = (d.offset||0)+list.length>=total;
+  document.getElementById('updateTime').textContent = new Date().toLocaleString('zh-CN',{hour12:false});
+}
+function page(delta){ curPage=Math.max(0,curPage+delta); load(); }
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

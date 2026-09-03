@@ -65,6 +65,32 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_liq_symbol ON liquidations(symbol);
         """)
         self.conn.commit()
+        # Delisting ledger — records every proactive close (source='proactive')
+        # and forced settlement (source='settled') caused by a coin being
+        # delisted / settled on the exchange.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS delistings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                delist_time TEXT NOT NULL DEFAULT '',
+                close_time TEXT NOT NULL,
+                entry_price REAL NOT NULL DEFAULT 0,
+                exit_price REAL NOT NULL DEFAULT 0,
+                amount REAL NOT NULL DEFAULT 0,
+                contract_size REAL NOT NULL DEFAULT 1,
+                position_value REAL NOT NULL DEFAULT 0,
+                pnl REAL NOT NULL DEFAULT 0,
+                pnl_rate REAL NOT NULL DEFAULT 0,
+                fee REAL NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'proactive',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_delist_time ON delistings(close_time);
+            CREATE INDEX IF NOT EXISTS idx_delist_symbol ON delistings(symbol);
+            CREATE INDEX IF NOT EXISTS idx_delist_symbol_side ON delistings(symbol, side);
+        """)
+        self.conn.commit()
         # Migration: add columns if tables existed before
         for table, col, ctype in [
             ("open_positions", "margin_called", "INTEGER DEFAULT 0"),
@@ -189,6 +215,10 @@ class Database:
             self._inc_stat("all_close_count", 1)
         elif ttype == "pair_close":
             self._inc_stat("pair_close_count", 1)
+        elif ttype == "delist":
+            # Dedicated type — counts toward total/win/loss/fee stats but not the
+            # three main close-type counters (it is not a tier/pair/all close).
+            pass
         else:
             self._inc_stat("single_count", 1)
         if side == "long":
@@ -512,6 +542,80 @@ class Database:
             for r in rows
         ]
         return events, total if total else 0
+
+    # ===== Delisting records (downlisted / settled coins) =====
+
+    def record_delisting(self, r: dict):
+        """Record one delisting close/settlement event."""
+        self.conn.execute(
+            """INSERT INTO delistings
+               (symbol, side, delist_time, close_time, entry_price, exit_price,
+                amount, contract_size, position_value, pnl, pnl_rate, fee, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (r["symbol"], r["side"], r.get("delist_time", ""), r["close_time"],
+             r["entry_price"], r["exit_price"], r["amount"],
+             r.get("contract_size", 1), r["position_value"],
+             r["pnl"], r["pnl_rate"], r.get("fee", 0), r.get("source", "proactive")),
+        )
+        self.conn.commit()
+
+    def get_delisting_summary(self) -> dict:
+        """Aggregate stats for the delisting ledger."""
+        row = self.conn.execute(
+            """SELECT COUNT(*),
+                      COALESCE(SUM(pnl), 0),
+                      COALESCE(SUM(position_value), 0),
+                      COALESCE(SUM(fee), 0),
+                      COUNT(DISTINCT symbol),
+                      COUNT(CASE WHEN source='proactive' THEN 1 END),
+                      COUNT(CASE WHEN source='settled' THEN 1 END)
+               FROM delistings"""
+        ).fetchone()
+        return {
+            "record_count": row[0] if row else 0,
+            "total_pnl": round(row[1], 4) if row else 0,
+            "total_value": round(row[2], 4) if row else 0,
+            "total_fee": round(row[3], 4) if row else 0,
+            "coin_count": row[4] if row else 0,
+            "proactive_count": row[5] if row else 0,
+            "settled_count": row[6] if row else 0,
+        }
+
+    def get_delistings(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        """Return the delisting ledger rows (newest first) + total count."""
+        rows = self.conn.execute(
+            """SELECT id, symbol, side, delist_time, close_time,
+                      entry_price, exit_price, amount, contract_size,
+                      position_value, pnl, pnl_rate, fee, source
+               FROM delistings ORDER BY id DESC LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+        total = self.conn.execute("SELECT COUNT(*) FROM delistings").fetchone()[0]
+        columns = [
+            "id", "symbol", "side", "delist_time", "close_time",
+            "entry_price", "exit_price", "amount", "contract_size",
+            "position_value", "pnl", "pnl_rate", "fee", "source",
+        ]
+        return [dict(zip(columns, r)) for r in rows], total if total else 0
+
+    def has_delisting_recent(self, symbol: str, side: str, since_iso: str) -> bool:
+        """True if a delisting record for symbol+side already exists after since_iso
+        (used to avoid double-recording a settlement on repeated vanish detections)."""
+        row = self.conn.execute(
+            "SELECT 1 FROM delistings WHERE symbol=? AND side=? AND close_time >= ? LIMIT 1",
+            (symbol, side, since_iso),
+        ).fetchone()
+        return row is not None
+
+    def sum_trades_pnl(self, symbol: str, side: str, since_iso: str) -> float:
+        """Sum of realized PnL already recorded by us for symbol+side since since_iso.
+        When reconciling a settlement against Binance userTrades we subtract this
+        amount so only the unrecorded (settlement) part is booked."""
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE symbol=? AND side=? AND close_time >= ?",
+            (symbol, side, since_iso),
+        ).fetchone()
+        return row[0] if row else 0.0
 
     # ===== App Config (stored in DB, source of truth for ALL settings) =====
 
