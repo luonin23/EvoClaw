@@ -68,6 +68,11 @@ class ExchangeClient:
         self._reverse_map = {}
         self._prices = {}
         self._closed = False
+        # Minimum order notional (USDT). Acts as a floor on top of the
+        # exchange's own per-market MIN_NOTIONAL — a new open/加仓 order will
+        # always be sized so its value >= max(exchange_min, this value).
+        # Editable via the 交易配置 page; trader.tick() keeps it in sync with DB.
+        self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
         # Track position-limit blocks to avoid wasted API calls
         self._blocked_until: dict[str, float] = {}
         self._block_count: dict[str, int] = {}
@@ -514,10 +519,10 @@ class ExchangeClient:
             if not market:
                 return 1
             contract_size = float(market.get("contractSize", 1) or 1)
-            min_notional = float((market.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
-            # Binance USDS-M hard floor: minimum notional is $5.0
-            if min_notional <= 0:
-                min_notional = 5.0
+            # Effective minimum notional = the larger of the exchange's own
+            # MIN_NOTIONAL for this market and the user-configured floor.
+            exchange_min_notional = float((market.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
+            min_notional = max(exchange_min_notional, float(self.min_order_notional or 0))
             min_amount = float((market.get("limits", {}).get("amount", {}).get("min", 0)) or 0)
             amount_precision = int(float(market.get("precision", {}).get("amount", 0) or 0))
 
@@ -545,10 +550,11 @@ class ExchangeClient:
         amount = self.calc_min_contracts(resolved)
         if amount <= 0:
             return None
-        # Quick balance check — if available < 5 USDT (minimum notional), skip silently
+        # Quick balance check — if available < configured minimum notional,
+        # skip silently (the actual order will also fail on insufficient margin).
         try:
             bal = await self.get_balance()
-            if bal.get('available_balance', 0) < 5.0:
+            if bal.get('available_balance', 0) < self.min_order_notional:
                 return None
         except Exception:
             pass  # if balance check itself fails, try the actual order
@@ -591,10 +597,10 @@ class ExchangeClient:
             return None
         if amount <= 0:
             return None
-        # Quick balance check
+        # Quick balance check (threshold = configured minimum notional)
         try:
             bal = await self.get_balance()
-            if bal.get('available_balance', 0) < 5.0:
+            if bal.get('available_balance', 0) < self.min_order_notional:
                 return None
         except Exception:
             pass

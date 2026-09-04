@@ -60,6 +60,7 @@ DEFAULT_CONFIG = {
     "enable_single_pair_close": True,
     "pair_close_threshold": 0.002,
     "enable_delist_close": True,
+    "min_order_notional": 5,
     "skip_symbols": []
 }
 

@@ -890,6 +890,8 @@ body::after{
     <div class="config-group-title" onclick="this.parentElement.classList.toggle('collapsed')"><i class="ph ph-arrows-left-right"></i> 基础交易<i class="ph ph-caret-down toggle-icon"></i></div>
     <div class="config-group-body"><div class="form-grid">
       <div class="field"><label>交易方向</label><select id="cfgSide"><option value="both">双向（多空）</option><option value="long">只做多</option><option value="short">只做空</option></select></div>
+      <div class="field"><label>最小下单金额 (USDT)</label><input type="number" id="cfgMinOrderNotional" step="1" min="0" value="5" placeholder="每笔订单名义价值下限"></div>
+      <div class="field full"><label></label><span style="font-size:var(--font-sm);color:var(--text-secondary);padding-bottom:var(--space-4)">每笔新开/加仓订单的名义价值 ≥ 该值；系统会自动取「该值与交易所该币种最低下单额」的较大者，并按币种精度计算满足条件的最小张数。设为 0 则仅遵循交易所下限。</span></div>
     </div></div>
   </div>
 
@@ -1071,6 +1073,7 @@ async function loadConfig() {
   document.getElementById('cfgPairClose').value = _val(d.pair_close_threshold, _val(d.profit_threshold, 0)) * 100;
   document.getElementById('cfgSkip').value = (_val(d.skip_symbols, [])).join('\n');
   document.getElementById('cfgSide').value = _valStr(d.side, 'both');
+  document.getElementById('cfgMinOrderNotional').value = _val(d.min_order_notional, 5);
 }
 
 function parseNum(id, fallback) {
@@ -1116,6 +1119,7 @@ async function saveConfig() {
       margin_call_multiplier: parseNum('cfgMarginCallMultiplier', 2),
       enable_single_pair_close: document.getElementById('cfgEnableSinglePairClose').checked,
       pair_close_threshold: parseNum('cfgPairClose', 0.2) / 100,
+      min_order_notional: parseNum('cfgMinOrderNotional', 5),
       skip_symbols: skip,
     };
 

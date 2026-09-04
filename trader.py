@@ -239,6 +239,12 @@ class Trader:
 
     async def tick(self):
         cfg = self._get_config()
+        # Keep the exchange client's minimum-order-notional floor in sync with
+        # the DB config (user can change it on the 交易配置 page at runtime).
+        try:
+            self.client.min_order_notional = float(cfg.get("min_order_notional", 5) or 5)
+        except (TypeError, ValueError):
+            self.client.min_order_notional = 5.0
         sides = self._get_sides()
         skip = set(cfg.get("skip_symbols", []))
 
