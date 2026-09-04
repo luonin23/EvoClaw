@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EvoClaw v2.2 -- 智能量化交易系统</title>
+<title>EvoClaw v2.3 -- 智能量化交易系统</title>
 <link rel="preconnect" href="https://fonts.loli.net">
 <link rel="preconnect" href="https://gstatic.loli.net" crossorigin>
 <link href="https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -442,7 +442,7 @@ body::after{
 .engine-card p{font-size:var(--font-base);color:var(--text-secondary);line-height:1.7}
 
 /* ============================================================
-   SECTION 5: NEW FEATURES v2.2
+   SECTION 5: NEW FEATURES v2.3
    ============================================================ */
 #new-features{
   background:var(--bg-elevated);
@@ -820,7 +820,7 @@ body::after{
      ========================================================= -->
 <section class="section" id="hero">
   <div class="section-inner reveal-hero">
-    <div class="hero-logo reveal">EVOCLAW TERMINAL v2.2</div>
+    <div class="hero-logo reveal">EVOCLAW TERMINAL v2.3</div>
     <h1 class="hero-title reveal">
       <span class="t-evo">EVO</span><span class="t-claw">CLAW</span>
     </h1>
@@ -981,13 +981,13 @@ body::after{
 </section>
 
 <!-- =========================================================
-     SECTION 5: NEW FEATURES -- v2.2 Enhancements
+     SECTION 5: NEW FEATURES -- v2.3 Enhancements
      ========================================================= -->
 <section class="section section--half" id="new-features">
   <div class="section-inner">
     <p class="section-label reveal">What's New</p>
     <h2 class="section-heading reveal">
-      v2.2 <span class="hl-accent">全新升级</span>
+      v2.3 <span class="hl-accent">全新升级</span>
     </h2>
     <p class="section-subtitle reveal">
       不仅是交易引擎的迭代，更是工程体系的全面进化。
@@ -1054,6 +1054,20 @@ body::after{
         <h4>当日交易统计</h4>
         <p>今日多空开仓、加仓、平仓次数与已实现盈亏独立统计。
         筛选币种红绿标记持仓状态，10 秒实时刷新，全局行情一目了然。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-warn">&#9888;</div>
+        <h4>下架风控</h4>
+        <p>自动监控持仓币种的下架/结算信号（交易所下架计划 + 合约状态离开 TRADING）。
+        命中即主动市价平仓；来不及平就按 Binance realizedPnl 对账记录结算盈亏。
+        首页点击「下架币种数量」卡片可进入隐藏台账，查看每一笔的平仓价、本金、盈亏与盈亏率。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-green">&#8597;</div>
+        <h4>最小下单配置</h4>
+        <p>「基础交易」新增每笔最小下单金额参数（默认 5 USDT）。
+        系统自动取配置值与交易所该币种 MIN_NOTIONAL 的较大者，并按张数精度向上取整，
+        自动计算满足条件的最小下单量；保存后无需重启即时生效。</p>
       </div>
     </div>
   </div>
@@ -1248,6 +1262,8 @@ body::after{
       <div class="badge b-white">智能熔断</div>
       <div class="badge b-green">配置数据库化</div>
       <div class="badge b-accent">看门狗守护</div>
+      <div class="badge b-red">下架风控</div>
+      <div class="badge b-white">最小下单配置</div>
     </div>
     <div class="hero-cta reveal">
       <a href="/" class="cta-btn cta-btn--primary">进入终端</a>
@@ -1259,7 +1275,7 @@ body::after{
      FOOTER
      ========================================================= -->
 <footer class="footer">
-  <p>EvoClaw v2.2 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
+  <p>EvoClaw v2.3 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
 </footer>
 
 <!-- =========================================================
