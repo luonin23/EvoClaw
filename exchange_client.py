@@ -48,6 +48,11 @@ class LogThrottle:
 _throttle_error = LogThrottle(cooldown=600)   # for ERROR-level repeats (10 min)
 _throttle_warn = LogThrottle(cooldown=600)    # for WARNING-level repeats (10 min)
 
+# Headroom added on top of the minimum order notional when sizing an order, so
+# a small price move between sizing and matching cannot push the executed
+# notional below the exchange floor (which Binance rejects with -4164).
+NOTIONAL_SAFETY = 1.02
+
 
 class ExchangeClient:
     def __init__(self, config: dict):
@@ -73,6 +78,13 @@ class ExchangeClient:
         # always be sized so its value >= max(exchange_min, this value).
         # Editable via the 交易配置 page; trader.tick() keeps it in sync with DB.
         self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
+        # Per-symbol last price timestamp (monotonic) so we know when a cached
+        # price is too old to size an order from (see ensure_price()).
+        self._price_ts: dict[str, float] = {}
+        # Last order failure code per "symbol:side" so the trader can classify
+        # failures (e.g. -2027 position limit vs -4164 sizing) instead of
+        # treating every failure as a position-limit breaker.
+        self._last_order_error: dict[str, str] = {}
         # Track position-limit blocks to avoid wasted API calls
         self._blocked_until: dict[str, float] = {}
         self._block_count: dict[str, int] = {}
@@ -212,13 +224,55 @@ class ExchangeClient:
         resolved = [self.resolve_symbol(s) for s in symbols]
         try:
             tickers = await self._safe_call(self.exchange.fetch_tickers(resolved), timeout=15)
+            ts = time.monotonic()
             for sym, ticker in tickers.items():
                 if ticker and ticker.get("last"):
                     self._prices[sym] = float(ticker["last"])
+                    self._price_ts[sym] = ts
                     if sym in self.market_info:
                         self.market_info[sym]["info"]["lastPrice"] = str(ticker["last"])
         except Exception as e:
             log.warning(f"refresh_prices failed: {e}")
+
+    async def ensure_price(self, symbol: str, max_age: float = 30.0) -> float:
+        """Return a fresh-enough last price for a symbol, fetching one if needed.
+
+        refresh_prices() only covers the current candidate set, but the trader
+        also sizes orders for held symbols that have dropped out of that set —
+        those would otherwise use a stale/missing price and compute a far-too-
+        small order (Binance rejects it with -4164).  A single ticker call here
+        keeps order sizing correct at negligible API cost.
+        """
+        resolved = self.resolve_symbol(symbol)
+        now = time.monotonic()
+        cached = self._prices.get(resolved)
+        if cached and cached > 0 and (now - self._price_ts.get(resolved, 0)) < max_age:
+            return float(cached)
+        try:
+            ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
+            last = float(ticker.get("last", 0) or 0)
+            if last > 0:
+                self._prices[resolved] = last
+                self._price_ts[resolved] = now
+                if resolved in self.market_info:
+                    self.market_info[resolved]["info"]["lastPrice"] = str(last)
+                return last
+        except Exception as e:
+            log.warning(f"ensure_price {symbol} failed: {e}")
+        return float(self._prices.get(resolved, 0) or 0)
+
+    # ===== Order failure classification =====
+
+    def _set_order_error(self, symbol: str, side: str, code: str):
+        self._last_order_error[f"{symbol}:{side}"] = code or ""
+
+    def clear_order_error(self, symbol: str, side: str):
+        self._last_order_error.pop(f"{symbol}:{side}", None)
+
+    def get_last_order_error(self, symbol: str, side: str) -> str:
+        """Last Binance error code for symbol:side ('' when the last attempt
+        succeeded or the failure was a network error without a code)."""
+        return self._last_order_error.get(f"{symbol}:{side}", "")
 
     async def get_candidate_symbols(self, volume_threshold: float, price_threshold: float) -> list[str]:
         try:
@@ -536,8 +590,14 @@ class ExchangeClient:
                     if price_str:
                         price = float(price_str)
                 if not price or price <= 0:
-                    price = min_notional / (contract_size * 10) if contract_size > 0 else 1
-                raw = max(raw, int(math.ceil(min_notional / (price * contract_size))))
+                    # No usable price → cannot size a valid order. Return 0 so
+                    # callers skip instead of placing a garbage-sized order.
+                    # (The old fallback assumed price = cs*10, yielding ~0.05
+                    # USDT orders that Binance rejected with -4164 forever.)
+                    log.warning(f"calc_min_contracts {symbol}: no price available, skipping order sizing")
+                    return 0
+                target_notional = min_notional * NOTIONAL_SAFETY
+                raw = max(raw, int(math.ceil(target_notional / (price * contract_size))))
             return float(round(raw, amount_precision))
         except Exception as e:
             log.error(f"calc_min_contracts failed {symbol}: {e}")
@@ -546,15 +606,22 @@ class ExchangeClient:
     async def open_position(self, symbol: str, side: str) -> dict | None:
         resolved = self.resolve_symbol(symbol)
         if self.is_position_blocked(resolved, side):
+            self._set_order_error(symbol, side, "-2027")
             return None
+        # Make sure the cached price for this symbol is fresh before sizing the
+        # order — held symbols outside the candidate set are not covered by the
+        # periodic refresh, and a stale price under-sizes the order (-4164).
+        await self.ensure_price(symbol)
         amount = self.calc_min_contracts(resolved)
         if amount <= 0:
+            self._set_order_error(symbol, side, "")
             return None
         # Quick balance check — if available < configured minimum notional,
         # skip silently (the actual order will also fail on insufficient margin).
         try:
             bal = await self.get_balance()
             if bal.get('available_balance', 0) < self.min_order_notional:
+                self._set_order_error(symbol, side, "")
                 return None
         except Exception:
             pass  # if balance check itself fails, try the actual order
@@ -565,6 +632,7 @@ class ExchangeClient:
             ), timeout=15)
             log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
             avg = await self._resolve_fill_price(order, resolved)
+            self.clear_order_error(symbol, side)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -572,6 +640,8 @@ class ExchangeClient:
             }
         except Exception as e:
             err = str(e)
+            code = _extract_code(err)
+            self._set_order_error(symbol, side, code)
             if "-2027" in err or "exceeded" in err.lower():
                 self._mark_blocked(f"{resolved}:{side}")
                 key = f"open_blocked:{resolved}:{side}"
@@ -581,7 +651,7 @@ class ExchangeClient:
             elif "-2019" in err or "insufficient" in err.lower():
                 pass
             else:
-                key = f"open_err:{resolved}:{side}:{_extract_code(err)}"
+                key = f"open_err:{resolved}:{side}:{code}"
                 s = _throttle_error.emit(key)
                 if s is not None:
                     log.error(f"Open position failed {resolved} {side}: {e}{s}")
@@ -594,7 +664,17 @@ class ExchangeClient:
     async def add_position(self, symbol: str, side: str, amount: float) -> dict | None:
         resolved = self.resolve_symbol(symbol)
         if self.is_position_blocked(resolved, side):
+            self._set_order_error(symbol, side, "-2027")
             return None
+        if amount <= 0:
+            return None
+        # Keep the add order above the exchange's minimum notional: refresh the
+        # price and re-floor the amount (caller may have sized it from a stale
+        # price outside the candidate set).
+        await self.ensure_price(symbol)
+        min_amount = self.calc_min_contracts(resolved)
+        if min_amount > 0 and amount < min_amount:
+            amount = min_amount
         if amount <= 0:
             return None
         # Quick balance check (threshold = configured minimum notional)
@@ -612,6 +692,7 @@ class ExchangeClient:
             ), timeout=15)
             log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
             avg = await self._resolve_fill_price(order, resolved)
+            self.clear_order_error(symbol, side)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -619,6 +700,8 @@ class ExchangeClient:
             }
         except Exception as e:
             err = str(e)
+            code = _extract_code(err)
+            self._set_order_error(symbol, side, code)
             if "-2027" in err or "exceeded" in err.lower():
                 self._mark_blocked(f"{resolved}:{side}")
                 key = f"add_blocked:{resolved}:{side}"
@@ -628,7 +711,7 @@ class ExchangeClient:
             elif "-2019" in err or "insufficient" in err.lower():
                 pass  # silent skip
             else:
-                key = f"add_err:{resolved}:{side}:{_extract_code(err)}"
+                key = f"add_err:{resolved}:{side}:{code}"
                 s = _throttle_error.emit(key)
                 if s is not None:
                     log.error(f"Add position failed {resolved} {side}: {e}{s}")

@@ -46,6 +46,14 @@ class Trader:
         self._delist_attempt: dict[str, float] = {}   # symbol:side -> last close attempt (monotonic)
         self._delist_cooldown = 120                   # 2 min between close attempts per symbol+side
 
+        # === Open-failure cooldown (non position-limit errors) ===
+        # Only genuine -2027 (max position) failures feed the position-limit
+        # circuit breaker.  Other failures (-4164 sizing, -2019 margin,
+        # network) get a short per-leg cooldown instead, so a config/sizing bug
+        # cannot masquerade as "skipped after 5 consecutive -2027 failures".
+        self._open_fail_until: dict[str, float] = {}  # symbol:side -> monotonic until
+        self._open_fail_cooldown = 300                # 5 min
+
         # Load persisted tier states from DB (survives restarts)
         try:
             self._tier_executed = self.db.load_tier_states()
@@ -109,6 +117,7 @@ class Trader:
                 if tick_count % 300 == 0:
                     self._cleanup_stale_2027()
                     self._cleanup_stale_mc_state()
+                    self._cleanup_open_fail_state()
 
                 # Re-read interval occasionally in case config changed
                 if tick_count % 100 == 0:
@@ -205,6 +214,13 @@ class Trader:
         for sym in list(self._mc_fail_streak.keys()):
             if sym not in self._mc_last_success:
                 del self._mc_fail_streak[sym]
+
+    def _cleanup_open_fail_state(self):
+        """Drop expired open-failure cooldowns so the dict cannot grow forever."""
+        now = time.monotonic()
+        for k in list(self._open_fail_until.keys()):
+            if self._open_fail_until[k] <= now:
+                del self._open_fail_until[k]
 
     async def _ensure_symbols(self):
         cfg = self._get_config()
@@ -1065,11 +1081,16 @@ class Trader:
         return did
 
     async def _do_open(self, symbol: str, open_side: str, side: str):
+        key = f"{symbol}:{side}"
+        # Respect the short cooldown set by a recent non-position-limit failure.
+        if time.monotonic() < self._open_fail_until.get(key, 0):
+            return
         if self._is_skipped_2027(symbol):
             return
         result = await self.client.safe_open(symbol, open_side)
         if result:
             self._clear_2027_failure(symbol)
+            self._open_fail_until.pop(key, None)
             market = self.client.get_market_info(symbol)
             contract_size = market.get("contractSize", 1) or 1
             open_fee = result["average"] * result["amount"] * contract_size * 0.0005
@@ -1087,10 +1108,24 @@ class Trader:
             # Record open event for open-side statistics
             self.db.record_open_event(symbol, side, "open", result["average"], result["amount"], result["order_id"])
         else:
-            self._record_2027_failure(symbol)
-            s = _throttle_warn.emit(f"do_open_fail:{symbol}:{side}")
-            if s is not None:
-                log.warning(f"_do_open failed: {symbol} {side} ({open_side}){s}")
+            code = self.client.get_last_order_error(symbol, open_side)
+            if code == "-2027":
+                # Genuine "max position at current leverage" → position-limit breaker.
+                self._record_2027_failure(symbol)
+                s = _throttle_warn.emit(f"do_open_blocked:{symbol}:{side}")
+                if s is not None:
+                    log.warning(f"_do_open blocked (max position) {symbol} {side}")
+            else:
+                # Sizing / margin / network error — NOT a position-limit issue.
+                # Short per-leg cooldown instead of the 10-minute -2027 breaker,
+                # so a config bug can't masquerade as "5 consecutive -2027 failures".
+                self._open_fail_until[key] = time.monotonic() + self._open_fail_cooldown
+                s = _throttle_warn.emit(f"do_open_fail:{symbol}:{side}:{code}")
+                if s is not None:
+                    log.warning(
+                        f"_do_open failed: {symbol} {side} ({open_side}) "
+                        f"code={code or 'network/unknown'} — cooldown {self._open_fail_cooldown}s{s}"
+                    )
 
     # ========== Record trade ==========
 
