@@ -85,6 +85,20 @@ class Trader:
             return ["long", "short"]
         return [side]
 
+    def _matrix_slots(self) -> int:
+        """Matrix slot capacity for position tracking.
+
+        matrix_slots lives in runtime_stats (frontend web config), NOT in the
+        config table — reading it from self.config silently fell back to 100,
+        leaving positions beyond the 100th without a slot (slot_index=-1) and
+        invisible in the heat-matrix.
+        """
+        try:
+            v = int(self.db.get_runtime_stat("matrix_slots", 100) or 100)
+            return v if v > 0 else 100
+        except Exception:
+            return 100
+
     async def run(self):
         self.running = True
         tick_count = 0
@@ -661,7 +675,7 @@ class Trader:
                         self.db.mark_margin_called(sym, side, new_total, added_fee)
                     else:
                         open_fee = entry * contracts * cs * 0.0005 + added_fee
-                        self.db.record_open(sym, side, "margin_call", entry, new_total, open_fee, max_slots=self.config.get('matrix_slots', 100))
+                        self.db.record_open(sym, side, "margin_call", entry, new_total, open_fee, max_slots=self._matrix_slots())
                     # Record margin-call event for open-side statistics
                     self.db.record_open_event(sym, side, "margin", result["average"], add_amount, result["order_id"])
                     executed = True
@@ -1098,7 +1112,7 @@ class Trader:
                 symbol=symbol, side=side,
                 order_id=result["order_id"], entry_price=result["average"],
                 amount=result["amount"], open_fee=open_fee,
-                max_slots=self.config.get('matrix_slots', 100),
+                max_slots=self._matrix_slots(),
             )
             # CRITICAL: this is a NEW position (e.g. re-opened after full close).
             # Clear any leftover tier_executed state from the previous cycle so the

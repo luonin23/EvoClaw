@@ -313,7 +313,11 @@ async def main():
         for p in positions:
             sym = client.user_symbol(p["symbol"])
             pos_side = p.get("side", "")
-            if sym in symbols and pos_side in sides:
+            # Track ALL held positions, not only current candidates: a position
+            # can outlive its symbol leaving the dynamic candidate set, and it
+            # still needs a DB record + matrix slot. Also independent of the
+            # configured trading direction — existing legs must always be tracked.
+            if pos_side in ("long", "short"):
                 entry_price = float(p.get("entryPrice", 0) or 0)
                 contracts = float(p.get("contracts", 0) or 0)
                 if contracts > 0:
@@ -326,7 +330,7 @@ async def main():
                         entry_price=entry_price,
                         amount=contracts,
                         open_fee=open_fee,
-                        max_slots=int(cfg.get('matrix_slots', 100)),
+                        max_slots=int(db.get_runtime_stat('matrix_slots', 100) or 100),
                     )
                     log.info(f"Tracking existing position: {sym} {pos_side} {contracts} @ {entry_price}")
 
@@ -388,7 +392,7 @@ async def main():
                         entry_price=result["average"],
                         amount=result["amount"],
                         open_fee=open_fee,
-                        max_slots=int(cfg.get('matrix_slots', 100)),
+                        max_slots=int(db.get_runtime_stat('matrix_slots', 100) or 100),
                     )
                     # New position — clear any leftover tier state from prior cycle
                     if hasattr(trader, '_tier_executed'):
