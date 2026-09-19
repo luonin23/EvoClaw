@@ -219,6 +219,15 @@ class Trader:
                 f"cooling down for {self._mc_cooldown_fail}s"
             )
 
+    def _start_mc_cooldown(self, symbol: str):
+        """Put a symbol straight into margin-call cooldown.
+
+        Used when adding is impossible for now (e.g. insufficient margin) — no
+        point retrying several times before the breaker kicks in.
+        """
+        self._mc_last_success[symbol] = time.monotonic()
+        self._mc_fail_streak.pop(symbol, None)
+
     def _cleanup_stale_mc_state(self):
         """Periodically clean up stale MC state entries."""
         now = time.monotonic()
@@ -680,10 +689,30 @@ class Trader:
                     self.db.record_open_event(sym, side, "margin", result["average"], add_amount, result["order_id"])
                     executed = True
                 else:
-                    # === Phase 1: Record failure ===
+                    # === Phase 1: Record failure (classified by error code) ===
+                    code = self.client.get_last_order_error(sym, side)
                     self._record_mc_failure(sym)
-                    # Also feed into -2027 circuit breaker (add_position already logs if -2027)
-                    self._record_2027_failure(sym)
+                    if code == "-2027":
+                        # Genuine max-position error → position-limit breaker.
+                        self._record_2027_failure(sym)
+                    elif code == "-2019":
+                        # Insufficient margin: retrying immediately is pointless,
+                        # so go straight to the long cooldown (instead of burning
+                        # 5 attempts) and report the real reason once per window.
+                        self._start_mc_cooldown(sym)
+                        s = _throttle_warn.emit(f"mc_margin:{sym}")
+                        if s is not None:
+                            log.warning(
+                                f"MARGIN CALL skipped {sym} {side}: insufficient margin (-2019), "
+                                f"cooling down {self._mc_cooldown_fail}s{s}"
+                            )
+                    else:
+                        s = _throttle_warn.emit(f"mc_fail:{sym}:{code}")
+                        if s is not None:
+                            log.warning(
+                                f"MARGIN CALL failed {sym} {side}: "
+                                f"code={code or 'network/unknown'}{s}"
+                            )
         return executed
 
     # ========== Replenish ==========
@@ -1128,6 +1157,10 @@ class Trader:
             # Record open event for open-side statistics
             self.db.record_open_event(symbol, side, "open", result["average"], result["amount"], result["order_id"])
         else:
+            # Account fully margined: the exchange client already logged the
+            # shortage once. Don't emit a per-leg warning/cooldown for it.
+            if self.client.is_balance_short():
+                return
             code = self.client.get_last_order_error(symbol, open_side)
             if code == "-2027":
                 # Genuine "max position at current leverage" → position-limit breaker.

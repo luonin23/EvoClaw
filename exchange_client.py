@@ -85,6 +85,10 @@ class ExchangeClient:
         # failures (e.g. -2027 position limit vs -4164 sizing) instead of
         # treating every failure as a position-limit breaker.
         self._last_order_error: dict[str, str] = {}
+        # While available balance < min_order_notional, all order attempts are
+        # pointless. Cache that state for 60s so we don't call get_balance (or
+        # log) once per symbol per tick while the account is fully margined.
+        self._balance_short_until = 0.0
         # Track position-limit blocks to avoid wasted API calls
         self._blocked_until: dict[str, float] = {}
         self._block_count: dict[str, int] = {}
@@ -273,6 +277,39 @@ class ExchangeClient:
         """Last Binance error code for symbol:side ('' when the last attempt
         succeeded or the failure was a network error without a code)."""
         return self._last_order_error.get(f"{symbol}:{side}", "")
+
+    def is_balance_short(self) -> bool:
+        """True while available balance is known to be below the minimum
+        notional (set by _has_min_available, cached for 60s)."""
+        return time.monotonic() < self._balance_short_until
+
+    async def _has_min_available(self, symbol: str, side: str) -> bool:
+        """Cheap guard: is available balance enough for another order?
+
+        Skips silently (with no per-symbol log) while the account is fully
+        margined — the shortage is logged once per throttle window by this
+        method itself, so callers must not log again per symbol.
+        """
+        now = time.monotonic()
+        if now < self._balance_short_until:
+            self._set_order_error(symbol, side, "-2019")
+            return False
+        try:
+            bal = await self.get_balance()
+        except Exception:
+            return True  # can't check → let the real order decide
+        if bal.get("available_balance", 0) < self.min_order_notional:
+            self._balance_short_until = now + 60
+            self._set_order_error(symbol, side, "-2019")
+            s = _throttle_warn.emit("balance_short")
+            if s is not None:
+                log.warning(
+                    f"Orders skipped: available balance "
+                    f"{bal.get('available_balance', 0):.2f} < min {self.min_order_notional} USDT "
+                    f"(fully margined){s}"
+                )
+            return False
+        return True
 
     async def get_candidate_symbols(self, volume_threshold: float, price_threshold: float) -> list[str]:
         try:
@@ -594,7 +631,9 @@ class ExchangeClient:
                     # callers skip instead of placing a garbage-sized order.
                     # (The old fallback assumed price = cs*10, yielding ~0.05
                     # USDT orders that Binance rejected with -4164 forever.)
-                    log.warning(f"calc_min_contracts {symbol}: no price available, skipping order sizing")
+                    s = _throttle_warn.emit(f"no_price:{resolved}")
+                    if s is not None:
+                        log.warning(f"calc_min_contracts {symbol}: no price available, skipping order sizing{s}")
                     return 0
                 target_notional = min_notional * NOTIONAL_SAFETY
                 raw = max(raw, int(math.ceil(target_notional / (price * contract_size))))
@@ -616,15 +655,9 @@ class ExchangeClient:
         if amount <= 0:
             self._set_order_error(symbol, side, "")
             return None
-        # Quick balance check — if available < configured minimum notional,
-        # skip silently (the actual order will also fail on insufficient margin).
-        try:
-            bal = await self.get_balance()
-            if bal.get('available_balance', 0) < self.min_order_notional:
-                self._set_order_error(symbol, side, "")
-                return None
-        except Exception:
-            pass  # if balance check itself fails, try the actual order
+        # Available balance guard (cached; logs the shortage once, not per leg).
+        if not await self._has_min_available(symbol, side):
+            return None
         try:
             order = await self._safe_call(self.exchange.create_order(
                 symbol=resolved, type="market", side=side, amount=amount,
@@ -649,7 +682,10 @@ class ExchangeClient:
                 if s is not None:
                     log.warning(f"Open position blocked (max position) {resolved} {side}: {e}{s}")
             elif "-2019" in err or "insufficient" in err.lower():
-                pass
+                key = f"open_margin:{resolved}:{side}"
+                s = _throttle_warn.emit(key)
+                if s is not None:
+                    log.warning(f"Open position skipped (insufficient margin) {resolved} {side}{s}")
             else:
                 key = f"open_err:{resolved}:{side}:{code}"
                 s = _throttle_error.emit(key)
@@ -677,13 +713,9 @@ class ExchangeClient:
             amount = min_amount
         if amount <= 0:
             return None
-        # Quick balance check (threshold = configured minimum notional)
-        try:
-            bal = await self.get_balance()
-            if bal.get('available_balance', 0) < self.min_order_notional:
-                return None
-        except Exception:
-            pass
+        # Available balance guard (cached; logs the shortage once, not per leg).
+        if not await self._has_min_available(symbol, side):
+            return None
         try:
             open_side = "buy" if side == "long" else "sell"
             order = await self._safe_call(self.exchange.create_order(
@@ -709,7 +741,13 @@ class ExchangeClient:
                 if s is not None:
                     log.warning(f"Add position blocked (max position) {resolved} {side}: {e}{s}")
             elif "-2019" in err or "insufficient" in err.lower():
-                pass  # silent skip
+                # Margin is insufficient — was previously swallowed silently,
+                # which made margin-call failures invisible (and then
+                # mislabelled as "-2027"). Log it once per throttle window.
+                key = f"add_margin:{resolved}:{side}"
+                s = _throttle_warn.emit(key)
+                if s is not None:
+                    log.warning(f"Add position skipped (insufficient margin) {resolved} {side}{s}")
             else:
                 key = f"add_err:{resolved}:{side}:{code}"
                 s = _throttle_error.emit(key)

@@ -97,6 +97,28 @@ class ErrorLogFilter(logging.Filter):
         return record.levelno >= logging.WARNING
 
 
+class AiohttpNoiseFilter(logging.Filter):
+    """Drop aiohttp request-parser tracebacks caused by internet scanners.
+
+    Exposed on 0.0.0.0, the web server receives malformed requests daily
+    (Censys etc. sending HTTP/2 PRI or bad URLs). aiohttp logs each as an ERROR
+    with a full traceback, which is pure noise — not an application fault.
+    """
+    _NOISE_TYPES = ("BadHttpMessage", "InvalidURLError")
+
+    def filter(self, record):
+        if not record.name.startswith("aiohttp"):
+            return True
+        exc_type = record.exc_info[0] if record.exc_info else None
+        if exc_type is not None and any(n in exc_type.__name__ for n in self._NOISE_TYPES):
+            return False
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return not any(n in msg for n in ("BadHttpMessage", "InvalidURLError", "Pause on PRI"))
+
+
 def setup_logging():
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -127,6 +149,11 @@ def setup_logging():
     eh.setFormatter(fmt)
     eh.addFilter(ErrorLogFilter())
     root.addHandler(eh)
+
+    # Silence scanner-induced HTTP parser tracebacks (see AiohttpNoiseFilter).
+    noise = AiohttpNoiseFilter()
+    logging.getLogger("aiohttp.server").addFilter(noise)
+    logging.getLogger("aiohttp.access").addFilter(noise)
 
     _cleanup_stale_logs()
 
