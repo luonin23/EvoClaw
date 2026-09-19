@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EvoClaw v2.4 -- 智能量化交易系统</title>
+<title>EvoClaw v2.5 -- 智能量化交易系统</title>
 <link rel="preconnect" href="https://fonts.loli.net">
 <link rel="preconnect" href="https://gstatic.loli.net" crossorigin>
 <link href="https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -442,7 +442,7 @@ body::after{
 .engine-card p{font-size:var(--font-base);color:var(--text-secondary);line-height:1.7}
 
 /* ============================================================
-   SECTION 5: NEW FEATURES v2.4
+   SECTION 5: NEW FEATURES v2.5
    ============================================================ */
 #new-features{
   background:var(--bg-elevated);
@@ -820,7 +820,7 @@ body::after{
      ========================================================= -->
 <section class="section" id="hero">
   <div class="section-inner reveal-hero">
-    <div class="hero-logo reveal">EVOCLAW TERMINAL v2.4</div>
+    <div class="hero-logo reveal">EVOCLAW TERMINAL v2.5</div>
     <h1 class="hero-title reveal">
       <span class="t-evo">EVO</span><span class="t-claw">CLAW</span>
     </h1>
@@ -981,17 +981,17 @@ body::after{
 </section>
 
 <!-- =========================================================
-     SECTION 5: NEW FEATURES -- v2.4 Enhancements
+     SECTION 5: NEW FEATURES -- v2.5 Enhancements
      ========================================================= -->
 <section class="section section--half" id="new-features">
   <div class="section-inner">
     <p class="section-label reveal">What's New</p>
     <h2 class="section-heading reveal">
-      v2.4 <span class="hl-accent">全新升级</span>
+      v2.5 <span class="hl-accent">全新升级</span>
     </h2>
     <p class="section-subtitle reveal">
       不仅是交易引擎的迭代，更是工程体系的全面进化。
-      本次聚焦：下单量计算正确性、失败分类精准化、双向对冲完整性。
+      本次聚焦：下单量计算正确性、失败分类精准化、双向对冲完整性、接口安全加固与日志治理。
     </p>
     <div class="section-divider reveal"></div>
 
@@ -1073,8 +1073,8 @@ body::after{
       <div class="ft-card reveal">
         <div class="ft-card__icon f-warn">&#9881;</div>
         <h4>失败精准分类</h4>
-        <p>开仓失败按错误码精准归类：只有真正的 -2027（超出最大持仓）才进入仓位熔断；
-        -4164（下单量）、-2019（保证金）、网络错误等进入独立的短冷却并记录准确原因。
+        <p>开仓与加仓失败统一按错误码归类：只有真正的 -2027（超出最大持仓）才进入仓位熔断；
+        -4164（下单量）、-2019（保证金不足）、网络错误等进入独立的短冷却并记录真实原因。
         不再把任意失败误标为 -2027，杜绝「假熔断」造成的无限重试与日志刷屏。</p>
       </div>
       <div class="ft-card reveal">
@@ -1089,6 +1089,33 @@ body::after{
         <h4>矩阵槽位自适应</h4>
         <p>持仓热力矩阵的格子容量直接读取前端显示配置（matrix_slots），不再固定按 100 个槽位分配。
         持仓超过 100 条腿时每一条都能落格显示，不会出现「仓位隐身」或槽位丢失。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-red">&#9878;</div>
+        <h4>接口安全加固</h4>
+        <p>所有写接口（保存配置、前端设置、刷新币种）改为<strong>服务端密码校验</strong>，未授权一律 401 并记录告警。
+        密码保存在数据库、页面不再硬编码；只读接口保持公开，不影响手机远程查看与日常使用。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-warn">&#9888;</div>
+        <h4>保证金不足可观测</h4>
+        <p>加仓因保证金不足（-2019）失败时不再被静默吞掉：记录真实原因并直接进入冷却
+        （不再空烧 5 次、不再误报 -2027）。可用余额低于最小下单额时全局缓存 60 秒、仅输出一条告警，
+        杜绝逐币逐腿刷屏与无效 API 调用。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-green">&#9881;</div>
+        <h4>运维统一与日志治理</h4>
+        <p>统一由 PM2 托管，restart.sh 自动识别并委托 PM2，杜绝双监管抢 PID；
+        接入 PM2 日志自动轮转（5MB × 5 份、压缩）。扫描器畸形请求的解析异常、启动期历史回填噪音均已过滤，
+        日志只留有价值的内容。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-accent">&#9878;</div>
+        <h4>账实可对账</h4>
+        <p>开仓 / 平仓笔数与交易所逐笔成交一致（实测 16/16、83/83 完全吻合）。
+        平仓次数天然多于开仓次数——分档止盈每一档都记一条平仓，同一仓位会被分批止盈多次，
+        并非重复计数。</p>
       </div>
     </div>
   </div>
@@ -1288,6 +1315,10 @@ body::after{
       <div class="badge b-accent">失败精准分类</div>
       <div class="badge b-green">对冲完整性</div>
       <div class="badge b-white">矩阵槽位自适应</div>
+      <div class="badge b-red">服务端鉴权</div>
+      <div class="badge b-green">保证金可观测</div>
+      <div class="badge b-accent">PM2 日志轮转</div>
+      <div class="badge b-white">账实可对账</div>
     </div>
     <div class="hero-cta reveal">
       <a href="/" class="cta-btn cta-btn--primary">进入终端</a>
@@ -1299,7 +1330,7 @@ body::after{
      FOOTER
      ========================================================= -->
 <footer class="footer">
-  <p>EvoClaw v2.4 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
+  <p>EvoClaw v2.5 &mdash; Binance USDT-M 永续合约自动交易系统 &mdash; <a href="/">进入终端</a></p>
 </footer>
 
 <!-- =========================================================
