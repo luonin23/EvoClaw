@@ -146,6 +146,23 @@ class Database:
         self._rebuild_stats()
         self._backfill_open_time()
         self._migrate_web_config()
+        self._seed_web_password()
+
+    def _seed_web_password(self):
+        """Seed the web admin password used for server-side auth of mutating
+        API endpoints, if it is not set yet. Stored in the config table so it
+        can be changed without touching code."""
+        try:
+            row = self.conn.execute("SELECT value FROM config WHERE key='web_password'").fetchone()
+            if row is None:
+                self.conn.execute(
+                    "INSERT INTO config (key, value) VALUES ('web_password', ?)",
+                    (json.dumps("19830422"),),
+                )
+                self.conn.commit()
+                log.info("Seeded default web_password into config")
+        except Exception as e:
+            log.warning(f"web_password seeding failed (non-fatal): {e}")
 
     def _rebuild_stats(self):
         self.conn.execute("DELETE FROM trade_stats")
@@ -381,11 +398,16 @@ class Database:
         return list(grouped.values())
 
     def _backfill_open_time(self):
-        """One-time migration: fill empty open_time in trades from open_positions records."""
+        """Backfill empty open_time in trades from open_positions records.
+
+        Some historical trades can never be filled (their position is gone), so
+        this runs at every startup. Only log at INFO when it actually fills
+        something; otherwise it is just permanent startup noise.
+        """
         empty_count = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
         if empty_count == 0:
             return
-        log.info(f"Backfilling {empty_count} trades with empty open_time from open_positions...")
+        log.debug(f"Backfilling {empty_count} trades with empty open_time from open_positions...")
         # For each trade with empty open_time where position still exists, copy entry_time
         self.conn.execute("""
             UPDATE trades SET open_time = (
@@ -408,7 +430,10 @@ class Database:
         self.conn.commit()
         filled = empty_count - self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
         remaining = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
-        log.info(f"Backfill complete: filled {filled} trades, {remaining} remain empty (position no longer in DB)")
+        if filled > 0:
+            log.info(f"Backfilled open_time for {filled} trades ({remaining} remain, position no longer in DB)")
+        else:
+            log.debug(f"open_time backfill: nothing fillable ({remaining} legacy trades, position no longer in DB)")
 
     # ===== Stats =====
 

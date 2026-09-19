@@ -970,8 +970,11 @@ body::after{
 
 </div><!-- /app-shell -->
 <script>
-const CONFIG_PASSWORD = "19830422";
 let _configUnlocked = false;
+let _configPassword = "";   // held only after the server validates it
+function authHeaders() {
+  return _configPassword ? { 'X-Web-Password': _configPassword } : {};
+}
 
 let trading = true;
 let currentTab = 'dashboard';
@@ -1001,6 +1004,7 @@ function switchTab(tab) {
   else if (tab === 'symbols') { loadSymbolSummary(); }
   else if (tab === 'config') {
     _configUnlocked = false;
+    _configPassword = '';
     document.getElementById('panel-config').classList.add('config-locked');
     document.getElementById('configLockOverlay').style.display = 'flex';
     document.getElementById('configPasswordInput').value = '';
@@ -1010,16 +1014,25 @@ function switchTab(tab) {
   }
 }
 
-function unlockConfig() {
+async function unlockConfig() {
   const pwd = document.getElementById('configPasswordInput').value;
-  if (pwd === CONFIG_PASSWORD) {
-    _configUnlocked = true;
-    document.getElementById('panel-config').classList.remove('config-locked');
-    document.getElementById('configLockOverlay').style.display = 'none';
-  } else {
-    document.getElementById('configLockError').textContent = '密码错误，请重试';
-    document.getElementById('configPasswordInput').value = '';
-    document.getElementById('configPasswordInput').focus();
+  if (!pwd) return;
+  try {
+    const r = await fetch('/api/auth-check', { method: 'POST', headers: { 'X-Web-Password': pwd } });
+    if (r.ok) {
+      _configUnlocked = true;
+      _configPassword = pwd;
+      document.getElementById('panel-config').classList.remove('config-locked');
+      document.getElementById('configLockOverlay').style.display = 'none';
+    } else {
+      _configUnlocked = false;
+      _configPassword = '';
+      document.getElementById('configLockError').textContent = '密码错误，请重试';
+      document.getElementById('configPasswordInput').value = '';
+      document.getElementById('configPasswordInput').focus();
+    }
+  } catch (e) {
+    document.getElementById('configLockError').textContent = '验证失败：' + (e.message || '网络错误');
   }
 }
 
@@ -1125,7 +1138,7 @@ async function saveConfig() {
 
     const r = await fetch('/api/config', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => ({}));
@@ -1136,7 +1149,7 @@ async function saveConfig() {
     };
     const wr = await fetch('/api/web-config', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(webBody),
     });
     const wd = await wr.json().catch(() => ({}));
@@ -1148,6 +1161,10 @@ async function saveConfig() {
       await loadConfig();
       await loadFrontendConfig();
       showToast('配置已保存');
+    } else if (r.status === 401 || wr.status === 401) {
+      _configUnlocked = false;
+      _configPassword = '';
+      showToast('未授权：请重新解锁配置页');
     } else {
       const msg = d.message || wd.message || '服务器错误';
       showToast('保存失败: ' + msg);
@@ -1166,13 +1183,17 @@ async function refreshSymbolsNow() {
   const oldText = btn.innerHTML;
   btn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> 刷新中...';
   btn.disabled = true;
-  const r = await fetch('/api/refresh-symbols', { method: 'POST' });
+  const r = await fetch('/api/refresh-symbols', { method: 'POST', headers: authHeaders() });
   const d = await r.json();
   btn.innerHTML = oldText;
   btn.disabled = false;
   if (d.status === 'ok') {
     showToast(`已刷新 ${d.count} 个币种`);
     refresh();
+  } else if (r.status === 401) {
+    _configUnlocked = false;
+    _configPassword = '';
+    showToast('未授权：请重新解锁配置页');
   } else {
     showToast('刷新失败: ' + (d.message || '未知错误'));
   }

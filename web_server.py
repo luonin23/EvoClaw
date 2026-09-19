@@ -6,6 +6,8 @@ import shutil
 import time
 from aiohttp import web
 
+from exchange_client import _throttle_warn
+
 log = logging.getLogger(__name__)
 
 # ---- Static file cache (loaded once, never changes while running) ----
@@ -43,6 +45,7 @@ class WebServer:
         self.app.router.add_get("/api/liquidations", self.api_liquidations)
         self.app.router.add_get("/api/delistings", self.api_delistings)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
+        self.app.router.add_post("/api/auth-check", self.api_auth_check)
         self.app.router.add_get("/web/config.json", self.handle_web_config)
         self.app.router.add_get("/api/web-config", self.api_web_config_get)
         self.app.router.add_post("/api/web-config", self.api_web_config_set)
@@ -63,6 +66,34 @@ class WebServer:
             return self.db.load_config()
         except Exception:
             return {}
+
+    # ===== Auth for mutating endpoints =====
+
+    def _get_web_password(self) -> str:
+        return str(self._load_config().get("web_password") or "")
+
+    def _auth_ok(self, request) -> bool:
+        """Server-side check for mutating endpoints.
+
+        The frontend password gate is UX only — without this check any internet
+        client could POST /api/config (which can overwrite exchange keys and all
+        trading parameters). Password lives in the DB config ('web_password').
+        """
+        expected = self._get_web_password()
+        if not expected:
+            return True  # nothing configured — preserve legacy behaviour
+        supplied = (request.headers.get("X-Web-Password")
+                    or request.query.get("password") or "")
+        return supplied == expected
+
+    async def api_auth_check(self, request):
+        """Lightweight endpoint the UI calls to validate the entered password."""
+        if self._auth_ok(request):
+            return web.json_response({"status": "ok"})
+        s = _throttle_warn.emit("web_unauthorized")
+        if s is not None:
+            log.warning(f"Unauthorized API access attempt from {request.remote}{s}")
+        return web.json_response({"status": "error", "message": "unauthorized"}, status=401)
 
     def _build_held_side_map(self, all_positions: list[dict]) -> dict:
         """Build {user_symbol: {'long': bool, 'short': bool}} from exchange positions."""
@@ -171,6 +202,8 @@ class WebServer:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def api_web_config_set(self, request):
+        if not self._auth_ok(request):
+            return web.json_response({"status": "error", "message": "unauthorized"}, status=401)
         try:
             data = await request.json()
             await self._db_sync(self.db.save_web_config, data)
@@ -189,6 +222,8 @@ class WebServer:
         return web.json_response(safe)
 
     async def api_config_set(self, request):
+        if not self._auth_ok(request):
+            return web.json_response({"status": "error", "message": "unauthorized"}, status=401)
         try:
             body = await request.json()
             existing = self._load_config()
@@ -468,6 +503,8 @@ class WebServer:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def api_refresh_symbols(self, request):
+        if not self._auth_ok(request):
+            return web.json_response({"status": "error", "message": "unauthorized"}, status=401)
         try:
             symbols = await self.trader.refresh_symbols_now()
             return web.json_response({"status": "ok", "count": len(symbols), "symbols": symbols})

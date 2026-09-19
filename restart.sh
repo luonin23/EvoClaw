@@ -128,10 +128,25 @@ start_service() {
     fi
 }
 
+# ---- 是否由 PM2 托管 ----
+pm2_managed() {
+    command -v pm2 >/dev/null 2>&1 || return 1
+    pm2 describe evoclaw >/dev/null 2>&1
+}
+
 # ---- 正常重启 ----
 do_restart() {
-    echo "=== EvoClaw Restart ==="
     cd "$PROJECT_DIR"
+    # Prefer PM2 when it owns the app: previously this script killed the process
+    # and started a nohup copy while PM2 respawned its own — two supervisors
+    # racing for the same PID file. PM2 is the single source of truth now.
+    if pm2_managed; then
+        echo "=== EvoClaw Restart (PM2) ==="
+        pm2 restart evoclaw
+        echo "  Web UI: http://localhost:$PORT"
+        return 0
+    fi
+    echo "=== EvoClaw Restart ==="
     echo "[1/4] Stopping existing processes..."
     kill_all
     echo "[2/4] Cleaning port $PORT..."
@@ -143,6 +158,12 @@ do_restart() {
 
 # ---- 看门狗模式 ----
 do_watchdog() {
+    if pm2_managed; then
+        echo -e "${GREEN}EvoClaw is managed by PM2${NC} — PM2 already supervises and auto-restarts it."
+        echo "  Use: pm2 status / pm2 logs evoclaw"
+        echo "  (watchdog mode is only needed for the legacy nohup setup)"
+        exit 0
+    fi
     echo -e "${YELLOW}=== EvoClaw Watchdog Started ===${NC}"
     echo "  Check interval: 30s"
     echo "  Crash log: $LOG_DIR/crash.log"
