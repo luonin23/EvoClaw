@@ -730,9 +730,15 @@ class Trader:
             tasks.append(self._do_open(sym, open_side, side))
 
         # === Pass 1: complete partial pairs (symbol has one side open, open the other) ===
+        # ONLY for symbols still inside the candidate pool. A held symbol that
+        # has dropped out of the volume/price filter (e.g. volume collapsed or
+        # a delisting risk) must NOT gain a new leg — pool-external positions
+        # are reduce-only (they can still be closed and, per config, have their
+        # losing leg margin-called, but no new direction is opened).
+        candidate_set = set(symbols)
         partial = {s: ss for s, ss in sym_has.items() if len(ss) == 1}
         for sym in partial:
-            if sym in skip:
+            if sym in skip or sym not in candidate_set:
                 continue
             for side in sides:
                 if max_new is not None and len(tasks) >= max_new:
