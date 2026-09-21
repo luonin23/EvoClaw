@@ -395,6 +395,7 @@ class WebServer:
     async def api_positions_map(self, request):
         try:
             all_positions = await self.client.get_positions()
+            web_cfg = await self._db_sync(self.db.load_web_config)
 
             position_items = []
             for p in all_positions:
@@ -403,16 +404,22 @@ class WebServer:
                 entry = float(p.get("entryPrice", 0) or 0)
                 contracts = float(p.get("contracts", 0) or 0)
                 pnl = float(p.get("unrealizedPnl", 0) or 0)
+                mark = float(p.get("markPrice", 0) or 0)
                 market = self.client.get_market_info(p["symbol"])
                 cs = market.get("contractSize", 1) or 1
                 val = entry * contracts * cs
+                # 现价敞口：深亏/深盈仓的实际敞口与开仓面值差别很大，
+                # 前端矩阵按此定宽（position_value 只是开仓面值）
+                val_mark = mark * contracts * cs if mark > 0 else val
                 rate = pnl / val if val > 0 else 0
                 position_items.append({
                     "symbol": sym,
                     "side": side,
                     "contracts": contracts,
                     "entry_price": entry,
+                    "mark_price": mark,
                     "position_value": round(val, 2),
+                    "position_value_mark": round(val_mark, 2),
                     "pnl": round(pnl, 4),
                     "pnl_rate": round(rate, 6),
                 })
@@ -423,7 +430,12 @@ class WebServer:
             for i, item in enumerate(position_items):
                 result.append({"index": i, **item, "occupied": True})
 
-            return web.json_response({"slots": result, "total_positions": len(all_positions), "max_slots": len(position_items)})
+            return web.json_response({
+                "slots": result,
+                "total_positions": len(all_positions),
+                # 真正的显示容量（前端矩阵配置），不再是误导性的"腿数"
+                "max_slots": int(web_cfg.get("matrix_slots", 150)),
+            })
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
