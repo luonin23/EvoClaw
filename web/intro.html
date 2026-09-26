@@ -991,8 +991,7 @@ body::after{
     </h2>
     <p class="section-subtitle reveal">
       不仅是交易引擎的迭代，更是工程体系的全面进化。
-      本次聚焦：下单量计算正确性、失败分类精准化、双向对冲完整性、接口安全加固与日志治理。
-    </p>
+      本次聚焦：防爆仓三护栏、启停开关、鉴权闭环、账本完整性与数据安全。</p>
     <div class="section-divider reveal"></div>
 
     <div class="feature-grid reveal-stagger">
@@ -1116,6 +1115,43 @@ body::after{
         <p>开仓 / 平仓笔数与交易所逐笔成交一致（实测 16/16、83/83 完全吻合）。
         平仓次数天然多于开仓次数——分档止盈每一档都记一条平仓，同一仓位会被分批止盈多次，
         并非重复计数。</p>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-red">&#9888;</div>
+        <h4>防爆仓三护栏</h4>
+        <p>账户级风险控制（非止损，亏损仓不动）：① 强平后该币种 24h 冷却，切断「清算→重开→再清算」循环；
+        ② 加仓双护栏——保证金预检 + 单仓累计加仓次数上限（默认 4 次）；
+        ③ 账户敞口闸门——总名义价值/权益达到上限（默认 6 倍）即停止新开仓。三项均可在交易配置中调整。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-accent">&#9451;</div>
+        <h4>真·启停开关</h4>
+        <p>「停止交易」从纯前端摆设改为真实引擎开关：服务端 API + 鉴权 + 状态持久化（重启保持）。
+        暂停时引擎空转、仓位完全不动，恢复即继续。前端按钮与引擎实际状态实时同步。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-warn">&#9965;</div>
+        <h4>鉴权完全闭环</h4>
+        <p>修复 GET /api/config 明文暴露管理密码的鉴权绕过链：密码不再出服务器、写接口字段白名单防注入、
+        常量时间比较防时序侧信道、空密码一律拒绝（fail-closed）。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-green">&#10551;</div>
+        <h4>账本零黑洞</h4>
+        <p>任何消失的仓位都会与交易所 userTrades 对账并落账（外部平仓记 type=external，不再静默删除）；
+        平仓失败不再谎报成功；tick 超时取消时订单成交价解析可恢复，杜绝「交易所已平、账本未记」的分叉。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-accent">&#128190;</div>
+        <h4>数据安全</h4>
+        <p>每次启动自动备份账本（保留 14 份、仅所有者可读）；SQLite 单连接跨线程加锁消除事务交错；
+        WAL 改 TRUNCATE 检查点不再无限膨胀；状态统计改为校验式重建，漂移可发现可自愈。</p>
+      </div>
+      <div class="ft-card reveal">
+        <div class="ft-card__icon f-warn">&#9211;</div>
+        <h4>重启不再失忆</h4>
+        <p>重启对已有仓位只同步数量，不再重置加仓冷却、止盈档位、入场时间与手续费记录——
+        此前每次重启都会把马丁状态清零，可能导致对已加过仓的币重复加仓。</p>
+      </div>
       </div>
     </div>
   </div>
@@ -1251,47 +1287,84 @@ body::after{
         <h4>仓位修复</h4>
         <p>平仓后检测仓位缺口，自动补齐缺失头寸，停补保护防止过度开仓</p>
       </div>
-      <div class="ft-card reveal">
-        <div class="ft-card__icon f-red">&#9888;</div>
-        <h4>防爆仓三护栏</h4>
-        <p>账户级风险控制（非止损，亏损仓不动）：① 强平后该币种 24h 冷却，切断「清算→重开→再清算」循环；
-        ② 加仓双护栏——保证金预检 + 单仓累计加仓次数上限（默认 4 次）；
-        ③ 账户敞口闸门——总名义价值/权益达到上限（默认 6 倍）即停止新开仓。三项均可在交易配置中调整。</p>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     SECTION 8: TECH STACK
+     ========================================================= -->
+<section class="section section--half" id="tech">
+  <div class="section-inner" style="text-align:center">
+    <p class="section-label reveal">Tech Stack</p>
+    <h2 class="section-heading reveal">
+      极简技术栈，<span class="hl-accent">极致性能</span>
+    </h2>
+    <p class="section-subtitle reveal" style="margin-left:auto;margin-right:auto">
+      零构建步骤、零外部依赖，单文件部署，进程常驻内存 < 100MB。
+    </p>
+    <div class="section-divider reveal" style="margin-left:auto;margin-right:auto"></div>
+
+    <div class="tech-grid reveal-stagger">
+      <div class="tech-card reveal">
+        <div class="tech-card__label">Runtime</div>
+        <div class="tech-card__value">Python 3.12</div>
+        <div style="font-size:var(--font-sm);color:var(--text-tertiary);margin-top:var(--space-8)">asyncio + ccxt 原生异步</div>
       </div>
-      <div class="ft-card reveal">
-        <div class="ft-card__icon f-accent">&#9451;</div>
-        <h4>真·启停开关</h4>
-        <p>「停止交易」从纯前端摆设改为真实引擎开关：服务端 API + 鉴权 + 状态持久化（重启保持）。
-        暂停时引擎空转、仓位完全不动，恢复即继续。前端按钮与引擎实际状态实时同步。</p>
+      <div class="tech-card reveal">
+        <div class="tech-card__label">Database</div>
+        <div class="tech-card__value">SQLite WAL</div>
+        <div style="font-size:var(--font-sm);color:var(--text-tertiary);margin-top:var(--space-8)">零配置、单文件、异步友好</div>
       </div>
-      <div class="ft-card reveal">
-        <div class="ft-card__icon f-warn">&#9965;</div>
-        <h4>鉴权完全闭环</h4>
-        <p>修复 GET /api/config 明文暴露管理密码的鉴权绕过链：密码不再出服务器、写接口字段白名单防注入、
-        常量时间比较防时序侧信道、空密码一律拒绝（fail-closed）。</p>
-      </div>
-      <div class="ft-card reveal">
-        <div class="ft-card__icon f-green">&#10551;</div>
-        <h4>账本零黑洞</h4>
-        <p>任何消失的仓位都会与交易所 userTrades 对账并落账（外部平仓记 type=external，不再静默删除）；
-        平仓失败不再谎报成功；tick 超时取消时订单成交价解析可恢复，杜绝「交易所已平、账本未记」的分叉。</p>
-      </div>
-      <div class="ft-card reveal">
-        <div class="ft-card__icon f-accent">&#128190;</div>
-        <h4>数据安全</h4>
-        <p>每次启动自动备份账本（保留 14 份、仅所有者可读）；SQLite 单连接跨线程加锁消除事务交错；
-        WAL 改 TRUNCATE 检查点不再无限膨胀；状态统计改为校验式重建，漂移可发现可自愈。</p>
-      </div>
-      <div class="ft-card reveal">
-        <div class="ft-card__icon f-warn">&#9211;</div>
-        <h4>重启不再失忆</h4>
-        <p>重启对已有仓位只同步数量，不再重置加仓冷却、止盈档位、入场时间与手续费记录——
-        此前每次重启都会把马丁状态清零，可能导致对已加过仓的币重复加仓。</p>
+      <div class="tech-card reveal">
+        <div class="tech-card__label">Frontend</div>
+        <div class="tech-card__value">1 HTML</div>
+        <div style="font-size:var(--font-sm);color:var(--text-tertiary);margin-top:var(--space-8)">原生 JS，零构建，< 50KB</div>
       </div>
     </div>
   </div>
 </section>
 
+<!-- =========================================================
+     SECTION 9: ENDING CTA
+     ========================================================= -->
+<section class="section" id="ending">
+  <div class="section-inner reveal-hero">
+    <h2 class="ending-heading reveal">
+      <span class="hl-green">进化</span>你的交易思维<br>
+      <span class="hl-red">抓取</span>每一个盈利窗口
+    </h2>
+    <p class="ending-text reveal">
+      不需要盯盘，不需要分析，不需要情绪管理。<br>
+      你设定规则，EvoClaw 替你执行。<br>
+      24 小时不间断，毫秒级响应，零情绪干扰。
+    </p>
+    <div class="badge-strip reveal">
+      <div class="badge b-green">全自动运行</div>
+      <div class="badge b-red">双向对冲</div>
+      <div class="badge b-accent">爆仓检测</div>
+      <div class="badge b-white">智能熔断</div>
+      <div class="badge b-green">配置数据库化</div>
+      <div class="badge b-accent">看门狗守护</div>
+      <div class="badge b-red">下架风控</div>
+      <div class="badge b-white">最小下单配置</div>
+      <div class="badge b-accent">失败精准分类</div>
+      <div class="badge b-green">对冲完整性</div>
+      <div class="badge b-white">矩阵槽位自适应</div>
+      <div class="badge b-red">服务端鉴权</div>
+      <div class="badge b-green">保证金可观测</div>
+      <div class="badge b-accent">PM2 日志轮转</div>
+      <div class="badge b-white">账实可对账</div>
+      <div class="badge b-red">防爆仓护栏</div>
+      <div class="badge b-green">真启停开关</div>
+      <div class="badge b-accent">账本零黑洞</div>
+      <div class="badge b-white">自动备份</div>
+    </div>
+    <div class="hero-cta reveal">
+      <a href="/" class="cta-btn cta-btn--primary">进入终端</a>
+    </div>
+  </div>
+</section>
 
 <!-- =========================================================
      FOOTER
