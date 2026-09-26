@@ -61,6 +61,8 @@ DEFAULT_CONFIG = {
     "pair_close_threshold": 0.002,
     "enable_delist_close": True,
     "min_order_notional": 5,
+    "margin_call_max_count": 4,
+    "max_account_notional_ratio": 6,
     "skip_symbols": []
 }
 
@@ -221,6 +223,15 @@ async def main():
     cfg = db.load_config()
     log.info(f"Config loaded from DB: {len(cfg.get('symbols', []))} symbols, exchange_kwargs={'present' if cfg.get('exchange_kwargs') else 'MISSING'}")
 
+    # Startup backup: every restart snapshots the DB (WAL-checkpointed first),
+    # keeping the last 14. DB holds the only copy of the ledger AND the config.
+    try:
+        path = db.backup_to(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "backup"), keep=14)
+        if path:
+            log.info(f"DB backup written: {path}")
+    except Exception as e:
+        log.warning(f"Startup backup failed (non-fatal): {e}")
+
     client = ExchangeClient(cfg)
     try:
         await client.load_markets()
@@ -348,18 +359,27 @@ async def main():
                 entry_price = float(p.get("entryPrice", 0) or 0)
                 contracts = float(p.get("contracts", 0) or 0)
                 if contracts > 0:
-                    market = client.get_market_info(sym)
-                    cs = market.get("contractSize", 1) or 1
-                    open_fee = entry_price * contracts * cs * 0.0005
-                    db.record_open(
-                        symbol=sym, side=pos_side,
-                        order_id="startup",
-                        entry_price=entry_price,
-                        amount=contracts,
-                        open_fee=open_fee,
-                        max_slots=int(db.get_runtime_stat('matrix_slots', 100) or 100),
-                    )
-                    log.info(f"Tracking existing position: {sym} {pos_side} {contracts} @ {entry_price}")
+                    # UPSERT semantics: if the position already has a DB row,
+                    # only refresh the amount. record_open does DELETE+INSERT,
+                    # which used to reset margin_called / tier_executed /
+                    # entry_time / open_fee on EVERY restart (martingale cooldown
+                    # and tier progress were silently wiped).
+                    if db.has_open(sym, pos_side):
+                        db.update_open_amount(sym, pos_side, contracts)
+                        log.info(f"Synced existing position: {sym} {pos_side} {contracts} @ {entry_price}")
+                    else:
+                        market = client.get_market_info(sym)
+                        cs = market.get("contractSize", 1) or 1
+                        open_fee = entry_price * contracts * cs * 0.0005
+                        db.record_open(
+                            symbol=sym, side=pos_side,
+                            order_id="startup",
+                            entry_price=entry_price,
+                            amount=contracts,
+                            open_fee=open_fee,
+                            max_slots=int(db.get_runtime_stat('matrix_slots', 100) or 100),
+                        )
+                        log.info(f"Tracking existing position: {sym} {pos_side} {contracts} @ {entry_price}")
 
         tracked = set()
         for sp in db.get_open_positions():
@@ -379,6 +399,9 @@ async def main():
             open_tasks = []
         elif max_count > 0 and len(positions) >= max_count:
             log.info(f"STARTUP OPEN SKIP: total positions {len(positions)} >= limit {max_count}")
+            open_tasks = []
+        elif not await trader._exposure_ok(positions):
+            log.warning("STARTUP OPEN SKIP: account exposure at/over cap (anti-liquidation guard)")
             open_tasks = []
         else:
             max_new = max_count - len(positions) if max_count > 0 else None

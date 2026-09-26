@@ -181,6 +181,19 @@ class ExchangeClient:
         # Last resort: refresh_prices cache
         return float(self._prices.get(symbol, 0) or 0)
 
+    async def _resolve_fill_price_safe(self, order: dict, symbol: str) -> float:
+        """Tick-timeout cancellation can land inside the fill-price resolution
+        AFTER the order already executed on the exchange. Swallowing the cancel
+        here (falling back to the price embedded in the order ACK) guarantees
+        the caller receives the result and can finish its DB bookkeeping —
+        otherwise the trade silently vanishes from the ledger."""
+        try:
+            return await self._resolve_fill_price(order, symbol)
+        except asyncio.CancelledError:
+            avg = self._extract_order_price(order)
+            log.warning(f"{symbol}: fill-price resolution cancelled by tick timeout, using order-embedded price")
+            return float(avg or 0)
+
     async def _safe_call(self, coro, timeout=10):
         """Wrap ccxt call with hard timeout to prevent event loop blocking."""
         if self._closed:
@@ -225,18 +238,16 @@ class ExchangeClient:
         log.info(f"Loaded {len(self.market_info)} USDT swap markets, {len(self.symbol_map)} aliases")
 
     async def refresh_prices(self, symbols: list):
+        """Refresh the price cache. Raises on failure — the trader's stale-price
+        circuit breaker depends on seeing this exception (it used to be swallowed
+        here, which left the breaker dead while trading on stale prices)."""
         resolved = [self.resolve_symbol(s) for s in symbols]
-        try:
-            tickers = await self._safe_call(self.exchange.fetch_tickers(resolved), timeout=15)
-            ts = time.monotonic()
-            for sym, ticker in tickers.items():
-                if ticker and ticker.get("last"):
-                    self._prices[sym] = float(ticker["last"])
-                    self._price_ts[sym] = ts
-                    if sym in self.market_info:
-                        self.market_info[sym]["info"]["lastPrice"] = str(ticker["last"])
-        except Exception as e:
-            log.warning(f"refresh_prices failed: {e}")
+        tickers = await self._safe_call(self.exchange.fetch_tickers(resolved), timeout=15)
+        ts = time.monotonic()
+        for sym, ticker in tickers.items():
+            if ticker and ticker.get("last"):
+                self._prices[sym] = float(ticker["last"])
+                self._price_ts[sym] = ts
 
     async def ensure_price(self, symbol: str, max_age: float = 30.0) -> float:
         """Return a fresh-enough last price for a symbol, fetching one if needed.
@@ -360,11 +371,6 @@ class ExchangeClient:
             return False
         resolved = self.resolve_symbol(sym)
         price = self._prices.get(resolved)
-        if not price or price <= 0:
-            market = self.get_market_info(sym)
-            price_str = market.get("info", {}).get("lastPrice")
-            if price_str:
-                price = float(price_str)
         if not price or price <= 0:
             log.warning(f"REPLENISH STOP {sym} {side}: price unavailable, defaulting to STOP")
             return True
@@ -623,10 +629,6 @@ class ExchangeClient:
             if min_notional > 0:
                 price = self._prices.get(resolved)
                 if not price or price <= 0:
-                    price_str = market.get("info", {}).get("lastPrice") or market.get("last", None)
-                    if price_str:
-                        price = float(price_str)
-                if not price or price <= 0:
                     # No usable price → cannot size a valid order. Return 0 so
                     # callers skip instead of placing a garbage-sized order.
                     # (The old fallback assumed price = cs*10, yielding ~0.05
@@ -664,7 +666,7 @@ class ExchangeClient:
                 params={"positionSide": "LONG" if side == "buy" else "SHORT"},
             ), timeout=15)
             log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
-            avg = await self._resolve_fill_price(order, resolved)
+            avg = await self._resolve_fill_price_safe(order, resolved)
             self.clear_order_error(symbol, side)
             return {
                 "order_id": str(order.get("id", "")),
@@ -723,7 +725,7 @@ class ExchangeClient:
                 params={"positionSide": side.upper()},
             ), timeout=15)
             log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
-            avg = await self._resolve_fill_price(order, resolved)
+            avg = await self._resolve_fill_price_safe(order, resolved)
             self.clear_order_error(symbol, side)
             return {
                 "order_id": str(order.get("id", "")),
@@ -773,10 +775,14 @@ class ExchangeClient:
         try:
             order = await self._safe_call(self.exchange.create_order(
                 symbol=resolved, type="market", side=close_side, amount=contracts,
+                # Hedge mode: side+positionSide IS the reduce instruction on the
+                # exchange side — a SELL/LONG order cannot flip into an opposite
+                # open. (reduceOnly must NOT be sent in Hedge Mode: Binance
+                # rejects it with -1106. Review-confirmed.)
                 params={"positionSide": side.upper()},
             ), timeout=15)
             log.info(f"Close {side} {resolved} {contracts} -> {order.get('id')}")
-            avg = await self._resolve_fill_price(order, resolved)
+            avg = await self._resolve_fill_price_safe(order, resolved)
             return {
                 "order_id": str(order.get("id", "")),
                 "average": float(avg or 0),
@@ -801,7 +807,7 @@ class ExchangeClient:
                 try:
                     order = await self._safe_call(self.exchange.create_order(
                         symbol=sym, type="market", side=cs, amount=amt,
-                        params={"reduceOnly": True, "positionSide": ps.upper()},
+                        params={"positionSide": ps.upper()},
                     ), timeout=15)
                     log.info(f"All-close {ps} {sym} {amt} -> {order.get('id')}")
                     return {

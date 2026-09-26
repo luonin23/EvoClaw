@@ -2,6 +2,8 @@ import json
 import sqlite3
 import os
 import logging
+import shutil
+import threading
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -13,7 +15,30 @@ class Database:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        # Single shared connection is used from BOTH the event-loop thread and
+        # asyncio.to_thread workers. sqlite3 only serializes individual
+        # statements — multi-statement transactions can interleave without this.
+        self._lk = threading.RLock()
         self._init_tables()
+        # All compound (multi-statement) mutating methods share one lock so a
+        # web to_thread worker can never interleave with a trader-thread
+        # transaction on the same connection.
+        for _name in (
+            "insert_trade", "record_open", "update_open_amount", "remove_open",
+            "mark_margin_called", "record_open_event", "record_delisting",
+            "set_tier_executed", "increment_margin_call_count",
+            "set_runtime_stat", "upsert_config_key", "save_config",
+            "seed_config", "record_liquidation", "record_liquidations_batch",
+            "_rebuild_stats", "_backfill_open_time", "backup_to", "checkpoint",
+            "checkpoint_restart",
+        ):
+            setattr(self, _name, self._make_locked(getattr(self, _name)))
+
+    def _make_locked(self, fn):
+        def wrapper(*args, **kwargs):
+            with self._lk:
+                return fn(*args, **kwargs)
+        return wrapper
 
     def _init_tables(self):
         self.conn.executescript("""
@@ -63,6 +88,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_liq_batch ON liquidations(batch_id);
             CREATE INDEX IF NOT EXISTS idx_liq_time ON liquidations(liquidation_time);
             CREATE INDEX IF NOT EXISTS idx_liq_symbol ON liquidations(symbol);
+            CREATE INDEX IF NOT EXISTS idx_liq_time_batch ON liquidations(liquidation_time, batch_id);
         """)
         self.conn.commit()
         # Delisting ledger — records every proactive close (source='proactive')
@@ -141,6 +167,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_opens_symbol ON opens(symbol);
             CREATE INDEX IF NOT EXISTS idx_opens_side ON opens(side);
             CREATE INDEX IF NOT EXISTS idx_opens_time ON opens(open_time);
+            CREATE INDEX IF NOT EXISTS idx_opens_sym_side_type ON opens(symbol, side, type);
         """)
         self.conn.commit()
         self._rebuild_stats()
@@ -165,6 +192,18 @@ class Database:
             log.warning(f"web_password seeding failed (non-fatal): {e}")
 
     def _rebuild_stats(self):
+        # Verify-first: the incremental counters in trade_stats drift only on
+        # rare failure paths, so compare the cheap key (total_count) before
+        # paying for a full-table re-aggregation on every startup.
+        try:
+            real = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades").fetchone()
+            rows = dict(self.conn.execute("SELECT key, value FROM trade_stats").fetchall())
+            if rows and int(rows.get("total_count", -1)) == int(real[0]) and abs(float(rows.get("total_pnl", 0)) - float(real[1])) < 0.01:
+                return
+            if rows:
+                log.warning(f"trade_stats drift detected (stats={rows.get('total_count')}/{rows.get('total_pnl')} vs real={real[0]}/{real[1]}) — rebuilding")
+        except Exception:
+            pass
         self.conn.execute("DELETE FROM trade_stats")
         row = self.conn.execute("""
             SELECT
@@ -232,9 +271,9 @@ class Database:
             self._inc_stat("all_close_count", 1)
         elif ttype == "pair_close":
             self._inc_stat("pair_close_count", 1)
-        elif ttype == "delist":
-            # Dedicated type — counts toward total/win/loss/fee stats but not the
-            # three main close-type counters (it is not a tier/pair/all close).
+        elif ttype in ("delist", "external"):
+            # Dedicated types — count toward total/win/loss/fee stats but not the
+            # three main close-type counters (not a tier/pair/all close).
             pass
         else:
             self._inc_stat("single_count", 1)
@@ -398,11 +437,11 @@ class Database:
         return list(grouped.values())
 
     def _backfill_open_time(self):
-        """Backfill empty open_time in trades from open_positions records.
+        """Backfill empty open_time in trades.
 
-        Some historical trades can never be filled (their position is gone), so
-        this runs at every startup. Only log at INFO when it actually fills
-        something; otherwise it is just permanent startup noise.
+        Two passes: (1) from live open_positions entries, (2) one-time estimate
+        for legacy rows whose position is long gone — use close_time as the
+        closest available approximation so hold-duration analytics work.
         """
         empty_count = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
         if empty_count == 0:
@@ -434,6 +473,14 @@ class Database:
             log.info(f"Backfilled open_time for {filled} trades ({remaining} remain, position no longer in DB)")
         else:
             log.debug(f"open_time backfill: nothing fillable ({remaining} legacy trades, position no longer in DB)")
+        # One-time estimate for the permanently-unfillable legacy rows.
+        if remaining > 0 and not self.get_runtime_stat("open_time_estimated", 0):
+            self.conn.execute(
+                """UPDATE trades SET open_time = close_time
+                   WHERE (open_time = '' OR open_time IS NULL) AND close_time != ''"""
+            )
+            self.set_runtime_stat("open_time_estimated", 1)
+            log.info(f"Estimated open_time from close_time for {remaining} legacy trades (one-time)")
 
     # ===== Stats =====
 
@@ -770,9 +817,43 @@ class Database:
 
     def checkpoint_restart(self):
         try:
-            self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            # TRUNCATE (not PASSIVE): PASSIVE silently does nothing while any
+            # read snapshot is open, which let the WAL grow to 2x the main DB.
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception as e:
             log.warning(f"WAL checkpoint failed: {e}")
 
+    def backup_to(self, backup_dir: str, keep: int = 14) -> str | None:
+        """Checkpoint then snapshot the DB file. Returns the backup path."""
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+            self.checkpoint_restart()
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+            path = os.path.join(backup_dir, f"evoclaw-{stamp}.db")
+            shutil.copyfile(self.conn.execute("PRAGMA database_list").fetchone()[2], path)
+            os.chmod(path, 0o600)
+            backups = sorted(f for f in os.listdir(backup_dir) if f.startswith("evoclaw-") and f.endswith(".db"))
+            for old in backups[:-keep]:
+                try:
+                    os.remove(os.path.join(backup_dir, old))
+                except OSError:
+                    pass
+            return path
+        except Exception as e:
+            log.warning(f"DB backup failed (non-fatal): {e}")
+            return None
+
+    def count_margin_adds(self, symbol: str, side: str, since_iso: str) -> int:
+        """Number of margin-call adds already applied to this position."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM opens WHERE symbol=? AND side=? AND type='margin' AND open_time >= ?",
+            (symbol, side, since_iso),
+        ).fetchone()
+        return row[0] if row else 0
+
     def close(self):
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass
         self.conn.close()

@@ -101,17 +101,29 @@ class Trader:
 
     async def run(self):
         self.running = True
+        self.paused = bool(self.db.get_runtime_stat("trading_paused", 0))
         tick_count = 0
         interval = max(3, self._get_config().get("position_check_interval", 3))  # minimum 3s
-        log.info("Trader started")
+        log.info(f"Trader started (paused={self.paused})")
 
         # Track tick duration for health monitoring
         tick_start = time.monotonic()
 
         while self.running:
             try:
-                # === Phase 1: Per-tick timeout (30s) to prevent event-loop hangs ===
-                await asyncio.wait_for(self.tick(), timeout=30)
+                if self.paused:
+                    # User-requested stop: no trading actions at all, but keep
+                    # the loop + web server alive and the state observable.
+                    if tick_count % 60 == 0:
+                        log.info("TRADING PAUSED — tick skipped")
+                    tick_count += 1
+                    await asyncio.sleep(interval)
+                    continue
+                # === Phase 1: Per-tick timeout to prevent event-loop hangs.
+                # 60s: the tick now runs the three refreshes in parallel and
+                # order paths are cancellation-safe, but multi-symbol tier
+                # closes can still legitimately take a while.
+                await asyncio.wait_for(self.tick(), timeout=60)
                 tick_count += 1
 
                 # === Phase 2: Heartbeat every 60 ticks (~1 minute) ===
@@ -141,7 +153,7 @@ class Trader:
                 # === Phase 1: Tick timeout — log and continue ===
                 tick_count += 1
                 log.error(
-                    f"TICK TIMEOUT: tick() exceeded 30s (tick={tick_count}). "
+                    f"TICK TIMEOUT: tick() exceeded 60s (tick={tick_count}). "
                     f"Forcing next cycle. Check Binance API connectivity."
                 )
             except Exception as e:
@@ -153,6 +165,14 @@ class Trader:
 
     def stop(self):
         self.running = False
+
+    def set_paused(self, paused: bool):
+        """User-controlled trading pause (persisted; survives restarts).
+        This is NOT a stop-loss: existing positions are left untouched, no new
+        orders of any kind are placed while paused."""
+        self.paused = paused
+        self.db.set_runtime_stat("trading_paused", 1 if paused else 0)
+        log.warning(f"TRADING {'PAUSED' if paused else 'RESUMED'} by user")
 
     def _is_skipped_2027(self, symbol: str) -> bool:
         count = self._fail2027_counts.get(symbol, 0)
@@ -292,21 +312,27 @@ class Trader:
         if not candidate_symbols:
             return
 
-        # === Delisting watch: refresh status/schedule (no-op inside cache TTL)
-        # so every close & replenish step below can skip settling/removed coins.
-        await self.client.refresh_market_statuses()
-        await self.client.fetch_delist_schedule()
+        # === Delisting watch + price refresh, all independent — run in
+        # parallel to keep the tick inside its 60s budget even when Binance
+        # is slow (each was 15-20s serially).
+        refresh_task = self.client.refresh_prices(candidate_symbols)
+        results = await asyncio.gather(
+            self.client.refresh_market_statuses(),
+            self.client.fetch_delist_schedule(),
+            refresh_task,
+            return_exceptions=True,
+        )
 
         # === Phase 2: Price refresh with staleness detection ===
-        try:
-            await self.client.refresh_prices(candidate_symbols)
-            self._last_price_ok = time.monotonic()
-            self._price_fail_streak = 0
-        except Exception:
-            # refresh_prices already logs the warning internally
+        for idx, name in ((0, "market statuses"), (1, "delist schedule")):
+            if isinstance(results[idx], BaseException):
+                log.warning(f"{name} refresh failed this tick: {results[idx]!r}")
+        price_result = results[2]
+        if isinstance(price_result, BaseException):
+            # refresh_prices raises on failure now (its internal swallow used to
+            # leave the stale-price breaker permanently dead)
             self._price_fail_streak += 1
             if self._price_fail_streak >= self._price_max_fail_streak:
-                # Multiple consecutive failures — skip this tick entirely
                 if self._price_fail_streak == self._price_max_fail_streak:
                     log.error(
                         f"PRICE FEED STALE: refresh_prices failed {self._price_fail_streak} times. "
@@ -314,6 +340,9 @@ class Trader:
                         f"Continuing with stale prices..."
                     )
             # Don't return — continue with stale prices rather than stopping entirely
+        else:
+            self._last_price_ok = time.monotonic()
+            self._price_fail_streak = 0
 
         # === Phase 2: Warn if prices are stale ===
         if self._last_price_ok > 0 and (time.monotonic() - self._last_price_ok) > self._price_stale_seconds:
@@ -446,29 +475,34 @@ class Trader:
             return False
 
         log.info(f"ALL CLOSE: pnl={total_pnl:.4f} value={total_value:.2f} rate={total_pnl/total_value:.4f} targets={len(targets)}")
+        closed_count = 0
         for t in targets:
             sym = t["symbol"]
             pos_side = t["side"]
             result = await self.client.close_position(sym, pos_side, t["contracts"])
-            if result:
-                open_fee = 0
-                sp = self._system_pos_map.get(f"{sym}:{pos_side}")
-                if sp:
-                    open_fee = sp.get("open_fee", 0)
-                    self.db.remove_open(sym, pos_side)
-                    self._system_pos_map.pop(f"{sym}:{pos_side}", None)
-                if open_fee <= 0:
-                    market = self.client.get_market_info(sym)
-                    cs = market.get("contractSize", 1) or 1
-                    open_fee = t["entry_price"] * t["contracts"] * cs * 0.0005
+            if not result:
+                continue  # failed close: no bookkeeping, not a successful all-close
+            closed_count += 1
+            open_fee = 0
+            sp = self._system_pos_map.get(f"{sym}:{pos_side}")
+            if sp:
+                open_fee = sp.get("open_fee", 0)
+                self.db.remove_open(sym, pos_side)
+                self._system_pos_map.pop(f"{sym}:{pos_side}", None)
+            if open_fee <= 0:
+                market = self.client.get_market_info(sym)
+                cs = market.get("contractSize", 1) or 1
+                open_fee = t["entry_price"] * t["contracts"] * cs * 0.0005
 
-                open_time = sp.get("entry_time", "") if sp else ""
-                await self._record_trade(
-                    symbol=sym, side=pos_side,
-                    entry_price=t["entry_price"], contracts=t["contracts"],
-                    close_result=result, trade_type="all_close", open_fee=open_fee,
-                    open_time=open_time,
-                )
+            open_time = sp.get("entry_time", "") if sp else ""
+            await self._record_trade(
+                symbol=sym, side=pos_side,
+                entry_price=t["entry_price"], contracts=t["contracts"],
+                close_result=result, trade_type="all_close", open_fee=open_fee,
+                open_time=open_time,
+            )
+        if closed_count == 0:
+            return False
         await self.replenish_all(symbols, sides)
         return True
 
@@ -518,35 +552,39 @@ class Trader:
                     continue
                 log.info(f"TIER CLOSE {symbol} {pos_side}: tier={i+1} pnl={unrealized_pnl:.4f} rate={profit_rate:.4%} close={close_contracts}/{contracts}")
                 result = await self.client.close_position(symbol, pos_side, close_contracts)
-                if result:
-                    open_fee = 0
-                    sp = self._system_pos_map.get(pos_key)
-                    if sp:
-                        open_fee = sp.get("open_fee", 0)
-                    remaining = contracts - close_contracts
-                    if remaining <= 0:
-                        self.db.remove_open(symbol, pos_side)
-                        self._system_pos_map.pop(pos_key, None)
-                    else:
-                        try:
-                            self.db.update_open_amount(symbol, pos_side, remaining)
-                            if sp:
-                                sp["amount"] = remaining
-                        except Exception:
-                            pass
-                    open_time = sp.get("entry_time", "") if sp else ""
-                    await self._record_trade(
-                        symbol=symbol, side=pos_side,
-                        entry_price=entry_price, contracts=close_contracts,
-                        close_result=result, trade_type="single", open_fee=open_fee,
-                        open_time=open_time,
-                    )
-                    self._tier_executed[pos_key] = i
-                    # Persist tier state to DB (survives restarts)
+                if not result:
+                    # Close failed (network / exchange reject): do NOT report
+                    # success — the tick uses this flag to decide whether to
+                    # refetch positions, and bookkeeping must not proceed.
+                    return False
+                open_fee = 0
+                sp = self._system_pos_map.get(pos_key)
+                if sp:
+                    open_fee = sp.get("open_fee", 0)
+                remaining = contracts - close_contracts
+                if remaining <= 0:
+                    self.db.remove_open(symbol, pos_side)
+                    self._system_pos_map.pop(pos_key, None)
+                else:
                     try:
-                        self.db.set_tier_executed(symbol, pos_side, i)
+                        self.db.update_open_amount(symbol, pos_side, remaining)
+                        if sp:
+                            sp["amount"] = remaining
                     except Exception:
                         pass
+                open_time = sp.get("entry_time", "") if sp else ""
+                await self._record_trade(
+                    symbol=symbol, side=pos_side,
+                    entry_price=entry_price, contracts=close_contracts,
+                    close_result=result, trade_type="single", open_fee=open_fee,
+                    open_time=open_time,
+                )
+                self._tier_executed[pos_key] = i
+                # Persist tier state to DB (survives restarts)
+                try:
+                    self.db.set_tier_executed(symbol, pos_side, i)
+                except Exception:
+                    pass
                 return True
         return False
 
@@ -597,9 +635,11 @@ class Trader:
             avg_rate = total_pnl / total_val
             if avg_rate >= threshold:
                 log.info(f"SINGLE PAIR CLOSE {sym}: avg_rate={avg_rate:.4%} rates={[f'{r:.4%}' for r in rates]}")
+                pair_closed = False
                 for side in ("long", "short"):
                     result = await self.client.close_position(sym, side, contracts_map[side])
                     if result:
+                        pair_closed = True
                         open_fee = 0
                         sp = self._system_pos_map.get(f"{sym}:{side}")
                         if sp:
@@ -613,7 +653,8 @@ class Trader:
                             close_result=result, trade_type="pair_close", open_fee=open_fee,
                             open_time=open_time,
                         )
-                closed_any = True
+                if pair_closed:
+                    closed_any = True
         return closed_any
 
     # ========== Margin call (Phase 1: with rate limiting) ==========
@@ -664,10 +705,46 @@ class Trader:
             loss_rate = abs(pnl) / val
             threshold = threshold_long if side == "long" else threshold_short
             if loss_rate >= threshold:
+                # Guard 1: per-position cumulative add cap (user-approved).
+                # The 99% martingale design is kept, but a position that has
+                # already been averaged `margin_call_max_count` times stops
+                # growing — otherwise one runaway coin absorbs the whole account.
+                max_adds = int(cfg.get("margin_call_max_count", 4) or 0)
+                if max_adds > 0:
+                    entry_time = self.db.get_open_entry_time(sym, side)
+                    adds = self.db.count_margin_adds(sym, side, entry_time) if entry_time else 0
+                    if adds >= max_adds:
+                        s = _throttle_warn.emit(f"mc_cap:{sym}:{side}")
+                        if s is not None:
+                            log.warning(
+                                f"MARGIN CALL capped {sym} {side}: already added {adds}x "
+                                f"(max {max_adds}) — holding position without further adds{s}"
+                            )
+                        continue
                 add_amount = contracts * multiplier
                 min_amount = self.client.calc_min_contracts(sym)
                 if add_amount < min_amount:
                     add_amount = min_amount
+                # Guard 2: margin pre-check. Binance rejects with -2019 anyway,
+                # but by then the account is already on the liquidation edge —
+                # estimate required margin conservatively (assume <=10x) and
+                # skip BEFORE burning the attempt (the 09-25 account wipe had
+                # every add failing on margin for 2 days straight).
+                try:
+                    bal = await self.client.get_balance()
+                    est_margin = add_amount * max(self.client.get_last_price(sym), entry, 0) * cs / 10.0
+                    if bal.get("available_balance", 0) < est_margin:
+                        self._start_mc_cooldown(sym)
+                        s = _throttle_warn.emit(f"mc_margin_pre:{sym}")
+                        if s is not None:
+                            log.warning(
+                                f"MARGIN CALL skipped {sym} {side}: estimated margin "
+                                f"{est_margin:.2f}U > available {bal.get('available_balance', 0):.2f}U "
+                                f"(anti-liquidation guard){s}"
+                            )
+                        continue
+                except Exception:
+                    pass  # balance check failed — let the exchange decide
                 log.info(
                     f"MARGIN CALL {sym} {side}: loss={loss_rate:.4%} threshold={threshold:.4%} "
                     f"adding {add_amount} contracts (current={contracts} x {multiplier})"
@@ -726,6 +803,10 @@ class Trader:
             log.debug(f"REPLENISH SKIP: total positions {len(all_positions)} >= limit {max_count}")
             return
 
+        # Account-level anti-liquidation gate before adding ANY new exposure.
+        if not await self._exposure_ok(all_positions):
+            return
+
         position_map = {}
         sym_has = {}  # symbol -> set of sides currently open
         for p in all_positions:
@@ -748,7 +829,7 @@ class Trader:
             key = f"{sym}:{side}"
             if key in current or self.db.has_open(sym, side) or self._is_skipped_2027(sym):
                 return False
-            if self._delist_risk_symbol(sym):
+            if self._delist_risk_symbol(sym) or self._is_liquidation_cooled(sym):
                 return False
             if self.client.should_stop_replenish(sym, side, stop_threshold, position_map):
                 return False
@@ -801,6 +882,8 @@ class Trader:
         if max_count > 0 and len(all_positions) >= max_count:
             log.debug(f"REPLENISH ALL SKIP: total positions {len(all_positions)} >= limit {max_count}")
             return
+        if not await self._exposure_ok(all_positions):
+            return
 
         position_map = {}
         for p in all_positions:
@@ -814,7 +897,7 @@ class Trader:
         tasks = []
         skip = set(cfg.get('skip_symbols', []))
         for sym in symbols:
-            if sym in skip or self._delist_risk_symbol(sym):
+            if sym in skip or self._delist_risk_symbol(sym) or self._is_liquidation_cooled(sym):
                 continue
             for side in sides:
                 if max_new is not None and len(tasks) >= max_new:
@@ -892,6 +975,7 @@ class Trader:
                     pnl = fo.get("pnl", 0)
 
                 batch_id = fo.get("time", "")[:16]  # group by minute
+                self._record_liquidation_cooldown(sym)
                 self.db.record_liquidation(
                     batch_id=batch_id,
                     symbol=sym,
@@ -921,17 +1005,19 @@ class Trader:
 
     async def _handle_vanished_settlement(self, key: str, sym: str, side: str, db_pos: dict | None,
                                           entry_price: float, amount: float) -> bool:
-        """When a DB position disappears with no force order, check whether the
-        symbol is being delisted/settled.  If so, reconcile the settlement PnL
-        against Binance userTrades (authoritative realizedPnl) and record a
-        'settled' entry in the delisting ledger so statistics stay complete.
+        """When a DB position disappears with no force order, reconcile the
+        realized PnL against Binance userTrades (authoritative) and record the
+        close so no position can ever vanish from the ledger without its PnL.
 
-        Returns True when the position was handled as a delisting settlement.
+        Covers delisting settlements (delisting ledger, source='settled') AND
+        externally/manual closes discovered late (trades table, type='external'
+        — previously these were silently deleted, losing all their PnL).
+
+        Returns True when the position was handled and recorded.
         """
         await self.client.refresh_market_statuses()
         await self.client.fetch_delist_schedule()
-        if not self._delist_risk_symbol(sym):
-            return False
+        is_delist = self._delist_risk_symbol(sym)
 
         open_time = db_pos.get("entry_time", "") if db_pos else ""
         since_dt = None
@@ -945,7 +1031,7 @@ class Trader:
         if since_dt is None:
             since_dt = datetime.now(timezone.utc) - timedelta(hours=24)
         # Guard: don't re-record a settlement that was already booked recently.
-        if self.db.has_delisting_recent(sym, side, since_iso=(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()):
+        if is_delist and self.db.has_delisting_recent(sym, side, since_iso=(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()):
             self.db.remove_open(sym, side)
             return True
 
@@ -977,21 +1063,95 @@ class Trader:
                 pnl = 0.0
         pnl_rate = self._pnl_rate(pnl, position_value) if position_value > 0 else 0
         fee = exit_price * amount * cs * 0.0005
-        delist_time = await self._delist_schedule_time(sym)
-        await self._record_delisting(
-            symbol=sym, side=side, entry_price=entry_price, exit_price=exit_price,
-            amount=amount, contract_size=cs, position_value=position_value,
-            pnl=pnl, pnl_rate=pnl_rate, fee=fee, source="settled",
-            delist_time=delist_time, open_time=open_time,
-        )
+        open_time = open_time or since_dt.isoformat()
+        if is_delist:
+            delist_time = await self._delist_schedule_time(sym)
+            await self._record_delisting(
+                symbol=sym, side=side, entry_price=entry_price, exit_price=exit_price,
+                amount=amount, contract_size=cs, position_value=position_value,
+                pnl=pnl, pnl_rate=pnl_rate, fee=fee, source="settled",
+                delist_time=delist_time, open_time=open_time,
+            )
+            log.warning(
+                f"DELIST SETTLED {sym} {side}: qty={amount} entry={entry_price:.6f} "
+                f"exit={exit_price:.6f} pnl={pnl:.4f} source=settled"
+            )
+        else:
+            # Externally closed (manual / late-discovered): book the PnL so the
+            # ledger stays complete instead of silently deleting the position.
+            self.db.insert_trade({
+                "symbol": sym, "side": side, "type": "external",
+                "open_time": open_time, "close_time": datetime.now(timezone.utc).isoformat(),
+                "entry_price": entry_price, "exit_price": exit_price,
+                "amount": amount, "pnl": pnl, "pnl_rate": pnl_rate, "fee": fee,
+            })
+            log.warning(
+                f"VANISHED RECONCILED {sym} {side}: qty={amount} entry={entry_price:.6f} "
+                f"exit={exit_price:.6f} pnl={pnl:.4f} source=external"
+            )
         self.db.remove_open(sym, side)
-        log.warning(
-            f"DELIST SETTLED {sym} {side}: qty={amount} entry={entry_price:.6f} "
-            f"exit={exit_price:.6f} pnl={pnl:.4f} source=settled"
-        )
         return True
 
     # ========== Delisting handling ==========
+
+    def _record_liquidation_cooldown(self, symbol: str, hours: float = 24.0):
+        """After a liquidation, block re-opening this symbol for a while.
+
+        The worst pre-wipe pattern was: liquidated at the worst price -> the
+        same tick's replenish re-opens the same losing direction -> liquidated
+        again. Persisted in runtime_stats so it survives restarts.
+        """
+        try:
+            self.db.set_runtime_stat(f"liq_cooldown:{symbol}", datetime.now(timezone.utc).timestamp())
+        except Exception:
+            pass
+
+    def _is_liquidation_cooled(self, symbol: str, hours: float = 24.0) -> bool:
+        ts = self.db.get_runtime_stat(f"liq_cooldown:{symbol}", 0)
+        if not ts:
+            return False
+        return (datetime.now(timezone.utc).timestamp() - ts) < hours * 3600
+
+    async def _exposure_ok(self, all_positions: list[dict]) -> bool:
+        """Account-level anti-liquidation gate (NOT a stop-loss).
+
+        Caps TOTAL mark notional at max_account_notional_ratio × equity before
+        opening anything new. Both account wipes (06-10: -325U, 09-25: -191U)
+        ran at ~17x account leverage with zero free margin; existing/losing
+        positions are never touched by this — it only stops NEW exposure.
+        """
+        cfg = self._get_config()
+        ratio = float(cfg.get("max_account_notional_ratio", 6) or 0)
+        if ratio <= 0:
+            return True
+        total_val = 0.0
+        unrealized = 0.0
+        for p in all_positions:
+            sym = self.client.user_symbol(p["symbol"])
+            mark = float(p.get("markPrice", 0) or 0) or float(p.get("entryPrice", 0) or 0)
+            c = float(p.get("contracts", 0) or 0)
+            cs = float(self.client.get_market_info(sym).get("contractSize", 1) or 1)
+            total_val += mark * c * cs
+            unrealized += float(p.get("unrealizedPnl", 0) or 0)
+        try:
+            bal = await self.client.get_balance()
+            # 真实权益 = 钱包余额 + 未实现盈亏（浮亏时权益更低、闸门更早触发）
+            equity = float(bal.get("balance", 0) or 0) + unrealized
+        except Exception:
+            return True  # cannot verify — order-level margin checks still apply
+        if equity <= 0:
+            return False
+        cur = total_val / equity
+        if cur >= ratio:
+            s = _throttle_warn.emit("exposure_cap")
+            if s is not None:
+                log.warning(
+                    f"EXPOSURE CAP: total notional {total_val:.0f}U / equity {equity:.0f}U "
+                    f"= {cur:.1f}x >= limit {ratio:.0f}x — new opens paused "
+                    f"(anti-liquidation guard, existing positions untouched){s}"
+                )
+            return False
+        return True
 
     def _delist_risk_symbol(self, symbol: str) -> bool:
         """True when a symbol is (or is about to be) delisted/settled.

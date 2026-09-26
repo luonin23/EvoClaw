@@ -31,6 +31,7 @@ class WebServer:
         self.app.router.add_get("/", self.handle_index)
         self.app.router.add_get("/intro.html", self.handle_intro)
         self.app.router.add_get("/delist.html", self.handle_delist)
+        self.app.router.add_get("/vendor/html2canvas.min.js", self.handle_vendor_js)
         self.app.router.add_get("/api/config", self.api_config_get)
         self.app.router.add_post("/api/config", self.api_config_set)
         self.app.router.add_get("/api/account", self.api_account_cached)
@@ -46,6 +47,8 @@ class WebServer:
         self.app.router.add_get("/api/delistings", self.api_delistings)
         self.app.router.add_post("/api/refresh-symbols", self.api_refresh_symbols)
         self.app.router.add_post("/api/auth-check", self.api_auth_check)
+        self.app.router.add_get("/api/trading-status", self.api_trading_status)
+        self.app.router.add_post("/api/trading-toggle", self.api_trading_toggle)
         self.app.router.add_get("/web/config.json", self.handle_web_config)
         self.app.router.add_get("/api/web-config", self.api_web_config_get)
         self.app.router.add_post("/api/web-config", self.api_web_config_set)
@@ -78,13 +81,18 @@ class WebServer:
         The frontend password gate is UX only — without this check any internet
         client could POST /api/config (which can overwrite exchange keys and all
         trading parameters). Password lives in the DB config ('web_password').
+        Empty password DENIES instead of allowing (fail-closed).
         """
+        import secrets as _secrets
         expected = self._get_web_password()
         if not expected:
-            return True  # nothing configured — preserve legacy behaviour
+            return False  # fail-closed: no password configured -> no writes
         supplied = (request.headers.get("X-Web-Password")
                     or request.query.get("password") or "")
-        return supplied == expected
+        try:
+            return _secrets.compare_digest(supplied.encode(), expected.encode())
+        except (TypeError, UnicodeEncodeError):
+            return False  # non-ASCII header garbage -> deny, not 500
 
     async def api_auth_check(self, request):
         """Lightweight endpoint the UI calls to validate the entered password."""
@@ -189,6 +197,18 @@ class WebServer:
             "Expires": "0"
         })
 
+    async def handle_vendor_js(self, request):
+        """Self-hosted third-party JS (no CDN trust needed for a page that
+        holds the config password)."""
+        web_path = os.path.join(os.path.dirname(__file__), "web", "vendor", "html2canvas.min.js")
+        try:
+            content = _get_static(web_path)
+        except OSError:
+            return web.Response(status=404, text="// not found")
+        return web.Response(text=content, content_type="application/javascript", headers={
+            "Cache-Control": "public, max-age=86400"
+        })
+
     async def handle_web_config(self, request):
         """Legacy endpoint — reads from DB (file was migrated on startup)."""
         cfg = await self._db_sync(self.db.load_web_config)
@@ -211,6 +231,21 @@ class WebServer:
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
+    # Mutating config keys accepted by api_config_set — anything else in the
+    # request body is dropped (prevents injecting arbitrary junk keys that
+    # save_config would faithfully persist and serve back).
+    _CONFIG_WRITABLE_KEYS = {
+        "volume_threshold", "price_threshold", "symbol_refresh_interval",
+        "side", "profit_tiers", "replenish_stop_threshold",
+        "max_position_count", "enable_all_close", "all_close_threshold",
+        "enable_margin_call", "margin_call_threshold_long",
+        "margin_call_threshold_short", "margin_call_multiplier",
+        "enable_single_pair_close", "pair_close_threshold",
+        "enable_delist_close", "min_order_notional", "skip_symbols",
+        "symbols", "exchange_kwargs",
+        "margin_call_max_count", "max_account_notional_ratio",
+    }
+
     async def api_config_get(self, request):
         cfg = self._load_config()
         safe = cfg.copy()
@@ -219,6 +254,10 @@ class WebServer:
             "apiKey": kwargs.get("apiKey", "")[:6] + "..." if kwargs.get("apiKey") else "",
             "secret": "***",
         }
+        # CRITICAL: web_password must never leave the server — it used to be
+        # served here in plaintext, letting anyone bypass the auth on the
+        # mutating endpoints with one GET.
+        safe.pop("web_password", None)
         return web.json_response(safe)
 
     async def api_config_set(self, request):
@@ -226,6 +265,9 @@ class WebServer:
             return web.json_response({"status": "error", "message": "unauthorized"}, status=401)
         try:
             body = await request.json()
+            # Whitelist: unknown keys (incl. web_password / exchange_kwargs
+            # structure abuse) are dropped before merging.
+            body = {k: v for k, v in body.items() if k in self._CONFIG_WRITABLE_KEYS}
             existing = self._load_config()
             kwargs = existing.get("exchange_kwargs", {})
 
@@ -520,6 +562,24 @@ class WebServer:
         try:
             symbols = await self.trader.refresh_symbols_now()
             return web.json_response({"status": "ok", "count": len(symbols), "symbols": symbols})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_trading_status(self, request):
+        return web.json_response({"paused": bool(getattr(self.trader, "paused", False))})
+
+    async def api_trading_toggle(self, request):
+        """Real engine start/stop (previously a frontend-only fake button)."""
+        if not self._auth_ok(request):
+            return web.json_response({"status": "error", "message": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        paused = bool(body.get("paused"))
+        try:
+            self.trader.set_paused(paused)
+            return web.json_response({"status": "ok", "paused": paused})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 

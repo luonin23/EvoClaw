@@ -480,8 +480,6 @@ body::after{
 }
 @keyframes cellPulseProfit{0%,100%{opacity:1}50%{opacity:0.75}}
 @keyframes cellPulseLoss{0%,100%{opacity:1}50%{opacity:0.75}}
-.full-cell.is-profit{animation:cellPulseProfit 3s ease-in-out infinite 0.5s}
-.full-cell.is-loss{animation:cellPulseLoss 3s ease-in-out infinite 0.5s}
 .full-cell:hover{z-index:2;border-color:rgba(0,208,132,0.4);box-shadow:0 var(--space-4) var(--space-16) rgba(0,0,0,0.5), 0 0 16px rgba(0,208,132,0.15);transform:translateY(-1px) scale(1.02)}
 .full-cell.vacant{background:transparent;border:1px dashed rgba(255,255,255,0.08);color:var(--text-tertiary)}
 .full-cell .fc-sym{
@@ -514,6 +512,8 @@ body::after{
 @media (prefers-reduced-motion: reduce){
   .full-cell.is-extreme{animation:none;border-color:rgba(255,71,87,0.95)}
 }
+/* 页面不可见时冻结所有动画（后台标签不再持续合成，移动端省电） */
+body.page-hidden *{animation-play-state:paused!important}
 
 /* tooltip */
 .pos-tooltip{
@@ -954,6 +954,9 @@ body::after{
       <div class="field"><label>多单亏损加仓阈值 (%)</label><input type="number" id="cfgMarginCallThresholdLong" step="0.1" min="0" value="25"></div>
       <div class="field"><label>空单亏损加仓阈值 (%)</label><input type="number" id="cfgMarginCallThresholdShort" step="0.1" min="0" value="25"></div>
       <div class="field"><label>加仓倍数</label><input type="number" id="cfgMarginCallMultiplier" step="0.5" min="0.1" value="2"></div>
+      <div class="field"><label>单仓最多加仓次数</label><input type="number" id="cfgMarginCallMaxCount" step="1" min="0" value="4"></div>
+      <div class="field"><label>账户敞口上限 (名义/权益倍数)</label><input type="number" id="cfgExposureRatio" step="1" min="0" value="6"></div>
+      <div class="field" style="justify-content:flex-end"><span style="font-size:var(--font-sm);color:var(--text-secondary);padding-bottom:var(--space-4)">防爆仓护栏：加仓前预检保证金；总名义价值/权益达到上限后停止新开仓（不动已有仓位）</span></div>
     </div></div>
   </div>
 
@@ -1029,7 +1032,6 @@ function switchTab(tab) {
     document.getElementById('configPasswordInput').value = '';
     document.getElementById('configLockError').textContent = '';
     document.getElementById('configPasswordInput').focus();
-    loadConfig();
   }
 }
 
@@ -1043,6 +1045,7 @@ async function unlockConfig() {
       _configPassword = pwd;
       document.getElementById('panel-config').classList.remove('config-locked');
       document.getElementById('configLockOverlay').style.display = 'none';
+      loadConfig();
     } else {
       _configUnlocked = false;
       _configPassword = '';
@@ -1101,6 +1104,8 @@ async function loadConfig() {
   document.getElementById('cfgMarginCallThresholdLong').value = _val(d.margin_call_threshold_long, _val(d.margin_call_threshold, 0)) * 100;
   document.getElementById('cfgMarginCallThresholdShort').value = _val(d.margin_call_threshold_short, _val(d.margin_call_threshold, 0)) * 100;
   document.getElementById('cfgMarginCallMultiplier').value = _val(d.margin_call_multiplier, 2);
+  document.getElementById('cfgMarginCallMaxCount').value = _val(d.margin_call_max_count, 4);
+  document.getElementById('cfgExposureRatio').value = _val(d.max_account_notional_ratio, 6);
   document.getElementById('cfgEnableSinglePairClose').checked = d.enable_single_pair_close !== false;
   document.getElementById('cfgPairClose').value = _val(d.pair_close_threshold, _val(d.profit_threshold, 0)) * 100;
   document.getElementById('cfgSkip').value = (_val(d.skip_symbols, [])).join('\n');
@@ -1149,6 +1154,8 @@ async function saveConfig() {
       margin_call_threshold_long: parseNum('cfgMarginCallThresholdLong', 0) / 100,
       margin_call_threshold_short: parseNum('cfgMarginCallThresholdShort', 0) / 100,
       margin_call_multiplier: parseNum('cfgMarginCallMultiplier', 2),
+      margin_call_max_count: parseIntVal('cfgMarginCallMaxCount', 4),
+      max_account_notional_ratio: parseNum('cfgExposureRatio', 6),
       enable_single_pair_close: document.getElementById('cfgEnableSinglePairClose').checked,
       pair_close_threshold: parseNum('cfgPairClose', 0.2) / 100,
       min_order_notional: parseNum('cfgMinOrderNotional', 5),
@@ -1218,19 +1225,59 @@ async function refreshSymbolsNow() {
   }
 }
 
-function toggleTrading() {
-  trading = !trading;
+async function toggleTrading() {
+  // 之前是纯前端摆设：只改按钮文案，引擎照跑。现在调用真实启停 API。
+  const btn = document.getElementById('btnToggle');
+  const targetPaused = trading;   // trading=true(运行中) → 目标暂停
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/trading-toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ paused: targetPaused }),
+    });
+    if (r.status === 401) {
+      _configUnlocked = false; _configPassword = '';
+      showToast('未授权：请先解锁配置页后再启停交易');
+      return;
+    }
+    const d = await r.json();
+    if (d.status === 'ok') {
+      trading = !d.paused;
+      setTradingButton(d.paused);
+      showToast(d.paused ? '交易已暂停（引擎空转，仓位未动）' : '交易已恢复');
+    } else {
+      showToast('操作失败: ' + (d.message || '未知错误'));
+    }
+  } catch (e) {
+    showToast('启停失败: ' + (e.message || '网络错误'));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function setTradingButton(paused) {
+  trading = !paused;
   const btn = document.getElementById('btnToggle');
   btn.innerHTML = trading
     ? '<i class="ph ph-pause-circle"></i> 停止交易'
     : '<i class="ph ph-play-circle"></i> 启动交易';
   btn.className = trading ? 'btn btn-danger' : 'btn btn-primary';
-  showToast(trading ? '交易已启动' : '交易已停止');
+}
+
+async function refreshTradingButton() {
+  try {
+    const r = await api('/api/trading-status');
+    if (r && typeof r.paused === 'boolean') setTradingButton(r.paused);
+  } catch (e) { /* 保持现状 */ }
 }
 
 function clr(v) { return (v || 0) >= 0 ? 'text-green' : 'text-red'; }
-function fmtP(p) { return (p >= 0 ? '+' : '') + p.toFixed(4); }
-function fmtR(r) { return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
+// null/undefined 守卫：后端单个坏字段不再毁掉整块渲染（此前一条 null 会
+// 让 TypeError 打断整个 map/innerHTML，整张表格空白）
+function fmtP(p) { p = Number(p); if (!Number.isFinite(p)) return '-'; return (p >= 0 ? '+' : '') + p.toFixed(4); }
+function fmtR(r) { r = Number(r); if (!Number.isFinite(r)) return '-'; return (r >= 0 ? '+' : '') + (r * 100).toFixed(2) + '%'; }
+function fmtF(v, d) { v = Number(v); d = d == null ? 2 : d; return Number.isFinite(v) ? v.toFixed(d) : '-'; }
 function escapeHtml(str) {
   if (str == null) return '';
   return String(str)
@@ -1304,7 +1351,7 @@ function showToast(msg) {
 async function loadAccount() {
   const d = await api('/api/account');
   if (!d) return;
-  setText('accBalance', d.balance.toFixed(2), { flash: true });
+  setText('accBalance', fmtF(d.balance), { flash: true });
   setText('accAvailable', (d.available_balance || 0).toFixed(2), { flash: true });
   setClass('accAvailable', 'stat-value ' + clr(d.available_balance || 0));
   setText('accUnrealized', fmtP(d.unrealized_pnl), { flash: true });
@@ -1725,6 +1772,11 @@ function setTrendPeriod(period) {
   });
 }
 
+// Canvas 无法解析 CSS 变量——之前 fillStyle/font 赋 var() 静默失效，
+// 坐标轴实际用了上一次的颜色。与 :root 令牌保持一致。
+const CANVAS_AXIS = '#71717a';   // --text-tertiary
+const CANVAS_MONO = "'JetBrains Mono', 'SF Mono', monospace";
+
 let _chartData = null;
 let _resizeTimer = null;
 
@@ -1786,13 +1838,17 @@ function drawChart(data) {
       ctx.lineTo(pad.left + chartW, y);
       ctx.stroke();
     }
-    const xSteps = Math.min(data.length, 8);
-    for (let i = 0; i < xSteps; i++) {
-      const x = pad.left + chartW * i / (xSteps - 1);
-      ctx.beginPath();
-      ctx.moveTo(x, pad.top);
-      ctx.lineTo(x, pad.top + chartH);
-      ctx.stroke();
+    // 竖向网格线对齐真实数据点 x 坐标（此前按画布 8 等分，与数据点错位）
+    {
+      const n = data.length;
+      const step = Math.max(1, Math.ceil(n / 8));
+      for (let i = 0; i < n; i += step) {
+        const x = pad.left + (n === 1 ? chartW / 2 : chartW * i / (n - 1));
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, pad.top + chartH);
+        ctx.stroke();
+      }
     }
 
     if (minRate < 0 && maxRate > 0) {
@@ -1899,7 +1955,7 @@ function drawChart(data) {
     const maxLabels = Math.max(1, Math.floor(chartW / labelW));
     const step = Math.max(1, Math.ceil(data.length / maxLabels));
     ctx.fillStyle = accentColor;
-    ctx.font = Math.max(7, fontSize - 1) + 'px var(--font-mono)';
+    ctx.font = Math.max(7, fontSize - 1) + 'px ' + CANVAS_MONO;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     points.forEach((pt, i) => {
@@ -1908,8 +1964,8 @@ function drawChart(data) {
       ctx.fillText(val, pt.x, pt.y - dotR - Math.max(3, 3 * scale));
     });
 
-    ctx.fillStyle = 'var(--text-tertiary)';
-    ctx.font = fontSize + 'px var(--font-mono)';
+    ctx.fillStyle = CANVAS_AXIS;
+    ctx.font = fontSize + 'px ' + CANVAS_MONO;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     data.forEach((point, i) => {
@@ -1920,7 +1976,7 @@ function drawChart(data) {
       ctx.fillText(lbl, x, height - pad.bottom + Math.round(8 * scale));
     });
 
-    ctx.fillStyle = 'var(--text-tertiary)';
+    ctx.fillStyle = CANVAS_AXIS;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     for (let i = 0; i <= 4; i++) {
@@ -1963,7 +2019,7 @@ async function loadLiquidations() {
       '<td class="rank">' + (i + 1) + '</td>' +
       '<td>' + escapeHtml(r.symbol.replace(/USDT$/, '')) + '</td>' +
       '<td class="' + (r.side === 'LONG' ? 'side-long' : 'side-short') + '">' + (r.side === 'LONG' ? '多' : '空') + '</td>' +
-      '<td>' + (r.avg_price || 0).toFixed(6) + '</td>' +
+      '<td>' + fmtF(r.avg_price, 6) + '</td>' +
       '<td>' + (r.orig_qty || 0).toFixed(0) + '</td>' +
       '<td class="pnl text-red">' + fmtP(r.pnl) + '</td>' +
       '</tr>'
@@ -2069,14 +2125,14 @@ function renderSymbolSummary() {
       '<td>' + escapeHtml(symDisplay) + '</td>' +
       '<td class="' + sideCls + '">' + sideText + '</td>' +
       '<td>' + (r.open_count || 0) + '</td>' +
-      '<td>' + fmtNum(openQty) + ' / ' + openVal.toFixed(2) + 'U</td>' +
+      '<td>' + fmtNum(openQty) + ' / ' + fmtF(openVal) + 'U</td>' +
       '<td>' + (r.margin_count || 0) + '</td>' +
       '<td>' + (r.close_count || 0) + '</td>' +
-      '<td>' + fmtNum(closeQty) + ' / ' + closeVal.toFixed(2) + 'U</td>' +
+      '<td>' + fmtNum(closeQty) + ' / ' + fmtF(closeVal) + 'U</td>' +
       '<td>' + fmtNum(r.remaining_qty || 0) + '</td>' +
       '<td class="' + pnlCls + '">' + fmtP(r.total_pnl || 0) + '</td>' +
-      '<td>' + (r.close_fee || 0).toFixed(4) + '</td>' +
-      '<td>' + (r.avg_close_rate_pct || 0).toFixed(2) + '%</td>' +
+      '<td>' + fmtF(r.close_fee, 4) + '</td>' +
+      '<td>' + fmtF(r.avg_close_rate_pct) + '%</td>' +
       '</tr>';
   }).join('');
   // Update header sort indicators
@@ -2163,6 +2219,7 @@ function stopTimers() {
 }
 
 document.addEventListener('visibilitychange', () => {
+  document.body.classList.toggle('page-hidden', document.hidden);
   if (document.hidden) {
     stopTimers();
   } else {
@@ -2176,10 +2233,17 @@ async function loadHtml2Canvas() {
   if (window.html2canvas) return;
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    s.src = '/vendor/html2canvas.min.js';   // 自托管优先（供应链风险）
     s.async = true;
     s.onload = () => resolve(window.html2canvas);
-    s.onerror = () => reject(new Error('html2canvas load failed'));
+    s.onerror = () => {
+      const s2 = document.createElement('script');
+      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      s2.async = true;
+      s2.onload = () => resolve(window.html2canvas);
+      s2.onerror = () => reject(new Error('html2canvas load failed'));
+      document.head.appendChild(s2);
+    };
     document.head.appendChild(s);
   });
 }
@@ -2197,6 +2261,7 @@ async function generatePoster() {
     panels.forEach(p => { prevDisplays.push(p.style.display); p.style.display = 'block'; });
     await new Promise(r => setTimeout(r, 50));
 
+    document.body.classList.add('poster-mode');   // 关闭 backdrop-filter 等截图不支持的特效
     const screenshot = await html2canvas(document.body, {
       backgroundColor: '#0a0a0a',
       scale: 2,
@@ -2205,10 +2270,13 @@ async function generatePoster() {
       windowWidth: document.documentElement.scrollWidth,
       windowHeight: document.documentElement.scrollHeight,
     });
+    document.body.classList.remove('poster-mode');
 
     panels.forEach((p, i) => { p.style.display = prevDisplays[i]; });
 
-    const W = 1080, H = 1920;
+    const W = 1080;
+    // 自适应高度：固定 1920 会静默裁掉底部（强平记录/爆仓事件）
+    const H = Math.max(1920, Math.ceil(screenshot.height * W / screenshot.width));
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
@@ -2254,7 +2322,7 @@ async function loadDashboardView() {
 }
 
 
-loadConfig();
+refreshTradingButton();
 loadFrontendConfig();
 
 // Allow direct linking to a tab via URL hash: #matrix #symbols or #config
@@ -2278,7 +2346,7 @@ startTimers();
   const dpr = window.devicePixelRatio || 1;
   const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768 || dpr < 2;
   // Cap particles and frame rate on mobile to save GPU/CPU
-  const BG_COUNT = isMobile ? 30 : Math.min(90, Math.floor((window.innerWidth * window.innerHeight) / 22000));
+  const BG_COUNT = isMobile ? 24 : Math.min(48, Math.floor((window.innerWidth * window.innerHeight) / 40000));
   const BG_FRAME_MS = isMobile ? 50 : 33; // ~20fps mobile, ~30fps desktop
   const CONNECT_DIST = isMobile ? 0 : 110; // disable expensive O(n^2) connections on mobile
 
