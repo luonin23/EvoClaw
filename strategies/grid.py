@@ -386,11 +386,21 @@ class GridStrategy:
             self.db.upsert_grid_state(sym, base_qty=qty, total_cost=cost, realized_pnl=realized,
                                       sell_count=int(st.get("sell_count", 0) or 0) + 1)
 
+        # 卖出时记录本笔盈亏与盈利率（相对该笔成本），供成交记录直接展示
+        trade_pnl = 0.0
+        trade_rate = 0.0
+        if side == "sell":
+            avg_now = (cost + fill_price * amt) / (qty + amt) if (qty + amt) > 0 else fill_price
+            trade_pnl = (fill_price - avg_now) * amt
+            base = avg_now * amt
+            trade_rate = (trade_pnl / base) if base > 0 else 0.0
         self.db.insert_order({
             "mode": "grid", "symbol": sym, "side": side, "type": f"grid_{side}",
             "price": fill_price, "amount": amt, "cost": round(fill_price * amt, 6),
             "fee": round(fill_price * amt * 0.0005, 6),
-            "dry_run": self.client.dry_run, "note": "网格成交",
+            "pnl": round(trade_pnl, 6), "pnl_rate": round(trade_rate, 8),
+            "dry_run": self.client.dry_run,
+            "note": "网格卖出" if side == "sell" else "网格买入",
         })
         tag = "[模拟]" if self.client.dry_run else "[实盘]"
         log.info(f"{tag} GRID {sym} {side} {amt} @ {fill_price:.6g}")

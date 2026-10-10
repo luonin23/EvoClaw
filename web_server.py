@@ -131,7 +131,8 @@ class WebServer:
     async def api_orders(self, request):
         try:
             limit = min(int(request.query.get("limit", "100")), 500)
-            return web.json_response({"orders": self.db.get_orders(limit)})
+            summary = self.db.get_order_summary()
+            return web.json_response({"orders": self.db.get_orders(limit), "summary": summary})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 

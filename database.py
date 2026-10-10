@@ -70,7 +70,9 @@ class Database:
                 order_id TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'filled',
                 dry_run INTEGER NOT NULL DEFAULT 0,
-                note TEXT NOT NULL DEFAULT ''
+                note TEXT NOT NULL DEFAULT '',
+                pnl REAL NOT NULL DEFAULT 0,
+                pnl_rate REAL NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts);
             CREATE INDEX IF NOT EXISTS idx_orders_mode ON orders(mode);
@@ -131,11 +133,13 @@ class Database:
             );
         """)
         self.conn.commit()
-        # 迁移：为已存在的 grid_state 补列
-        for _col, _type in [("total_cost", "REAL NOT NULL DEFAULT 0"),
-                            ("status", "TEXT NOT NULL DEFAULT 'active'")]:
+        # 迁移：为已存在的表补列（已存在则忽略）
+        for _tbl, _col, _type in [("grid_state", "total_cost", "REAL NOT NULL DEFAULT 0"),
+                                  ("grid_state", "status", "TEXT NOT NULL DEFAULT 'active'"),
+                                  ("orders", "pnl", "REAL NOT NULL DEFAULT 0"),
+                                  ("orders", "pnl_rate", "REAL NOT NULL DEFAULT 0")]:
             try:
-                self.conn.execute(f"ALTER TABLE grid_state ADD COLUMN {_col} {_type}")
+                self.conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type}")
                 self.conn.commit()
             except Exception:
                 pass
@@ -182,13 +186,15 @@ class Database:
     def insert_order(self, o: dict):
         self.conn.execute(
             """INSERT INTO orders
-               (ts, mode, symbol, side, type, price, amount, cost, fee, order_id, status, dry_run, note)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (ts, mode, symbol, side, type, price, amount, cost, fee, order_id, status,
+                dry_run, note, pnl, pnl_rate)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (o.get("ts") or datetime.now(timezone.utc).isoformat(),
              o["mode"], o["symbol"], o["side"], o["type"],
              float(o.get("price", 0)), float(o.get("amount", 0)), float(o.get("cost", 0)),
              float(o.get("fee", 0)), str(o.get("order_id", "")),
-             o.get("status", "filled"), 1 if o.get("dry_run") else 0, o.get("note", "")),
+             o.get("status", "filled"), 1 if o.get("dry_run") else 0, o.get("note", ""),
+             float(o.get("pnl", 0)), float(o.get("pnl_rate", 0))),
         )
         self.conn.commit()
 
@@ -200,16 +206,37 @@ class Database:
         if mode:
             rows = self.conn.execute(
                 """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
-                          order_id, status, dry_run, note
+                          order_id, status, dry_run, note, pnl, pnl_rate
                    FROM orders WHERE mode=? ORDER BY id DESC LIMIT ?""", (mode, limit)).fetchall()
         else:
             rows = self.conn.execute(
                 """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
-                          order_id, status, dry_run, note
+                          order_id, status, dry_run, note, pnl, pnl_rate
                    FROM orders ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
         cols = ["id", "ts", "mode", "symbol", "side", "type", "price", "amount",
-                "cost", "fee", "order_id", "status", "dry_run", "note"]
+                "cost", "fee", "order_id", "status", "dry_run", "note", "pnl", "pnl_rate"]
         return [dict(zip(cols, r)) for r in rows]
+
+    def get_order_summary(self) -> dict:
+        """成交汇总：总盈亏、总手续费、买卖笔数、平仓胜负数。"""
+        row = self.conn.execute("""
+            SELECT COALESCE(SUM(pnl), 0), COALESCE(SUM(fee), 0),
+                   COUNT(CASE WHEN side='sell' THEN 1 END),
+                   COUNT(CASE WHEN side='buy' THEN 1 END),
+                   COUNT(CASE WHEN side='sell' AND pnl > 0 THEN 1 END),
+                   COUNT(CASE WHEN side='sell' AND pnl <= 0 THEN 1 END),
+                   COALESCE(SUM(CASE WHEN side='sell' THEN cost END), 0)
+            FROM orders""").fetchone()
+        sell_cost = row[6] or 0
+        return {
+            "total_pnl": round(row[0], 4),
+            "total_fee": round(row[1], 4),
+            "net_pnl": round(row[0] - row[1], 4),
+            "sell_count": row[2], "buy_count": row[3],
+            "win_count": row[4], "loss_count": row[5],
+            "win_rate": round(row[4] / (row[4] + row[5]), 4) if (row[4] + row[5]) > 0 else 0,
+            "total_pnl_rate": round(row[0] / sell_cost, 6) if sell_cost > 0 else 0,
+        }
 
     # ===== 网格 =====
     def get_grid_state(self, symbol: str = None):

@@ -69,6 +69,15 @@ tr:hover td{background:var(--hover)}
 .gbar .lvl.pend{background:rgba(255,255,255,.18)}
 .gbar .px{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--warn);box-shadow:0 0 8px rgba(245,158,11,.7)}
 .gbar-lbl{display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono)}
+/* 成交汇总栏 */
+.ord-sum{display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;
+  background:var(--surface);border:1px solid var(--bd);border-radius:8px;
+  padding:10px 14px;margin-bottom:12px}
+.ord-sum span{color:var(--t3)}
+.ord-sum b{color:var(--t1);font-weight:600}
+.ord-sum b.pos2{color:var(--accent)}
+.ord-sum b.neg2{color:var(--error)}
+
 /* 网格卡片：盈利=绿 / 亏损=红 / 空仓=灰 */
 .gcard{background:var(--surface);border:1px solid var(--bd);border-left:3px solid var(--t3);
   border-radius:10px;padding:12px 14px;margin-bottom:12px;transition:.2s}
@@ -149,9 +158,10 @@ tr:hover td{background:var(--hover)}
   <!-- 成交 -->
   <div class="panel">
     <h2>成交记录 <span class="tag">含模拟单</span></h2>
+    <div class="ord-sum" id="ordSummary"></div>
     <div class="scroll"><table>
-      <thead><tr><th>时间</th><th>模式</th><th>币种</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>名义</th><th>手续费</th><th>来源</th></tr></thead>
-      <tbody id="ordersBody"><tr><td colspan="10" class="empty">加载中…</td></tr></tbody>
+      <thead><tr><th>时间</th><th>币种</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>名义</th><th>手续费</th><th>盈亏</th><th>盈亏率</th><th>来源</th></tr></thead>
+      <tbody id="ordersBody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
     </table></div>
   </div>
 
@@ -326,19 +336,40 @@ async function loadDca(){
   $('dcaBody').innerHTML = html;
 }
 
+const TYPE_CN = {grid_base:'底仓买入', grid_buy:'网格买入', grid_sell:'网格卖出', dca_buy:'定投买入', close:'平仓'};
+
 async function loadOrders(){
   const d = await api('/api/orders?limit=80'); if(!d||!d.orders) return;
-  const rows = d.orders;
-  if(!rows.length){ $('ordersBody').innerHTML='<tr><td colspan="10" class="empty">暂无成交</td></tr>'; return; }
-  $('ordersBody').innerHTML = rows.map(o=>'<tr>'
-    + '<td>'+esc((o.ts||'').replace('T',' ').slice(5,19))+'</td>'
-    + '<td>'+esc(o.mode)+'</td>'
-    + '<td class="num">'+esc(o.symbol)+'</td>'
-    + '<td class="'+(o.side==='buy'?'pos':'neg')+'">'+(o.side==='buy'?'买':'卖')+'</td>'
-    + '<td>'+esc(o.type)+'</td>'
-    + '<td>'+nf(o.price,6)+'</td><td>'+nf(o.amount,4)+'</td><td>'+nf(o.cost,2)+'</td>'
-    + '<td>'+nf(o.fee,4)+'</td>'
-    + '<td class="'+(o.dry_run?'':'pos')+'">'+(o.dry_run?'模拟':'实盘')+'</td></tr>').join('');
+  const rows = d.orders, sm = d.summary||{};
+  const sum = $('ordSummary');
+  if(sum){
+    const pnlCls = (sm.total_pnl||0) >= 0 ? 'pos2' : 'neg2';
+    sum.innerHTML =
+        '<span>总盈亏 <b class="'+pnlCls+'">'+nfP(sm.total_pnl,4)+' U</b></span>'
+      + '<span>总盈亏率 <b class="'+pnlCls+'">'+nfR(sm.total_pnl_rate)+'</b></span>'
+      + '<span>总手续费 <b>'+nf(sm.total_fee,4)+' U</b></span>'
+      + '<span>净盈亏 <b class="'+((sm.net_pnl||0)>=0?'pos2':'neg2')+'">'+nfP(sm.net_pnl,4)+' U</b></span>'
+      + '<span>买入 <b>'+(sm.buy_count||0)+'</b> 笔 · 卖出 <b>'+(sm.sell_count||0)+'</b> 笔</span>'
+      + '<span>平仓胜率 <b>'+(sm.win_count||0)+'胜/'+(sm.loss_count||0)+'负 ('+((sm.win_rate||0)*100).toFixed(1)+'%)</b></span>';
+  }
+  if(!rows.length){ $('ordersBody').innerHTML='<tr><td colspan="11" class="empty">暂无成交</td></tr>'; return; }
+  $('ordersBody').innerHTML = rows.map(o=>{
+    const isSell = o.side==='sell';
+    const pnl = Number(o.pnl||0);
+    const pnlCell = isSell
+      ? '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</td>'
+        + '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfR(o.pnl_rate)+'</td>'
+      : '<td>—</td><td>—</td>';
+    return '<tr>'
+      + '<td>'+esc((o.ts||'').replace('T',' ').slice(5,19))+'</td>'
+      + '<td class="num">'+esc(o.symbol)+'</td>'
+      + '<td class="'+(isSell?'neg':'pos')+'">'+(isSell?'卖':'买')+'</td>'
+      + '<td>'+(TYPE_CN[o.type]||esc(o.type))+'</td>'
+      + '<td>'+nf(o.price,6)+'</td><td>'+nf(o.amount,4)+'</td><td>'+nf(o.cost,2)+'</td>'
+      + '<td>'+nf(o.fee,4)+'</td>'
+      + pnlCell
+      + '<td>'+(o.dry_run?'<span style="color:var(--warn)">模拟</span>':'实盘')+'</td></tr>';
+  }).join('');
 }
 
 async function unlock(){
