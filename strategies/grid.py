@@ -55,6 +55,11 @@ class GridStrategy:
             return fixed
         return max(0.04, min(0.15, float((pick or {}).get("range") or 0.06)))
 
+    def _band_pct(self, pct: float) -> float:
+        """相邻档位的价格间距（比例）≈ 振幅 × step_ratio，与档位推导同源。"""
+        ratio = float(self.cfg.get("step_ratio", 0.3) or 0.3)
+        return max(1e-4, abs(pct) * ratio)
+
     def _auto_symbol_cap(self, equity: float, picks: list) -> int:
         """max_symbols=0（自动）时，按资金推导能同时跑几个标的。
 
@@ -290,6 +295,10 @@ class GridStrategy:
             if float(st2.get("base_qty", 0) or 0) <= 1e-12:
                 self._retire(sym)
                 return
+        # 移动止盈：冲高后回撤即卖出剩余，锁住利润（draining 只卖不买同样生效）
+        st = self.db.get_grid_state(sym) or st
+        if await self._maybe_trail_tp(sym, st, price, spec):
+            return
         if not self.client.dry_run:
             if await self._maybe_recenter(sym, st, price, size_usdt, grids, spec, draining):
                 st = self.db.get_grid_state(sym)
@@ -390,6 +399,84 @@ class GridStrategy:
         self.db.set_runtime_stat(key, time.time())
         await self._init_grid(sym, price * (1 - pct), price * (1 + pct),
                               grids, size_usdt, price, draining)
+        return True
+
+    async def _maybe_trail_tp(self, sym: str, st: dict, price: float, spec: dict) -> bool:
+        """移动止盈：浮盈冲高后回撤 → 卖出剩余仓位，把利润落袋。
+
+        解决「第一次平仓后继续冲高、还没到第二个平仓位就掉头」——剩余仓位
+        本该等下一个卖档，结果一路下跌把利润吐光的问题。规则：
+          · 武装：浮盈 ≥ trail_arm_bands 个档距时开始记录最高价
+          · 触发：价格自最高价回撤 ≥ trail_bands 个档距
+          · 下限：卖出价 ≥ 成本×(1+min_tp_ratio)；跌破成本则【一动不动】
+            （所以它只会止盈、绝不割肉，与「不设止损」原则一致）
+        触发后清掉卖档、保留买档 —— 之后价格回落时仍能靠买档重新低吸。
+        draining（只卖不买）同样生效。返回 True 表示本次已清仓。
+        """
+        cfg = self.cfg
+        if not cfg.get("trail_tp", True):
+            return False
+        qty = float(st.get("base_qty", 0) or 0)
+        cost = float(st.get("total_cost", 0) or 0)
+        if qty <= 0 or cost <= 0:
+            self.db.set_runtime_stat(f"tp_high:{sym}", 0)
+            return False
+        avg = cost / qty
+        min_tp = float(cfg.get("min_tp_ratio", 0.002) or 0)
+        floor = avg * (1 + min_tp)
+        pct = float(spec.get("auto_range_pct") or cfg.get("auto_range_pct", 0) or 0)
+        if pct <= 0:
+            pct = self._symbol_range_pct(spec)
+        band = self._band_pct(pct)
+        arm = max(0.0, float(cfg.get("trail_arm_bands", 0.5) or 0)) * band
+        trail = max(0.0, float(cfg.get("trail_bands", 1.0) or 0)) * band
+        if trail <= 0:
+            return False
+        high = float(self.db.get_runtime_stat(f"tp_high:{sym}", 0) or 0)
+        # 只有已获利才记录高点（下跌途中绝不武装，避免变成变相止损）
+        if price >= avg * (1 + max(arm, min_tp)):
+            high = max(high, price)
+            self.db.set_runtime_stat(f"tp_high:{sym}", high)
+        if high <= 0 or price > high * (1 - trail) or price < floor:
+            return False
+
+        s = _throttle.emit(f"grid_trail:{sym}")
+        if s is not None:
+            log.warning(f"GRID {sym}: 移动止盈触发 —— 高点 {high:.6g} 回撤 "
+                        f"{trail*100:.2f}% 至 {price:.6g}（成本 {avg:.6g}）→ "
+                        f"卖出剩余 {qty:.0f} 张{s}")
+        # 先撤掉全部卖单（否则会重复卖出），保留买档供回落时重新低吸
+        for lv in self.db.get_grid_levels(sym):
+            if lv["status"] != "pending" or lv["side"] != "sell":
+                continue
+            if lv.get("order_id"):
+                await self.client.cancel_order(lv["order_id"], sym, "futures")
+            self.db.conn.execute("DELETE FROM grid_levels WHERE id=?", (lv["id"],))
+        self.db.conn.commit()
+        res = await self.client.create_market_order(
+            sym, "sell", qty, "futures", position_side="LONG")
+        if not res:
+            log.error(f"GRID {sym}: 移动止盈卖出失败，状态保留，下一轮重试")
+            return False
+        fill = float(res.get("price") or price)
+        trade_pnl = (fill - avg) * qty
+        self.db.upsert_grid_state(
+            sym, base_qty=0.0, total_cost=0.0,
+            realized_pnl=float(st.get("realized_pnl", 0) or 0) + trade_pnl,
+            sell_count=int(st.get("sell_count", 0) or 0) + 1)
+        self.db.insert_order({
+            "mode": "grid", "symbol": sym, "side": "sell", "type": "grid_trail",
+            "price": fill, "amount": qty, "cost": round(fill * qty, 6),
+            "fee": round(fill * qty * 0.0005, 6),
+            "pnl": round(trade_pnl, 6),
+            "pnl_rate": round(trade_pnl / (avg * qty), 8) if avg * qty > 0 else 0,
+            "dry_run": self.client.dry_run, "note": "移动止盈"})
+        # 记锚点：之后「不追高」，须等价格回落到该价位附近才允许重新建仓
+        self.db.set_runtime_stat(f"grid_exit:{sym}", fill)
+        self.db.set_runtime_stat(f"tp_high:{sym}", 0)
+        tag = "[模拟]" if self.client.dry_run else "[实盘]"
+        log.info(f"{tag} GRID {sym}: 移动止盈清仓 {qty:.0f} 张 @ {fill:.6g}，"
+                 f"本笔盈亏 {trade_pnl:+.4f}U")
         return True
 
     async def _current_entry(self, sym: str):
@@ -529,6 +616,7 @@ class GridStrategy:
             # 建仓完成 → 消费掉「不追高」锚点：本轮重新入场已落地，
             # 下一次清仓时再记录新锚点。
             self.db.set_runtime_stat(f"grid_exit:{sym}", 0)
+            self.db.set_runtime_stat(f"tp_high:{sym}", 0)
             created += 1
 
         # 挂单：买单（现价下方）+ 卖单（用上面算好的量，保证底仓=卖单总量）
@@ -577,6 +665,9 @@ class GridStrategy:
             cost += fill_price * amt
             self.db.upsert_grid_state(sym, base_qty=qty, total_cost=cost,
                                       buy_count=int(st.get("buy_count", 0) or 0) + 1)
+            # 加仓后立即重置移动止盈的最高价：这是新的一轮持仓，
+            # 旧的高点会让机制在刚加完仓就误触发。
+            self.db.set_runtime_stat(f"tp_high:{sym}", 0)
         else:
             avg = cost / qty if qty > 0 else fill_price
             realized += (fill_price - avg) * amt
@@ -842,6 +933,7 @@ class GridStrategy:
         self.db.replace_grid_levels(sym, [])
         self.db.conn.execute("DELETE FROM grid_state WHERE symbol=?", (sym,))
         self.db.conn.commit()
+        self.db.set_runtime_stat(f"tp_high:{sym}", 0)
         log.info(f"GRID {sym}: 存货已清空，网格退役（不再纳入管理）")
 
     # ===== 前端状态 =====
