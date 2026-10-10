@@ -78,8 +78,18 @@ tr:hover td{background:var(--hover)}
 .gbar2 .fill.r{background:linear-gradient(90deg,rgba(255,71,87,.62),rgba(255,71,87,.30));
   border-left:1px solid rgba(255,71,87,.8);border-right:1px solid rgba(255,71,87,.8)}
 .gbar2 .lvlz{position:absolute;top:6px;bottom:6px;width:2px}
-.gbar2 .lvlz.buy{background:rgba(0,208,132,.7)}
-.gbar2 .lvlz.sell{background:rgba(255,71,87,.7)}
+.gbar2 .lvlz.buy{background:rgba(0,208,132,.85)}
+.gbar2 .lvlz.sell{background:rgba(255,71,87,.85)}
+.gbar2 .lvlz span{position:absolute;top:50%;transform:translateY(-50%);
+  font-family:var(--mono);font-size:9px;white-space:nowrap;padding:1px 5px;border-radius:3px;
+  line-height:1.4;z-index:4}
+.gbar2 .lvlz.sell span{left:5px;background:rgba(255,71,87,.22);
+  border:1px solid rgba(255,71,87,.45);color:#ff8b96}
+.gbar2 .lvlz.buy span{right:5px;background:rgba(0,208,132,.22);
+  border:1px solid rgba(0,208,132,.45);color:#6ee7b7}
+/* 贴近边缘时把标注翻到另一侧，避免被容器裁切 */
+.gbar2 .lvlz.sell.flip span{left:auto;right:5px}
+.gbar2 .lvlz.buy.flip span{right:auto;left:5px}
 .gbar2 .mark{position:absolute;top:-3px;bottom:-3px;width:2px;z-index:3}
 .gbar2 .mark.cost{background:#60a5fa;box-shadow:0 0 6px rgba(96,165,250,.9)}
 .gbar2 .mark.price{background:var(--warn);box-shadow:0 0 9px rgba(245,158,11,1)}
@@ -317,9 +327,14 @@ async function loadGrid(){
       const isUp = px >= s.avg_price;
       fillHtml = '<div class="fill '+(isUp?'g':'r')+'" style="left:'+a.toFixed(2)+'%;width:'+Math.max(0.5,b-a).toFixed(2)+'%"></div>';
     }
-    const lvlHtml = (s.levels||[]).map(l=>
-      '<div class="lvlz '+(l.side==='sell'?'sell':'buy')+'" style="left:'+pctOf(l.price).toFixed(2)+'%" title="'+
-      (l.side==='sell'?'卖':'买')+' '+nf(l.amount,0)+' @ '+nf(l.price,6)+'"></div>').join('');
+    const lvlHtml = (s.levels||[]).slice().sort((a,b)=>a.price-b.price).map(l=>{
+      const p = pctOf(l.price);
+      const isSell = l.side === 'sell';
+      // 卖单默认标注在右，>70% 翻到左侧；买单默认在左，<30% 翻到右侧
+      const flip = isSell ? (p > 70) : (p < 30);
+      return '<div class="lvlz '+(isSell?'sell':'buy')+(flip?' flip':'')+'" style="left:'+p.toFixed(2)+'%">'
+        + '<span>'+(isSell?'卖':'买')+' '+nf(l.amount,0)+' 张 @ '+nf(l.price,6)+'</span></div>';
+    }).join('');
     const costMark = costPct !== null
       ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nf(s.avg_price,6)+'</span></div>' : '';
     const axisHtml = '<div class="gbar2">'

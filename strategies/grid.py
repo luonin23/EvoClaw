@@ -219,6 +219,9 @@ class GridStrategy:
                 log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
                             f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
 
+        if not self.client.dry_run:
+            await self._ensure_sell_coverage(sym, st)
+
         draining = (st.get("status") or "active") == "draining"
         await self._check_fills(sym, price, draining)
         if draining:
@@ -234,6 +237,53 @@ class GridStrategy:
                 draining = (st.get("status") or "active") == "draining"
             await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
+
+    async def _ensure_sell_coverage(self, sym: str, st: dict):
+        """确保卖单总量覆盖当前持仓。
+
+        多头的每一张货都必须有卖单，否则永远卖不掉（会一直沉淀）。
+        加仓后卖档不够、或历史遗留的欠覆盖，都在这里自动补齐。
+        """
+        qty = float(st.get("base_qty", 0) or 0)
+        if qty <= 0:
+            return
+        levels = self.db.get_grid_levels(sym)
+        sells = [l for l in levels if l["status"] == "pending" and l["side"] == "sell"]
+        covered = sum(float(l["amount"]) for l in sells)
+        if covered >= qty - 1e-9:
+            return
+        short = qty - covered
+        s = _throttle.emit(f"grid_cover:{sym}")
+        if s is not None:
+            log.warning(f"GRID {sym}: 卖单仅覆盖 {covered:.0f}/{qty:.0f} 张 → 补挂 {short:.0f} 张{s}")
+        if sells:
+            top = max(sells, key=lambda l: float(l["price"]))
+            merged = float(top["amount"]) + short
+            if not self.client.dry_run and top.get("order_id"):
+                await self.client.cancel_order(top["order_id"], sym, "futures")
+                res = await self.client.create_limit_order(
+                    sym, "sell", merged, float(top["price"]), "futures", position_side="LONG")
+                oid = res["order_id"] if res else ""
+                self.db.conn.execute("UPDATE grid_levels SET amount=?, order_id=? WHERE id=?",
+                                     (merged, oid, top["id"]))
+            else:
+                self.db.conn.execute("UPDATE grid_levels SET amount=? WHERE id=?", (merged, top["id"]))
+            self.db.conn.commit()
+        else:
+            # 一条卖单都没有：在区间上沿挂一条覆盖全部持仓
+            upper = float(st.get("upper", 0) or 0)
+            if upper <= 0:
+                return
+            rp = self.client.round_price(sym, upper, "futures")
+            res = await self.client.create_limit_order(sym, "sell", qty, rp, "futures",
+                                                       position_side="LONG")
+            oid = res["order_id"] if (res and not res.get("dry_run")) else ""
+            self.db.insert_grid_level(sym, len(levels), rp, "sell", qty)
+            if oid:
+                self.db.conn.execute(
+                    "UPDATE grid_levels SET order_id=? WHERE symbol=? AND side='sell' AND status='pending'",
+                    (oid, sym))
+                self.db.conn.commit()
 
     async def _maybe_recenter(self, sym: str, st: dict, price: float, size_usdt: float,
                               grids: int, spec: dict, draining: bool) -> bool:
@@ -355,8 +405,12 @@ class GridStrategy:
                 sells[-1][2] += (min_now - base_amt)
                 base_amt = min_now
             if draining and ex_qty0 > 0:
-                # 只卖不买：目标持仓 = 现有持仓，不额外买入
+                # 只卖不买：目标持仓 = 现有持仓，不额外买入；
+                # 并确保卖单覆盖全部持仓（否则有张数永远卖不掉）
                 base_amt = ex_qty0
+                covered = sum(x[2] for x in sells)
+                if sells and covered < ex_qty0:
+                    sells[-1][2] += (ex_qty0 - covered)
             if base_amt <= 0:
                 need = self.client.min_notional_of(sym, "futures")
                 s = _throttle.emit(f"grid_nocap:{sym}")
@@ -480,11 +534,14 @@ class GridStrategy:
             return []
         return grid_points(float(st["lower"]), float(st["upper"]), int(st["grids"]))
 
-    def _has_pending(self, sym: str, price: float, tol: float = 1e-9) -> bool:
+    def _find_pending(self, sym: str, price: float, side: str):
+        """找同价同向的待成交挂单（用于去重/累加）。"""
         for lv in self.db.get_grid_levels(sym):
-            if lv["status"] == "pending" and abs(float(lv["price"]) - price) <= max(tol, price * 1e-6):
-                return True
-        return False
+            if lv["status"] != "pending" or lv["side"] != side:
+                continue
+            if abs(float(lv["price"]) - price) <= max(1e-9, price * 1e-6):
+                return lv
+        return None
 
     async def _arm_next(self, sym: str, filled_side: str, fill_price: float,
                         draining: bool = False):
@@ -506,10 +563,32 @@ class GridStrategy:
         if draining and side == "buy":
             return  # 已掉出清单：不再挂买单，只把存货卖掉
         rp = self.client.round_price(sym, want, "futures")
-        if self._has_pending(sym, rp):
-            return
         amt = self.client.amount_for_notional(sym, size, rp, "futures")
         if amt <= 0:
+            return
+        # 关键：该档位可能已有一条同向挂单（如已有卖单）。
+        # 不能直接跳过 —— 否则新买入的那批货永远没有卖单覆盖。
+        # 正确做法是把数量累加到已有挂单上（实盘需先撤旧单再按新量重挂）。
+        dup = self._find_pending(sym, rp, side)
+        if dup:
+            merged = float(dup["amount"]) + amt
+            if not self.client.dry_run and dup.get("order_id"):
+                await self.client.cancel_order(dup["order_id"], sym, "futures")
+                res = await self.client.create_limit_order(sym, side, merged, rp, "futures",
+                                                           position_side="LONG")
+                oid = res["order_id"] if res else ""
+                self.db.conn.execute(
+                    "UPDATE grid_levels SET amount=?, order_id=? WHERE id=?",
+                    (merged, oid, dup["id"]))
+                self.db.conn.commit()
+            else:
+                self.db.conn.execute("UPDATE grid_levels SET amount=? WHERE id=?",
+                                     (merged, dup["id"]))
+                self.db.conn.commit()
+            s = _throttle.emit(f"grid_merge:{sym}")
+            if s is not None:
+                log.info(f"GRID {sym}: {side} 档位 {rp:.6f} 累加数量 "
+                         f"{dup['amount']:.0f} → {merged:.0f}（覆盖新买入的持仓）{s}")
             return
         idx = min(range(len(pts)), key=lambda i: abs(pts[i] - want))
         self.db.insert_grid_level(sym, idx, rp, side, amt)
