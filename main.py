@@ -1,77 +1,61 @@
+"""EvoClaw v2.0 — 入口。
+
+双模式（低杠杆网格 / 现货定投）· dry-run 优先 · 独立数据库与端口，可与 v1 并存。
+"""
+
 import asyncio
-import gc
-import logging
-import signal
-import os
-import sys
-import glob
-import time
-import logging.handlers
 import fcntl
-from datetime import datetime, timezone, timedelta
+import gc
+import glob
+import json
+import logging
+import logging.handlers
+import os
+import secrets
+import signal
+import sqlite3
+import sys
+
 from aiohttp import web
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs("data", exist_ok=True)
 
-from exchange_client import ExchangeClient
+from config import DEFAULT_CONFIG
 from database import Database
-from trader import Trader
+from exchange_client import ExchangeClient
+from engine import Engine
 from web_server import WebServer
 
-
-# Default runtime configuration. DB is the source of truth; this is only used
-# to seed an empty database on first run.
-DEFAULT_CONFIG = {
-    "exchange": "binanceusdm",
-    "side": "both",
-    "symbols": [
-        "1000PEPEUSDT", "ADAUSDT", "AEROUSDT", "AGTUSDT", "AIOUSDT", "ALLOUSDT",
-        "ARBUSDT", "ASTERUSDT", "BABYUSDT", "BLESSUSDT", "BRUSDT", "BSBUSDT",
-        "CHIPUSDT", "CHZUSDT", "CLOUSDT", "CRVUSDT", "DOGEUSDT", "DOTUSDT",
-        "ENAUSDT", "EVAAUSDT", "FETUSDT", "FILUSDT", "IDUSDT", "JCTUSDT",
-        "JELLYJELLYUSDT", "JTOUSDT", "LITUSDT", "MAGMAUSDT", "MEGAUSDT",
-        "NOTUSDT", "ONDOUSDT", "OPGUSDT", "OPNUSDT", "PENGUUSDT", "PIPPINUSDT",
-        "PLAYUSDT", "PUMPUSDT", "RIFUSDT", "SAHARAUSDT", "SENTUSDT", "SIRENUSDT",
-        "SKYAIUSDT", "SPACEUSDT", "SPXUSDT", "STGUSDT", "SUIUSDT", "TIAUSDT",
-        "TONUSDT", "TRADOORUSDT", "TRIAUSDT", "TRUMPUSDT", "TRXUSDT",
-        "VELVETUSDT", "WLDUSDT", "WLFIUSDT", "XLMUSDT", "XPLUSDT", "XRPUSDT",
-        "ZKCUSDT", "ZROUSDT"
-    ],
-    "volume_threshold": 0,
-    "price_threshold": 0,
-    "symbol_refresh_interval": 86400,
-    "position_check_interval": 3,
-    "profit_tiers": [
-        {"threshold": 0.002, "close_pct": 0.3},
-        {"threshold": 0.01, "close_pct": 0.5},
-        {"threshold": 0.05, "close_pct": 1.0},
-        {"threshold": 0.4, "close_pct": 0.5},
-        {"threshold": 0.5, "close_pct": 1.0}
-    ],
-    "replenish_stop_threshold": 0.3,
-    "max_position_count": 150,
-    "enable_all_close": True,
-    "all_close_threshold": 0.0015,
-    "enable_margin_call": True,
-    "margin_call_threshold_long": 0.25,
-    "margin_call_threshold_short": 0.25,
-    "margin_call_multiplier": 2,
-    "enable_single_pair_close": True,
-    "pair_close_threshold": 0.002,
-    "enable_delist_close": True,
-    "min_order_notional": 5,
-    "margin_call_max_count": 4,
-    "max_account_notional_ratio": 6,
-    "skip_symbols": []
-}
+PORT = 8091                     # v1 用 8081，v2 用 8091，可并存
+DB_PATH = "data/evoclaw-v2.db"
+V1_DB_PATH = "data/evoclaw.db"  # 用于迁移 API key
+PID_FILE = "data/evoclaw-v2.pid"
 
 
-PID_FILE = "data/evoclaw.pid"
+def setup_logging():
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+    root.addHandler(ch)
+
+    fh = logging.handlers.RotatingFileHandler(
+        "data/v2.log", maxBytes=3 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+
+    for f in sorted(glob.glob("data/v2.log.[0-9]*"))[:-5]:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
 
 
-def _acquire_pid_lock():
-    """Prevent multiple EvoClaw processes from running simultaneously."""
+def acquire_pid_lock():
     try:
         fd = os.open(PID_FILE, os.O_RDWR | os.O_CREAT, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -80,403 +64,108 @@ def _acquire_pid_lock():
         os.fsync(fd)
         return fd
     except (OSError, IOError):
-        print("ERROR: Another EvoClaw instance is already running. Exiting.", file=sys.stderr)
+        print("ERROR: 已有一个 EvoClaw v2 实例在运行，退出。", file=sys.stderr)
         sys.exit(1)
 
 
-def _release_pid_lock(fd):
+def release_pid_lock(fd):
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
-        os.remove(PID_FILE)
+        if os.path.exists(PID_FILE):
+            os.remove(PID_FILE)
     except Exception:
         pass
 
 
-class ErrorLogFilter(logging.Filter):
-    """Only allow WARNING and above (errors) to pass through."""
-    def filter(self, record):
-        return record.levelno >= logging.WARNING
-
-
-class AiohttpNoiseFilter(logging.Filter):
-    """Drop aiohttp request-parser tracebacks caused by internet scanners.
-
-    Exposed on 0.0.0.0, the web server receives malformed requests daily
-    (Censys etc. sending HTTP/2 PRI or bad URLs). aiohttp logs each as an ERROR
-    with a full traceback, which is pure noise — not an application fault.
-    """
-    _NOISE_TYPES = ("BadHttpMessage", "InvalidURLError")
-
-    def filter(self, record):
-        if not record.name.startswith("aiohttp"):
-            return True
-        exc_type = record.exc_info[0] if record.exc_info else None
-        if exc_type is not None and any(n in exc_type.__name__ for n in self._NOISE_TYPES):
-            return False
-        try:
-            msg = record.getMessage()
-        except Exception:
-            return True
-        return not any(n in msg for n in ("BadHttpMessage", "InvalidURLError", "Pause on PRI"))
-
-
-def setup_logging():
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-
-    # Remove any pre-existing handlers (avoid duplicates on restart)
-    root.handlers.clear()
-
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-
-    # --- stdout (all levels) ---
-    ch = logging.StreamHandler()
-    ch.setFormatter(fmt)
-    root.addHandler(ch)
-
-    # --- Main trader log (INFO+, rotating by size) ---
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "trader.log")
-    fh = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=3 * 1024 * 1024, backupCount=5, encoding="utf-8"
-    )
-    fh.setFormatter(fmt)
-    root.addHandler(fh)
-
-    # --- Error-only log (WARNING+, rotating by size) ---
-    err_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "errors.log")
-    eh = logging.handlers.RotatingFileHandler(
-        err_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
-    eh.setFormatter(fmt)
-    eh.addFilter(ErrorLogFilter())
-    root.addHandler(eh)
-
-    # Silence scanner-induced HTTP parser tracebacks (see AiohttpNoiseFilter).
-    noise = AiohttpNoiseFilter()
-    logging.getLogger("aiohttp.server").addFilter(noise)
-    logging.getLogger("aiohttp.access").addFilter(noise)
-
-    _cleanup_stale_logs()
-
-
-def _cleanup_stale_logs():
-    """Remove stale/oversized log files beyond backup limits."""
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-    max_bytes = 3 * 1024 * 1024
-    max_keep = 5
-
-    # Legacy .bak files
-    for f in sorted(glob.glob(os.path.join(data_dir, "trader.log.*.bak"))):
-        try:
-            os.remove(f)
-        except Exception:
-            pass
-
-    # Numbered rotation files exceeding backupCount
-    numbered = sorted(glob.glob(os.path.join(data_dir, "trader.log.[0-9]*")))
-    for f in numbered[:-max_keep] if len(numbered) > max_keep else []:
-        try:
-            os.remove(f)
-        except Exception:
-            pass
-
-    # Numbered error logs exceeding backupCount
-    err_numbered = sorted(glob.glob(os.path.join(data_dir, "errors.log.[0-9]*")))
-    for f in err_numbered[:-3] if len(err_numbered) > 3 else []:
-        try:
-            os.remove(f)
-        except Exception:
-            pass
-
-    # Any remaining oversized log files (> 2x maxBytes)
-    for f in sorted(glob.glob(os.path.join(data_dir, "*.log*"))):
-        try:
-            if os.path.getsize(f) > max_bytes * 2:
-                os.remove(f)
-        except Exception:
-            pass
-
-
-def get_sides(side: str) -> list[str]:
-    if side == "both":
-        return ["long", "short"]
-    return [side]
+def migrate_api_keys(db: Database, log):
+    """v2 的 config 为空时，从 v1 数据库迁移 API key（用户：key 都在代码/库里）。"""
+    cfg = db.load_config()
+    if cfg.get("exchange_kwargs", {}).get("apiKey"):
+        return
+    if not os.path.exists(V1_DB_PATH):
+        log.warning("未找到 v1 数据库，需要在配置页手动填写 API key")
+        return
+    try:
+        c = sqlite3.connect(V1_DB_PATH)
+        row = c.execute("SELECT value FROM config WHERE key='exchange_kwargs'").fetchone()
+        c.close()
+        if not row:
+            return
+        kw = json.loads(row[0])
+        if kw.get("apiKey"):
+            cfg["exchange_kwargs"] = {"apiKey": kw["apiKey"], "secret": kw.get("secret", "")}
+            db.save_config(cfg)
+            log.info("已从 v1 迁移 API key")
+    except Exception as e:
+        log.warning(f"API key 迁移失败（可手动填写）: {e}")
 
 
 async def main():
-    # --- Startup GC to clean import residue ---
     gc.collect()
-
     setup_logging()
-    log = logging.getLogger(__name__)
+    log = logging.getLogger("main")
 
-    db = Database("data/evoclaw.db")
+    db = Database(DB_PATH)
+    if db.seed_config(DEFAULT_CONFIG):
+        log.info("已用默认配置初始化数据库")
 
-    # Seed an empty database with built-in defaults on first run.
-    # After seeding, the database is the sole source of truth.
-    is_new = db.seed_config(DEFAULT_CONFIG)
-    if is_new:
-        log.info("Database seeded with default config")
+    migrate_api_keys(db, log)
 
-    # Load runtime config from DB
+    # 首次启动生成随机网页密码
     cfg = db.load_config()
-    log.info(f"Config loaded from DB: {len(cfg.get('symbols', []))} symbols, exchange_kwargs={'present' if cfg.get('exchange_kwargs') else 'MISSING'}")
+    if not cfg.get("web_password"):
+        pwd = secrets.token_urlsafe(9)
+        cfg["web_password"] = pwd
+        db.save_config(cfg)
+        log.warning(f"已生成网页管理密码（请记录）：{pwd}")
 
-    # Startup backup: every restart snapshots the DB (WAL-checkpointed first),
-    # keeping the last 14. DB holds the only copy of the ledger AND the config.
+    cfg = db.load_config()
+
+    # 启动备份
     try:
-        path = db.backup_to(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "backup"), keep=14)
+        path = db.backup_to("data/backup-v2", keep=14)
         if path:
-            log.info(f"DB backup written: {path}")
+            log.info(f"数据库备份：{path}")
     except Exception as e:
-        log.warning(f"Startup backup failed (non-fatal): {e}")
+        log.warning(f"备份失败（非致命）: {e}")
 
     client = ExchangeClient(cfg)
     try:
         await client.load_markets()
     except Exception as e:
-        log.warning(f"load_markets() failed (will retry on next API call): {e}")
-        # Don't crash — the exchange will lazy-load markets on first use
-    # Delisting watch: pull a fresh contract-status snapshot so startup logic
-    # and the first tick can already skip/settle coins that left TRADING.
-    try:
-        await client.refresh_market_statuses()
-        await client.fetch_delist_schedule()
-    except Exception as e:
-        log.warning(f"Delisting intel refresh failed (non-fatal): {e}")
+        log.warning(f"load_markets 失败（将重试）: {e}")
 
-    # Backfill historical liquidations (last 7 days)
-    try:
-        existing = db.conn.execute("SELECT COUNT(*) FROM liquidations").fetchone()[0]
-        if existing == 0:
-            log.info("Backfilling liquidation history (7 days)...")
-            liq_records = await client.fetch_liquidations(since_minutes=10080, with_pnl=True)
-            if liq_records:
-                batch_records = []
-                for r in liq_records:
-                    batch_id = r.get("time", "")[:16]
-                    batch_records.append({
-                        "batch_id": batch_id, "symbol": r["symbol"], "side": r["side"],
-                        "orig_qty": r["origQty"], "avg_price": r["avgPrice"],
-                        "executed_qty": r["executedQty"], "pnl": r["pnl"], "time": r["time"],
-                    })
-                db.record_liquidations_batch(batch_records)
-                stats = db.get_liquidation_stats()
-                log.info(f"Backfilled {len(batch_records)} liquidation records from {stats['event_count']} events, total PnL={stats['total_pnl']:.2f}")
-        else:
-            log.info(f"Liquidation table already has {existing} records, skipping backfill")
-    except Exception as e:
-        log.warning(f"Liquidation backfill failed (non-fatal): {e}")
+    engine = Engine(client, db)
+    server = WebServer(client, db, engine)
 
-    # === Startup DB repair: sync open_positions amounts with exchange ===
-    try:
-        db_positions = db.get_open_positions()
-        if db_positions:
-            ex_positions = await client.get_positions()
-            ex_map = {}
-            for p in ex_positions:
-                sym = client.user_symbol(p["symbol"])
-                side = p.get("side")
-                ex_map[f"{sym}:{side}"] = float(p.get("contracts", 0) or 0)
-
-            repaired = 0
-            pending = 0
-            for sp in db_positions:
-                key = f"{sp['symbol']}:{sp['side']}"
-                ex_amt = ex_map.get(key)
-                if ex_amt is None or ex_amt <= 0:
-                    # Do NOT remove here — a vanished position may be a delisting
-                    # settlement that happened while we were down. The trader's
-                    # first tick runs _detect_liquidations, which classifies it
-                    # (records delisting settlements / force-order liquidations,
-                    # or cleans up genuinely stale entries).
-                    pending += 1
-                elif abs(sp['amount'] - ex_amt) > 1:
-                    db.update_open_amount(sp['symbol'], sp['side'], ex_amt)
-                    repaired += 1
-
-            if repaired > 0 or pending > 0:
-                log.info(f"DB repair: {repaired} amounts synced, {pending} vanished entries deferred to first tick detector")
-    except Exception as e:
-        log.warning(f"DB repair failed (non-fatal): {e}")
-
-    trader = Trader(client, db)
-    server = WebServer(client, db, trader=trader)
-
-    # === Phase 3: Health check endpoint ===
-    async def health_handler(request):
-        now = time.monotonic()
-        price_age = now - trader._last_price_ok if trader._last_price_ok > 0 else None
-        trader_alive = trader.running and (price_age is None or price_age < 300)
-        return web.json_response({
-            "status": "ok" if trader_alive else "degraded",
-            "trader_running": trader.running,
-            "last_price_ok_seconds_ago": round(price_age, 1) if price_age else None,
-            "price_fail_streak": trader._price_fail_streak,
-            "open_positions": len(trader._system_pos_map),
-            "skipped_2027_count": len(trader._fail2027_skipped_at),
-            "mc_cooldown_count": len(trader._mc_last_success),
-            "mc_fail_streaks": dict(trader._mc_fail_streak),
-        })
-
-    server.app.router.add_get("/api/health", health_handler)
-
-    # Dynamic symbol selection based on volume & price thresholds
-    volume_threshold = cfg.get("volume_threshold", 0)
-    price_threshold = cfg.get("price_threshold", 0)
-    if volume_threshold == 0 and price_threshold == 0:
-        symbols = cfg.get("symbols", [])
-    else:
-        symbols = await client.get_candidate_symbols(volume_threshold, price_threshold)
-    log.info(f"Active symbols: {len(symbols)} (volume>={volume_threshold}, price<={price_threshold})")
-
-    if symbols:
-        try:
-            await client.refresh_prices(symbols)
-        except Exception as e:
-            log.warning(f"Initial price refresh failed (non-fatal): {e}")
-
-    # Open initial positions - track existing ones, open missing ones
-    sides = get_sides(cfg.get("side", "both"))
-    positions_ok = False
-    if symbols:
-        try:
-            positions = await client.get_positions()
-            positions_ok = True
-        except Exception as e:
-            log.warning(f"Initial get_positions() failed (non-fatal): {e}")
-            positions = []
-
-        for p in positions:
-            sym = client.user_symbol(p["symbol"])
-            pos_side = p.get("side", "")
-            # Track ALL held positions, not only current candidates: a position
-            # can outlive its symbol leaving the dynamic candidate set, and it
-            # still needs a DB record + matrix slot. Also independent of the
-            # configured trading direction — existing legs must always be tracked.
-            if pos_side in ("long", "short"):
-                entry_price = float(p.get("entryPrice", 0) or 0)
-                contracts = float(p.get("contracts", 0) or 0)
-                if contracts > 0:
-                    # UPSERT semantics: if the position already has a DB row,
-                    # only refresh the amount. record_open does DELETE+INSERT,
-                    # which used to reset margin_called / tier_executed /
-                    # entry_time / open_fee on EVERY restart (martingale cooldown
-                    # and tier progress were silently wiped).
-                    if db.has_open(sym, pos_side):
-                        db.update_open_amount(sym, pos_side, contracts)
-                        log.info(f"Synced existing position: {sym} {pos_side} {contracts} @ {entry_price}")
-                    else:
-                        market = client.get_market_info(sym)
-                        cs = market.get("contractSize", 1) or 1
-                        open_fee = entry_price * contracts * cs * 0.0005
-                        db.record_open(
-                            symbol=sym, side=pos_side,
-                            order_id="startup",
-                            entry_price=entry_price,
-                            amount=contracts,
-                            open_fee=open_fee,
-                            max_slots=int(db.get_runtime_stat('matrix_slots', 100) or 100),
-                        )
-                        log.info(f"Tracking existing position: {sym} {pos_side} {contracts} @ {entry_price}")
-
-        tracked = set()
-        for sp in db.get_open_positions():
-            tracked.add(f"{sp['symbol']}:{sp['side']}")
-
-        position_map = {}
-        for p in positions:
-            sym = client.user_symbol(p["symbol"])
-            side = p.get("side")
-            position_map[f"{sym}:{side}"] = p
-
-        stop_threshold = cfg.get("replenish_stop_threshold", 0)
-        max_count = cfg.get("max_position_count", 0)
-
-        if not positions_ok:
-            log.warning("STARTUP OPEN SKIP: cannot fetch live positions, refusing to open missing positions to avoid duplicates")
-            open_tasks = []
-        elif max_count > 0 and len(positions) >= max_count:
-            log.info(f"STARTUP OPEN SKIP: total positions {len(positions)} >= limit {max_count}")
-            open_tasks = []
-        elif not await trader._exposure_ok(positions):
-            log.warning("STARTUP OPEN SKIP: account exposure at/over cap (anti-liquidation guard)")
-            open_tasks = []
-        else:
-            max_new = max_count - len(positions) if max_count > 0 else None
-            open_tasks = []
-            for sym in symbols:
-                # Don't open positions on coins that are settling/being delisted.
-                st = client.get_market_status(sym)
-                if (st and st != "TRADING") or (not st and client.market_status and sym not in client.market_status):
-                    continue
-                for side in sides:
-                    if max_new is not None and len(open_tasks) >= max_new:
-                        log.info(f"STARTUP OPEN LIMIT: stop at {max_count} positions")
-                        break
-                    key = f"{sym}:{side}"
-                    if key not in tracked:
-                        if client.should_stop_replenish(sym, side, stop_threshold, position_map):
-                            continue
-                        open_side = "buy" if side == "long" else "sell"
-                        open_tasks.append((sym, open_side, side))
-                if max_new is not None and len(open_tasks) >= max_new:
-                    break
-
-        if open_tasks:
-            log.info(f"Opening {len(open_tasks)} missing positions")
-            for sym, open_side, side in open_tasks:
-                try:
-                    result = await client.safe_open(sym, open_side)
-                except Exception as e:
-                    log.warning(f"safe_open failed for {sym} {side} (non-fatal): {e}")
-                    continue
-                if result:
-                    market = client.get_market_info(sym)
-                    contract_size = market.get("contractSize", 1) or 1
-                    open_fee = result["average"] * result["amount"] * contract_size * 0.0005
-                    db.record_open(
-                        symbol=sym, side=side,
-                        order_id=result["order_id"],
-                        entry_price=result["average"],
-                        amount=result["amount"],
-                        open_fee=open_fee,
-                        max_slots=int(db.get_runtime_stat('matrix_slots', 100) or 100),
-                    )
-                    # New position — clear any leftover tier state from prior cycle
-                    if hasattr(trader, '_tier_executed'):
-                        trader._tier_executed.pop(f"{sym}:{side}", None)
-                    # Record open event for open-side statistics
-                    db.record_open_event(sym, side, "open", result["average"], result["amount"], result["order_id"])
-        else:
-            log.info("All positions already exist, skipping open")
-
-    # Start web server
     runner = web.AppRunner(server.app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8081)
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    log.info("Web server started on :8081")
+    log.info(f"Web 服务启动于 :{PORT}")
 
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, trader.stop)
+        loop.add_signal_handler(sig, engine.stop)
 
     try:
-        await trader.run()
+        await engine.run()
     except Exception as e:
-        log.error(f"Fatal error in trader loop: {e}")
+        log.error(f"引擎致命错误: {e}")
     finally:
-        await client.close()
+        try:
+            await client.close()
+        except Exception:
+            pass
         await runner.cleanup()
         db.close()
-        log.info("Shutdown complete")
+        log.info("已退出")
 
 
 if __name__ == "__main__":
-    pid_fd = _acquire_pid_lock()
+    fd = acquire_pid_lock()
     try:
         asyncio.run(main())
     finally:
-        _release_pid_lock(pid_fd)
+        release_pid_lock(fd)

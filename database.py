@@ -1,8 +1,14 @@
+"""EvoClaw v2.0 — 数据层。
+
+与 v1 相同的安全实践：WAL 模式 + 单连接跨线程加锁 + 启动备份 + TRUNCATE 检查点。
+v2 使用独立数据库文件（data/evoclaw-v2.db），与 v1 完全隔离。
+"""
+
 import json
-import sqlite3
-import os
 import logging
+import os
 import shutil
+import sqlite3
 import threading
 from datetime import datetime, timezone
 
@@ -10,27 +16,23 @@ log = logging.getLogger(__name__)
 
 
 class Database:
-    def __init__(self, db_path: str = "data/evoclaw.db"):
+    def __init__(self, db_path: str = "data/evoclaw-v2.db"):
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+        self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        # Single shared connection is used from BOTH the event-loop thread and
-        # asyncio.to_thread workers. sqlite3 only serializes individual
-        # statements — multi-statement transactions can interleave without this.
+        # 单连接会被事件循环线程与 to_thread 线程池同时使用，必须有锁保护
+        # 多语句事务（sqlite3 只保证单条语句原子）。
         self._lk = threading.RLock()
         self._init_tables()
-        # All compound (multi-statement) mutating methods share one lock so a
-        # web to_thread worker can never interleave with a trader-thread
-        # transaction on the same connection.
+        # 所有复合写方法统一加锁
         for _name in (
-            "insert_trade", "record_open", "update_open_amount", "remove_open",
-            "mark_margin_called", "record_open_event", "record_delisting",
-            "set_tier_executed", "increment_margin_call_count",
-            "set_runtime_stat", "upsert_config_key", "save_config",
-            "seed_config", "record_liquidation", "record_liquidations_batch",
-            "_rebuild_stats", "_backfill_open_time", "backup_to", "checkpoint",
-            "checkpoint_restart",
+            "save_config", "seed_config", "set_runtime_stat", "insert_order",
+            "update_order_status", "upsert_grid_state", "replace_grid_levels",
+            "insert_grid_level", "fill_grid_level", "mark_grid_level",
+            "upsert_dca_state", "insert_dca_record",
+            "backup_to", "checkpoint",
         ):
             setattr(self, _name, self._make_locked(getattr(self, _name)))
 
@@ -40,765 +42,130 @@ class Database:
                 return fn(*args, **kwargs)
         return wrapper
 
+    # ===== 建表 =====
     def _init_tables(self):
         self.conn.executescript("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                type TEXT NOT NULL,
-                open_time TEXT NOT NULL,
-                close_time TEXT NOT NULL,
-                entry_price REAL NOT NULL,
-                exit_price REAL NOT NULL,
-                amount REAL NOT NULL,
-                pnl REAL NOT NULL,
-                pnl_rate REAL NOT NULL,
-                fee REAL NOT NULL DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(close_time);
-            CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
-
-            CREATE TABLE IF NOT EXISTS open_positions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                order_id TEXT NOT NULL,
-                entry_time TEXT NOT NULL,
-                entry_price REAL NOT NULL,
-                amount REAL NOT NULL,
-                margin_called INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_open_pos_symbol_side ON open_positions(symbol, side);
-
-            CREATE TABLE IF NOT EXISTS liquidations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                orig_qty REAL NOT NULL,
-                avg_price REAL NOT NULL,
-                executed_qty REAL NOT NULL,
-                pnl REAL NOT NULL DEFAULT 0,
-                liquidation_time TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_liq_batch ON liquidations(batch_id);
-            CREATE INDEX IF NOT EXISTS idx_liq_time ON liquidations(liquidation_time);
-            CREATE INDEX IF NOT EXISTS idx_liq_symbol ON liquidations(symbol);
-            CREATE INDEX IF NOT EXISTS idx_liq_time_batch ON liquidations(liquidation_time, batch_id);
-        """)
-        self.conn.commit()
-        # Delisting ledger — records every proactive close (source='proactive')
-        # and forced settlement (source='settled') caused by a coin being
-        # delisted / settled on the exchange.
-        self.conn.executescript("""
-            CREATE TABLE IF NOT EXISTS delistings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                delist_time TEXT NOT NULL DEFAULT '',
-                close_time TEXT NOT NULL,
-                entry_price REAL NOT NULL DEFAULT 0,
-                exit_price REAL NOT NULL DEFAULT 0,
-                amount REAL NOT NULL DEFAULT 0,
-                contract_size REAL NOT NULL DEFAULT 1,
-                position_value REAL NOT NULL DEFAULT 0,
-                pnl REAL NOT NULL DEFAULT 0,
-                pnl_rate REAL NOT NULL DEFAULT 0,
-                fee REAL NOT NULL DEFAULT 0,
-                source TEXT NOT NULL DEFAULT 'proactive',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_delist_time ON delistings(close_time);
-            CREATE INDEX IF NOT EXISTS idx_delist_symbol ON delistings(symbol);
-            CREATE INDEX IF NOT EXISTS idx_delist_symbol_side ON delistings(symbol, side);
-        """)
-        self.conn.commit()
-        # Migration: add columns if tables existed before
-        for table, col, ctype in [
-            ("open_positions", "margin_called", "INTEGER DEFAULT 0"),
-            ("open_positions", "open_fee", "REAL DEFAULT 0"),
-            ("open_positions", "slot_index", "INTEGER DEFAULT -1"),
-            ("trades", "fee", "REAL DEFAULT 0"),
-            ("open_positions", "tier_executed", "INTEGER DEFAULT -1"),
-        ]:
-            try:
-                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
-                self.conn.commit()
-            except Exception:
-                pass
-
-        self.conn.execute("""
             CREATE TABLE IF NOT EXISTS runtime_stats (
                 key TEXT PRIMARY KEY,
                 value REAL NOT NULL DEFAULT 0,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS trade_stats (
-                key TEXT PRIMARY KEY,
-                value REAL NOT NULL DEFAULT 0
-            )
-        """)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-        # Open/margin position events — records every open and margin-call.
-        # trades table only stores closes; this table enables open-side stats.
-        self.conn.executescript("""
-            CREATE TABLE IF NOT EXISTS opens (
+            );
+
+            -- 所有成交（含 dry-run 模拟单）
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                mode TEXT NOT NULL,            -- grid | dca
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,            -- buy | sell
+                type TEXT NOT NULL,            -- grid_buy | grid_sell | dca_buy | close
+                price REAL NOT NULL DEFAULT 0,
+                amount REAL NOT NULL DEFAULT 0,
+                cost REAL NOT NULL DEFAULT 0,  -- 名义价值 (price*amount)
+                fee REAL NOT NULL DEFAULT 0,
+                order_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'filled',
+                dry_run INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts);
+            CREATE INDEX IF NOT EXISTS idx_orders_mode ON orders(mode);
+
+            -- 网格配置与累计状态（每 symbol 一行）
+            CREATE TABLE IF NOT EXISTS grid_state (
+                symbol TEXT PRIMARY KEY,
+                lower REAL NOT NULL DEFAULT 0,
+                upper REAL NOT NULL DEFAULT 0,
+                grids INTEGER NOT NULL DEFAULT 0,
+                size_usdt REAL NOT NULL DEFAULT 0,
+                base_qty REAL NOT NULL DEFAULT 0,      -- 当前持仓数量
+                total_cost REAL NOT NULL DEFAULT 0,    -- 持仓总成本
+                realized_pnl REAL NOT NULL DEFAULT 0,
+                buy_count INTEGER NOT NULL DEFAULT 0,
+                sell_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- 网格挂单/成交明细
+            CREATE TABLE IF NOT EXISTS grid_levels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                type TEXT NOT NULL,
-                open_time TEXT NOT NULL,
+                level_idx INTEGER NOT NULL,
                 price REAL NOT NULL,
-                amount REAL NOT NULL,
+                side TEXT NOT NULL,            -- buy | sell
+                amount REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',  -- pending | filled
                 order_id TEXT NOT NULL DEFAULT '',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                filled_ts TEXT NOT NULL DEFAULT '',
+                created_ts TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_opens_symbol ON opens(symbol);
-            CREATE INDEX IF NOT EXISTS idx_opens_side ON opens(side);
-            CREATE INDEX IF NOT EXISTS idx_opens_time ON opens(open_time);
-            CREATE INDEX IF NOT EXISTS idx_opens_sym_side_type ON opens(symbol, side, type);
+            CREATE INDEX IF NOT EXISTS idx_grid_levels_sym ON grid_levels(symbol, level_idx);
+
+            -- 定投每期记录
+            CREATE TABLE IF NOT EXISTS dca_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL DEFAULT 0,
+                amount REAL NOT NULL DEFAULT 0,
+                cost REAL NOT NULL DEFAULT 0,
+                fee REAL NOT NULL DEFAULT 0,
+                dry_run INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_dca_records_ts ON dca_records(ts);
+
+            -- 定投累计状态（每 symbol 一行）
+            CREATE TABLE IF NOT EXISTS dca_state (
+                symbol TEXT PRIMARY KEY,
+                total_cost REAL NOT NULL DEFAULT 0,
+                total_qty REAL NOT NULL DEFAULT 0,
+                avg_price REAL NOT NULL DEFAULT 0,
+                buy_count INTEGER NOT NULL DEFAULT 0,
+                last_buy_ts TEXT NOT NULL DEFAULT '',
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         self.conn.commit()
-        self._rebuild_stats()
-        self._backfill_open_time()
-        self._migrate_web_config()
-        self._seed_web_password()
-
-    def _seed_web_password(self):
-        """Seed the web admin password used for server-side auth of mutating
-        API endpoints, if it is not set yet. Stored in the config table so it
-        can be changed without touching code."""
-        try:
-            row = self.conn.execute("SELECT value FROM config WHERE key='web_password'").fetchone()
-            if row is None:
-                self.conn.execute(
-                    "INSERT INTO config (key, value) VALUES ('web_password', ?)",
-                    (json.dumps("19830422"),),
-                )
+        # 迁移：为已存在的 grid_state 补列
+        for _col, _type in [("total_cost", "REAL NOT NULL DEFAULT 0")]:
+            try:
+                self.conn.execute(f"ALTER TABLE grid_state ADD COLUMN {_col} {_type}")
                 self.conn.commit()
-                log.info("Seeded default web_password into config")
-        except Exception as e:
-            log.warning(f"web_password seeding failed (non-fatal): {e}")
+            except Exception:
+                pass
 
-    def _rebuild_stats(self):
-        # Verify-first: the incremental counters in trade_stats drift only on
-        # rare failure paths, so compare the cheap key (total_count) before
-        # paying for a full-table re-aggregation on every startup.
-        try:
-            real = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades").fetchone()
-            rows = dict(self.conn.execute("SELECT key, value FROM trade_stats").fetchall())
-            if rows and int(rows.get("total_count", -1)) == int(real[0]) and abs(float(rows.get("total_pnl", 0)) - float(real[1])) < 0.01:
-                return
-            if rows:
-                log.warning(f"trade_stats drift detected (stats={rows.get('total_count')}/{rows.get('total_pnl')} vs real={real[0]}/{real[1]}) — rebuilding")
-        except Exception:
-            pass
-        self.conn.execute("DELETE FROM trade_stats")
-        row = self.conn.execute("""
-            SELECT
-                COALESCE(SUM(pnl), 0),
-                COALESCE(SUM(fee), 0),
-                COALESCE(MAX(pnl_rate), 0),
-                COUNT(CASE WHEN pnl > 0 THEN 1 END),
-                COUNT(CASE WHEN pnl <= 0 THEN 1 END),
-                COUNT(*),
-                COUNT(CASE WHEN type = 'all_close' THEN 1 END),
-                COUNT(CASE WHEN type = 'pair_close' THEN 1 END),
-                COUNT(CASE WHEN type = 'single' THEN 1 END),
-                COALESCE(SUM(CASE WHEN side = 'long' THEN pnl END), 0),
-                COUNT(CASE WHEN side = 'long' THEN 1 END),
-                COALESCE(SUM(CASE WHEN side = 'short' THEN pnl END), 0),
-                COUNT(CASE WHEN side = 'short' THEN 1 END)
-            FROM trades
-        """).fetchone()
-        keys = [
-            "total_pnl", "total_fee", "max_pnl_rate",
-            "win_count", "loss_count", "total_count",
-            "all_close_count", "pair_close_count", "single_count",
-            "long_pnl", "long_count", "short_pnl", "short_count"
-        ]
-        for k, v in zip(keys, row):
-            self.conn.execute(
-                "INSERT INTO trade_stats (key, value) VALUES (?, ?)",
-                (k, v)
-            )
-        self.conn.commit()
-
-    def _inc_stat(self, key: str, delta: float):
-        self.conn.execute(
-            "INSERT INTO trade_stats (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
-            (key, delta)
-        )
-
-    def insert_trade(self, trade: dict):
-        pnl = trade["pnl"]
-        fee = trade.get("fee", 0)
-        pnl_rate = trade["pnl_rate"]
-        side = trade["side"]
-        ttype = trade.get("type", "single")
-        self.conn.execute(
-            """INSERT INTO trades
-               (symbol, side, type, open_time, close_time,
-                entry_price, exit_price, amount, pnl, pnl_rate, fee)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                trade["symbol"], side, ttype,
-                trade.get("open_time", ""), trade["close_time"],
-                trade["entry_price"], trade["exit_price"],
-                trade["amount"], pnl, pnl_rate, fee,
-            ),
-        )
-        self._inc_stat("total_pnl", pnl)
-        self._inc_stat("total_fee", fee)
-        self._inc_stat("total_count", 1)
-        if pnl > 0:
-            self._inc_stat("win_count", 1)
-        else:
-            self._inc_stat("loss_count", 1)
-        if ttype == "all_close":
-            self._inc_stat("all_close_count", 1)
-        elif ttype == "pair_close":
-            self._inc_stat("pair_close_count", 1)
-        elif ttype in ("delist", "external"):
-            # Dedicated types — count toward total/win/loss/fee stats but not the
-            # three main close-type counters (not a tier/pair/all close).
-            pass
-        else:
-            self._inc_stat("single_count", 1)
-        if side == "long":
-            self._inc_stat("long_pnl", pnl)
-            self._inc_stat("long_count", 1)
-        else:
-            self._inc_stat("short_pnl", pnl)
-            self._inc_stat("short_count", 1)
-        cur_max = self.conn.execute("SELECT value FROM trade_stats WHERE key='max_pnl_rate'").fetchone()
-        if cur_max is None or pnl_rate > cur_max[0]:
-            self.conn.execute(
-                "INSERT INTO trade_stats (key, value) VALUES ('max_pnl_rate', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (pnl_rate,)
-            )
-        self.conn.commit()
-
-    # ===== Open positions tracking =====
-
-    def get_slot(self, symbol: str, side: str) -> int | None:
-        row = self.conn.execute(
-            "SELECT slot_index FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
-        ).fetchone()
-        return row[0] if row and row[0] >= 0 else None
-
-    def get_used_slots(self) -> set[int]:
-        rows = self.conn.execute(
-            "SELECT slot_index FROM open_positions WHERE slot_index >= 0"
-        ).fetchall()
-        return {r[0] for r in rows}
-
-    def _allocate_slot(self, symbol: str, side: str, max_slots: int = 100) -> int | None:
-        existing = self.get_slot(symbol, side)
-        if existing is not None:
-            return existing
-
-        used = self.get_used_slots()
-
-        opposite = "short" if side == "long" else "long"
-        opp_slot = self.get_slot(symbol, opposite)
-        if opp_slot is not None:
-            neighbor = opp_slot + 1 if opp_slot % 2 == 0 else opp_slot - 1
-            if 0 <= neighbor < max_slots and neighbor not in used:
-                return neighbor
-
-        start = 0 if side == "long" else 1
-        for i in range(start, max_slots, 2):
-            if i not in used:
-                return i
-
-        for i in range(max_slots):
-            if i not in used:
-                return i
-
-        return None
-
-    def record_open(self, symbol: str, side: str, order_id: str, entry_price: float, amount: float, open_fee: float = None, contract_size: float = 1, max_slots: int = 100):
-        now = datetime.now(timezone.utc).isoformat()
-        if open_fee is None:
-            open_fee = entry_price * amount * contract_size * 0.0005
-        slot = self._allocate_slot(symbol, side, max_slots=max_slots)
-        self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
-        self.conn.execute(
-            """INSERT INTO open_positions (symbol, side, order_id, entry_time, entry_price, amount, open_fee, slot_index)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (symbol, side, order_id, now, entry_price, amount, open_fee, slot if slot is not None else -1),
-        )
-        self.conn.commit()
-
-    def update_open_amount(self, symbol: str, side: str, new_amount: float):
-        """Update position amount after partial close."""
-        self.conn.execute(
-            "UPDATE open_positions SET amount=? WHERE symbol=? AND side=?",
-            (new_amount, symbol, side),
-        )
-        self.conn.commit()
-
-    def remove_open(self, symbol: str, side: str):
-        self.conn.execute("DELETE FROM open_positions WHERE symbol=? AND side=?", (symbol, side))
-        self.conn.commit()
-
-    def get_open_positions(self) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT symbol, side, order_id, entry_time, entry_price, amount, margin_called, open_fee, slot_index FROM open_positions"
-        ).fetchall()
-        columns = ["symbol", "side", "order_id", "entry_time", "entry_price", "amount", "margin_called", "open_fee", "slot_index"]
-        return [dict(zip(columns, r)) for r in rows]
-
-    def mark_margin_called(self, symbol: str, side: str, new_amount: float, added_fee: float = 0):
-        self.conn.execute(
-            "UPDATE open_positions SET margin_called=1, amount=?, open_fee = open_fee + ? WHERE symbol=? AND side=?",
-            (new_amount, added_fee, symbol, side),
-        )
-        self.conn.commit()
-
-    def has_open(self, symbol: str, side: str) -> bool:
-        row = self.conn.execute(
-            "SELECT 1 FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
-        ).fetchone()
-        return row is not None
-
-    def get_open_entry_time(self, symbol: str, side: str) -> str:
-        """Get entry_time from open_positions for a symbol+side (may be about to close)."""
-        row = self.conn.execute(
-            "SELECT entry_time FROM open_positions WHERE symbol=? AND side=?", (symbol, side)
-        ).fetchone()
-        return row[0] if row else ""
-
-    # ===== Open/Margin event tracking (for open-side stats) =====
-
-    def record_open_event(self, symbol: str, side: str, event_type: str, price: float,
-                          amount: float, order_id: str = ''):
-        """Record an open ('open') or margin-call ('margin') event."""
-        now = datetime.now(timezone.utc).isoformat()
-        self.conn.execute(
-            """INSERT INTO opens (symbol, side, type, open_time, price, amount, order_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (symbol, side, event_type, now, price, amount, order_id),
-        )
-        self.conn.commit()
-
-    def get_daily_open_stats(self, day_prefix: str) -> dict:
-        """Count open/margin events by side for a given day (YYYY-MM-DD prefix)."""
-        rows = self.conn.execute(
-            """SELECT side, type, COUNT(*)
-               FROM opens WHERE open_time LIKE ?
-               GROUP BY side, type""",
-            (day_prefix + '%',),
-        ).fetchall()
-        result = {"open": {"long": 0, "short": 0}, "margin": {"long": 0, "short": 0}}
-        for side, etype, cnt in rows:
-            if etype in result and side in result[etype]:
-                result[etype][side] = cnt
-        return result
-
-    def get_symbol_open_summary(self, contract_sizes: dict = None) -> list[dict]:
-        """Aggregate open/margin events per symbol+side for the symbol summary table."""
-        rows = self.conn.execute(
-            """SELECT symbol, side, type, COUNT(*) as cnt,
-                      COALESCE(SUM(amount),0) as qty,
-                      COALESCE(SUM(price*amount),0) as value
-               FROM opens GROUP BY symbol, side, type""",
-        ).fetchall()
-        grouped = {}
-        for symbol, side, etype, cnt, qty, value in rows:
-            key = f"{symbol}:{side}"
-            g = grouped.setdefault(key, {
-                "symbol": symbol, "side": side,
-                "open_count": 0, "open_qty": 0.0, "open_value": 0.0,
-                "margin_count": 0, "margin_qty": 0.0, "margin_value": 0.0,
-            })
-            if etype == "open":
-                g["open_count"] = cnt
-                g["open_qty"] = qty
-                g["open_value"] = value
-            elif etype == "margin":
-                g["margin_count"] = cnt
-                g["margin_qty"] = qty
-                g["margin_value"] = value
-        return list(grouped.values())
-
-    def _backfill_open_time(self):
-        """Backfill empty open_time in trades.
-
-        Two passes: (1) from live open_positions entries, (2) one-time estimate
-        for legacy rows whose position is long gone — use close_time as the
-        closest available approximation so hold-duration analytics work.
-        """
-        empty_count = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
-        if empty_count == 0:
-            return
-        log.debug(f"Backfilling {empty_count} trades with empty open_time from open_positions...")
-        # For each trade with empty open_time where position still exists, copy entry_time
-        self.conn.execute("""
-            UPDATE trades SET open_time = (
-                SELECT entry_time FROM open_positions
-                WHERE open_positions.symbol = trades.symbol
-                  AND open_positions.side = trades.side
-                  AND open_positions.entry_time != ''
-                  AND open_positions.entry_time IS NOT NULL
-                LIMIT 1
-            )
-            WHERE (trades.open_time = '' OR trades.open_time IS NULL)
-              AND EXISTS (
-                SELECT 1 FROM open_positions
-                WHERE open_positions.symbol = trades.symbol
-                  AND open_positions.side = trades.side
-                  AND open_positions.entry_time != ''
-                  AND open_positions.entry_time IS NOT NULL
-              )
-        """)
-        self.conn.commit()
-        filled = empty_count - self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
-        remaining = self.conn.execute("SELECT COUNT(*) FROM trades WHERE open_time='' OR open_time IS NULL").fetchone()[0]
-        if filled > 0:
-            log.info(f"Backfilled open_time for {filled} trades ({remaining} remain, position no longer in DB)")
-        else:
-            log.debug(f"open_time backfill: nothing fillable ({remaining} legacy trades, position no longer in DB)")
-        # One-time estimate for the permanently-unfillable legacy rows.
-        if remaining > 0 and not self.get_runtime_stat("open_time_estimated", 0):
-            self.conn.execute(
-                """UPDATE trades SET open_time = close_time
-                   WHERE (open_time = '' OR open_time IS NULL) AND close_time != ''"""
-            )
-            self.set_runtime_stat("open_time_estimated", 1)
-            log.info(f"Estimated open_time from close_time for {remaining} legacy trades (one-time)")
-
-    # ===== Stats =====
-
-    def get_stats(self, account_balance: float = 0) -> dict:
-        rows = self.conn.execute("SELECT key, value FROM trade_stats").fetchall()
-        stats = {k: v for k, v in rows}
-        total_pnl = stats.get("total_pnl", 0)
-        total_fee = stats.get("total_fee", 0)
-        total_count = int(stats.get("total_count", 0))
-        win_count = stats.get("win_count", 0)
-        long_count = int(stats.get("long_count", 0))
-        short_count = int(stats.get("short_count", 0))
-        account_profit_rate = total_pnl / account_balance if account_balance > 0 else 0
-        win_rate = win_count / total_count if total_count > 0 else 0
-        long_pnl_rate = stats.get("long_pnl", 0) / long_count if long_count > 0 else 0
-        short_pnl_rate = stats.get("short_pnl", 0) / short_count if short_count > 0 else 0
-
-        return {
-            "total_pnl": round(total_pnl, 4),
-            "total_fee": round(total_fee, 4),
-            "max_single_profit_rate": round(stats.get("max_pnl_rate", 0), 6),
-            "account_profit_rate": round(account_profit_rate, 6),
-            "win_rate": round(win_rate, 4),
-            "long_count": long_count,
-            "short_count": short_count,
-            "total_count": total_count,
-            "all_close_count": int(stats.get("all_close_count", 0)),
-            "pair_close_count": int(stats.get("pair_close_count", 0)),
-            "single_count": int(stats.get("single_count", 0)),
-            "long_pnl": round(stats.get("long_pnl", 0), 4),
-            "long_pnl_rate": round(long_pnl_rate, 6),
-            "short_pnl": round(stats.get("short_pnl", 0), 4),
-            "short_pnl_rate": round(short_pnl_rate, 6),
-        }
-
-    def get_recent_trades(self, limit: int = 50, offset: int = 0) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT id, symbol, side, type, open_time, close_time,
-                      entry_price, exit_price, amount, pnl, pnl_rate, fee
-               FROM trades ORDER BY id DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
-        columns = [
-            "id", "symbol", "side", "type", "open_time", "close_time",
-            "entry_price", "exit_price", "amount", "pnl", "pnl_rate", "fee",
-        ]
-        return [dict(zip(columns, r)) for r in rows]
-
-    def get_total_trades(self) -> int:
-        row = self.conn.execute("SELECT COUNT(*) FROM trades").fetchone()
-        return row[0] if row else 0
-
-    def get_historical_worst_trade(self) -> dict | None:
-        row = self.conn.execute(
-            "SELECT symbol, side, pnl, pnl_rate FROM trades WHERE pnl < 0 ORDER BY pnl ASC LIMIT 1"
-        ).fetchone()
-        if row:
-            return {"symbol": row[0], "side": row[1], "pnl": round(row[2], 4), "pnl_rate": round(row[3], 6)}
-        return None
-
-    # ===== Liquidation tracking =====
-
-    def record_liquidation(self, batch_id: str, symbol: str, side: str, orig_qty: float,
-                           avg_price: float, executed_qty: float, pnl: float, time_str: str):
-        self.conn.execute(
-            """INSERT INTO liquidations
-               (batch_id, symbol, side, orig_qty, avg_price, executed_qty, pnl, liquidation_time)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (batch_id, symbol, side, orig_qty, avg_price, executed_qty, pnl, time_str),
-        )
-        self.conn.commit()
-
-    def record_liquidations_batch(self, records: list[dict]):
-        """Batch insert for startup historical backfill."""
-        for r in records:
-            self.conn.execute(
-                """INSERT OR IGNORE INTO liquidations
-                   (batch_id, symbol, side, orig_qty, avg_price, executed_qty, pnl, liquidation_time)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (r["batch_id"], r["symbol"], r["side"], r["orig_qty"], r["avg_price"],
-                 r["executed_qty"], r["pnl"], r["time"]),
-            )
-        self.conn.commit()
-
-    def get_liquidation_stats(self) -> dict:
-        row = self.conn.execute(
-            """SELECT
-                 COUNT(DISTINCT batch_id),
-                 COALESCE(SUM(pnl), 0),
-                 COUNT(DISTINCT symbol),
-                 COALESCE(SUM(executed_qty), 0)
-               FROM liquidations"""
-        ).fetchone()
-        return {
-            "event_count": row[0] if row else 0,
-            "total_pnl": round(row[1], 4) if row else 0,
-            "pairs_count": row[2] if row else 0,
-            "total_qty": round(row[3], 2) if row else 0,
-        }
-
-    def get_liquidation_top10(self) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT symbol, side, avg_price, orig_qty, pnl, liquidation_time
-               FROM liquidations ORDER BY pnl ASC LIMIT 10"""
-        ).fetchall()
-        return [
-            {"symbol": r[0], "side": r[1], "avg_price": round(r[2], 6),
-             "orig_qty": round(r[3], 2), "pnl": round(r[4], 4), "liquidation_time": r[5]}
-            for r in rows
-        ]
-
-    def get_liquidation_events(self, limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
-        """Return batched liquidation events + total count."""
-        rows = self.conn.execute(
-            """SELECT batch_id, liquidation_time,
-                      COUNT(*) as pair_count,
-                      COALESCE(SUM(pnl), 0) as total_pnl,
-                      COALESCE(SUM(executed_qty), 0) as total_qty
-               FROM liquidations
-               GROUP BY batch_id
-               ORDER BY liquidation_time DESC
-               LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
-        total = self.conn.execute(
-            "SELECT COUNT(DISTINCT batch_id) FROM liquidations"
-        ).fetchone()[0]
-        events = [
-            {"batch_id": r[0], "time": r[1], "pair_count": r[2],
-             "total_pnl": round(r[3], 4), "total_qty": round(r[4], 2)}
-            for r in rows
-        ]
-        return events, total if total else 0
-
-    # ===== Delisting records (downlisted / settled coins) =====
-
-    def record_delisting(self, r: dict):
-        """Record one delisting close/settlement event."""
-        self.conn.execute(
-            """INSERT INTO delistings
-               (symbol, side, delist_time, close_time, entry_price, exit_price,
-                amount, contract_size, position_value, pnl, pnl_rate, fee, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (r["symbol"], r["side"], r.get("delist_time", ""), r["close_time"],
-             r["entry_price"], r["exit_price"], r["amount"],
-             r.get("contract_size", 1), r["position_value"],
-             r["pnl"], r["pnl_rate"], r.get("fee", 0), r.get("source", "proactive")),
-        )
-        self.conn.commit()
-
-    def get_delisting_summary(self) -> dict:
-        """Aggregate stats for the delisting ledger."""
-        row = self.conn.execute(
-            """SELECT COUNT(*),
-                      COALESCE(SUM(pnl), 0),
-                      COALESCE(SUM(position_value), 0),
-                      COALESCE(SUM(fee), 0),
-                      COUNT(DISTINCT symbol),
-                      COUNT(CASE WHEN source='proactive' THEN 1 END),
-                      COUNT(CASE WHEN source='settled' THEN 1 END)
-               FROM delistings"""
-        ).fetchone()
-        return {
-            "record_count": row[0] if row else 0,
-            "total_pnl": round(row[1], 4) if row else 0,
-            "total_value": round(row[2], 4) if row else 0,
-            "total_fee": round(row[3], 4) if row else 0,
-            "coin_count": row[4] if row else 0,
-            "proactive_count": row[5] if row else 0,
-            "settled_count": row[6] if row else 0,
-        }
-
-    def get_delistings(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
-        """Return the delisting ledger rows (newest first) + total count."""
-        rows = self.conn.execute(
-            """SELECT id, symbol, side, delist_time, close_time,
-                      entry_price, exit_price, amount, contract_size,
-                      position_value, pnl, pnl_rate, fee, source
-               FROM delistings ORDER BY id DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
-        total = self.conn.execute("SELECT COUNT(*) FROM delistings").fetchone()[0]
-        columns = [
-            "id", "symbol", "side", "delist_time", "close_time",
-            "entry_price", "exit_price", "amount", "contract_size",
-            "position_value", "pnl", "pnl_rate", "fee", "source",
-        ]
-        return [dict(zip(columns, r)) for r in rows], total if total else 0
-
-    def has_delisting_recent(self, symbol: str, side: str, since_iso: str) -> bool:
-        """True if a delisting record for symbol+side already exists after since_iso
-        (used to avoid double-recording a settlement on repeated vanish detections)."""
-        row = self.conn.execute(
-            "SELECT 1 FROM delistings WHERE symbol=? AND side=? AND close_time >= ? LIMIT 1",
-            (symbol, side, since_iso),
-        ).fetchone()
-        return row is not None
-
-    def sum_trades_pnl(self, symbol: str, side: str, since_iso: str) -> float:
-        """Sum of realized PnL already recorded by us for symbol+side since since_iso.
-        When reconciling a settlement against Binance userTrades we subtract this
-        amount so only the unrecorded (settlement) part is booked."""
-        row = self.conn.execute(
-            "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE symbol=? AND side=? AND close_time >= ?",
-            (symbol, side, since_iso),
-        ).fetchone()
-        return row[0] if row else 0.0
-
-    # ===== App Config (stored in DB, source of truth for ALL settings) =====
-
+    # ===== 配置 =====
     def load_config(self) -> dict:
-        """Load full config from DB, converting types from stored strings."""
         rows = self.conn.execute("SELECT key, value FROM config").fetchall()
-        config = {}
+        cfg = {}
         for key, raw in rows:
             try:
-                config[key] = json.loads(raw)
+                cfg[key] = json.loads(raw)
             except Exception:
-                config[key] = raw
-        return config
+                cfg[key] = raw
+        return cfg
 
     def save_config(self, config: dict):
-        """Replace all config entries with the given dict (full overwrite)."""
         self.conn.execute("DELETE FROM config")
         for key, val in config.items():
-            self.conn.execute(
-                "INSERT INTO config (key, value) VALUES (?, ?)",
-                (key, json.dumps(val)),
-            )
+            self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)",
+                              (key, json.dumps(val)))
         self.conn.commit()
 
-    def seed_config(self, defaults: dict):
-        """Initialize config from defaults if table is empty (first-run migration)."""
+    def seed_config(self, defaults: dict) -> bool:
         existing = self.conn.execute("SELECT COUNT(*) FROM config").fetchone()[0]
         if existing == 0:
             self.save_config(defaults)
             return True
         return False
 
-    def upsert_config_key(self, key: str, value):
-        """Insert or update a single config key without affecting others.
-
-        Phase 4: Used to migrate sensitive keys (exchange_kwargs) into DB
-        without a full config overwrite.
-        """
-        self.conn.execute(
-            "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, json.dumps(value)),
-        )
-        self.conn.commit()
-
-    def load_web_config(self) -> dict:
-        """Load frontend display config (matrix_slots/matrix_columns) from DB."""
-        slots = self.get_runtime_stat("matrix_slots", 100)
-        cols = self.get_runtime_stat("matrix_columns", 10)
-        return {"matrix_slots": int(slots), "matrix_columns": int(cols)}
-
-    def save_web_config(self, cfg: dict):
-        """Save frontend display config to DB runtime_stats."""
-        if "matrix_slots" in cfg:
-            self.set_runtime_stat("matrix_slots", float(cfg["matrix_slots"]))
-        if "matrix_columns" in cfg:
-            self.set_runtime_stat("matrix_columns", float(cfg["matrix_columns"]))
-
-    def _migrate_web_config(self):
-        """One-time migration: read web/config.json and store in DB, then delete the file."""
-        import os
-        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "config.json")
-        if not os.path.exists(file_path):
-            return
-        try:
-            import json
-            with open(file_path) as f:
-                wc = json.load(f)
-            slots = int(wc.get("matrix_slots", 100))
-            cols = int(wc.get("matrix_columns", 10))
-            # Only write if not already in DB
-            db_slots = int(self.get_runtime_stat("matrix_slots", 0))
-            if db_slots <= 0:
-                self.set_runtime_stat("matrix_slots", float(slots))
-                self.set_runtime_stat("matrix_columns", float(cols))
-                log.info(f"Migrated web config from file: matrix_slots={slots}, matrix_columns={cols}")
-            os.remove(file_path)
-            log.info(f"Removed {file_path}")
-        except Exception as e:
-            log.warning(f"Web config migration failed (non-fatal): {e}")
-
-    # ===== End App Config =====
-
-    def set_tier_executed(self, symbol: str, side: str, tier: int):
-        """Persist tier close state so it survives restarts."""
-        self.conn.execute(
-            "UPDATE open_positions SET tier_executed=? WHERE symbol=? AND side=?",
-            (tier, symbol, side),
-        )
-        self.conn.commit()
-
-    def load_tier_states(self) -> dict:
-        """Load persisted tier close states (key -> tier_index)."""
-        rows = self.conn.execute(
-            "SELECT symbol, side, tier_executed FROM open_positions WHERE tier_executed >= 0"
-        ).fetchall()
-        return {f"{r[0]}:{r[1]}": r[2] for r in rows}
-
-    def increment_margin_call_count(self, increment: int = 1):
-        self.conn.execute(
-            "INSERT INTO runtime_stats (key, value, updated_at) VALUES ('margin_call_count', ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=value+excluded.value, updated_at=excluded.updated_at",
-            (increment, datetime.now(timezone.utc).isoformat()),
-        )
-        self.conn.commit()
-
-    # ===== Runtime stats =====
-
+    # ===== 运行时状态 =====
     def get_runtime_stat(self, key: str, default: float = 0) -> float:
-        row = self.conn.execute(
-            "SELECT value FROM runtime_stats WHERE key=?", (key,)
-        ).fetchone()
+        row = self.conn.execute("SELECT value FROM runtime_stats WHERE key=?", (key,)).fetchone()
         return row[0] if row else default
 
     def set_runtime_stat(self, key: str, value: float):
@@ -809,30 +176,194 @@ class Database:
         )
         self.conn.commit()
 
+    # ===== 订单 =====
+    def insert_order(self, o: dict):
+        self.conn.execute(
+            """INSERT INTO orders
+               (ts, mode, symbol, side, type, price, amount, cost, fee, order_id, status, dry_run, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (o.get("ts") or datetime.now(timezone.utc).isoformat(),
+             o["mode"], o["symbol"], o["side"], o["type"],
+             float(o.get("price", 0)), float(o.get("amount", 0)), float(o.get("cost", 0)),
+             float(o.get("fee", 0)), str(o.get("order_id", "")),
+             o.get("status", "filled"), 1 if o.get("dry_run") else 0, o.get("note", "")),
+        )
+        self.conn.commit()
+
+    def update_order_status(self, order_id: str, status: str):
+        self.conn.execute("UPDATE orders SET status=? WHERE order_id=?", (status, order_id))
+        self.conn.commit()
+
+    def get_orders(self, limit: int = 100, mode: str = None) -> list[dict]:
+        if mode:
+            rows = self.conn.execute(
+                """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
+                          order_id, status, dry_run, note
+                   FROM orders WHERE mode=? ORDER BY id DESC LIMIT ?""", (mode, limit)).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
+                          order_id, status, dry_run, note
+                   FROM orders ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+        cols = ["id", "ts", "mode", "symbol", "side", "type", "price", "amount",
+                "cost", "fee", "order_id", "status", "dry_run", "note"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    # ===== 网格 =====
+    def get_grid_state(self, symbol: str = None):
+        if symbol:
+            row = self.conn.execute(
+                """SELECT symbol, lower, upper, grids, size_usdt, base_qty,
+                          realized_pnl, buy_count, sell_count FROM grid_state WHERE symbol=?""",
+                (symbol,)).fetchone()
+            if not row:
+                return None
+            cols = ["symbol", "lower", "upper", "grids", "size_usdt", "base_qty",
+                    "total_cost", "realized_pnl", "buy_count", "sell_count"]
+            return dict(zip(cols, row))
+        rows = self.conn.execute(
+            """SELECT symbol, lower, upper, grids, size_usdt, base_qty, total_cost,
+                      realized_pnl, buy_count, sell_count FROM grid_state""").fetchall()
+        cols = ["symbol", "lower", "upper", "grids", "size_usdt", "base_qty",
+                "total_cost", "realized_pnl", "buy_count", "sell_count"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def upsert_grid_state(self, symbol: str, **fields):
+        self.conn.execute(
+            "INSERT INTO grid_state (symbol, updated_at) VALUES (?, ?) "
+            "ON CONFLICT(symbol) DO NOTHING",
+            (symbol, datetime.now(timezone.utc).isoformat()))
+        if fields:
+            cols = ", ".join(f"{k}=?" for k in fields)
+            self.conn.execute(
+                f"UPDATE grid_state SET {cols}, updated_at=? WHERE symbol=?",
+                (*fields.values(), datetime.now(timezone.utc).isoformat(), symbol))
+        self.conn.commit()
+
+    def get_grid_levels(self, symbol: str = None) -> list[dict]:
+        if symbol:
+            rows = self.conn.execute(
+                """SELECT id, symbol, level_idx, price, side, amount, status, order_id,
+                          filled_ts, created_ts FROM grid_levels WHERE symbol=?
+                   ORDER BY level_idx""", (symbol,)).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT id, symbol, level_idx, price, side, amount, status, order_id,
+                          filled_ts, created_ts FROM grid_levels ORDER BY symbol, level_idx""").fetchall()
+        cols = ["id", "symbol", "level_idx", "price", "side", "amount", "status",
+                "order_id", "filled_ts", "created_ts"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def replace_grid_levels(self, symbol: str, levels: list[dict]):
+        """重建某 symbol 的全部网格档位（改区间/格数时调用）。"""
+        self.conn.execute("DELETE FROM grid_levels WHERE symbol=?", (symbol,))
+        now = datetime.now(timezone.utc).isoformat()
+        for lv in levels:
+            self.conn.execute(
+                """INSERT INTO grid_levels
+                   (symbol, level_idx, price, side, amount, status, order_id, filled_ts, created_ts)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (symbol, lv["level_idx"], lv["price"], lv["side"], lv.get("amount", 0),
+                 lv.get("status", "pending"), lv.get("order_id", ""), lv.get("filled_ts", ""), now))
+        self.conn.commit()
+
+    def insert_grid_level(self, symbol: str, level_idx: int, price: float, side: str,
+                          amount: float, status: str = "pending") -> int:
+        """插入一条挂单（网格用订单模型：成交后生成反向单）。"""
+        cur = self.conn.execute(
+            """INSERT INTO grid_levels
+               (symbol, level_idx, price, side, amount, status, order_id, filled_ts, created_ts)
+               VALUES (?, ?, ?, ?, ?, ?, '', '', ?)""",
+            (symbol, level_idx, price, side, amount, status,
+             datetime.now(timezone.utc).isoformat()))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def fill_grid_level(self, row_id: int, order_id: str = ""):
+        self.conn.execute(
+            "UPDATE grid_levels SET status='filled', order_id=?, filled_ts=? WHERE id=?",
+            (order_id, datetime.now(timezone.utc).isoformat(), row_id))
+        self.conn.commit()
+
+    def mark_grid_level(self, symbol: str, level_idx: int, status: str,
+                        order_id: str = "", amount: float = None):
+        if amount is None:
+            self.conn.execute(
+                "UPDATE grid_levels SET status=?, order_id=?, filled_ts=? "
+                "WHERE symbol=? AND level_idx=?",
+                (status, order_id,
+                 datetime.now(timezone.utc).isoformat() if status == "filled" else "",
+                 symbol, level_idx))
+        else:
+            self.conn.execute(
+                "UPDATE grid_levels SET status=?, order_id=?, amount=?, filled_ts=? "
+                "WHERE symbol=? AND level_idx=?",
+                (status, order_id, amount,
+                 datetime.now(timezone.utc).isoformat() if status == "filled" else "",
+                 symbol, level_idx))
+        self.conn.commit()
+
+    # ===== 定投 =====
+    def get_dca_state(self, symbol: str = None):
+        if symbol:
+            row = self.conn.execute(
+                """SELECT symbol, total_cost, total_qty, avg_price, buy_count, last_buy_ts
+                   FROM dca_state WHERE symbol=?""", (symbol,)).fetchone()
+            if not row:
+                return None
+            cols = ["symbol", "total_cost", "total_qty", "avg_price", "buy_count", "last_buy_ts"]
+            return dict(zip(cols, row))
+        rows = self.conn.execute(
+            """SELECT symbol, total_cost, total_qty, avg_price, buy_count, last_buy_ts
+               FROM dca_state""").fetchall()
+        cols = ["symbol", "total_cost", "total_qty", "avg_price", "buy_count", "last_buy_ts"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def upsert_dca_state(self, symbol: str, **fields):
+        self.conn.execute(
+            "INSERT INTO dca_state (symbol, updated_at) VALUES (?, ?) "
+            "ON CONFLICT(symbol) DO NOTHING",
+            (symbol, datetime.now(timezone.utc).isoformat()))
+        if fields:
+            cols = ", ".join(f"{k}=?" for k in fields)
+            self.conn.execute(
+                f"UPDATE dca_state SET {cols}, updated_at=? WHERE symbol=?",
+                (*fields.values(), datetime.now(timezone.utc).isoformat(), symbol))
+        self.conn.commit()
+
+    def insert_dca_record(self, r: dict):
+        self.conn.execute(
+            """INSERT INTO dca_records (ts, symbol, price, amount, cost, fee, dry_run)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (r.get("ts") or datetime.now(timezone.utc).isoformat(), r["symbol"],
+             float(r.get("price", 0)), float(r.get("amount", 0)), float(r.get("cost", 0)),
+             float(r.get("fee", 0)), 1 if r.get("dry_run") else 0))
+        self.conn.commit()
+
+    def get_dca_records(self, limit: int = 100) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT id, ts, symbol, price, amount, cost, fee, dry_run
+               FROM dca_records ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+        cols = ["id", "ts", "symbol", "price", "amount", "cost", "fee", "dry_run"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    # ===== 备份 / 检查点 =====
     def checkpoint(self):
         try:
-            self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except Exception as e:
-            log.warning(f"WAL checkpoint failed: {e}")
-
-    def checkpoint_restart(self):
-        try:
-            # TRUNCATE (not PASSIVE): PASSIVE silently does nothing while any
-            # read snapshot is open, which let the WAL grow to 2x the main DB.
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception as e:
             log.warning(f"WAL checkpoint failed: {e}")
 
     def backup_to(self, backup_dir: str, keep: int = 14) -> str | None:
-        """Checkpoint then snapshot the DB file. Returns the backup path."""
         try:
             os.makedirs(backup_dir, exist_ok=True)
-            self.checkpoint_restart()
+            self.checkpoint()
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-            path = os.path.join(backup_dir, f"evoclaw-{stamp}.db")
-            shutil.copyfile(self.conn.execute("PRAGMA database_list").fetchone()[2], path)
+            path = os.path.join(backup_dir, f"evoclaw-v2-{stamp}.db")
+            shutil.copyfile(self.db_path, path)
             os.chmod(path, 0o600)
-            backups = sorted(f for f in os.listdir(backup_dir) if f.startswith("evoclaw-") and f.endswith(".db"))
+            backups = sorted(f for f in os.listdir(backup_dir)
+                             if f.startswith("evoclaw-v2-") and f.endswith(".db"))
             for old in backups[:-keep]:
                 try:
                     os.remove(os.path.join(backup_dir, old))
@@ -842,14 +373,6 @@ class Database:
         except Exception as e:
             log.warning(f"DB backup failed (non-fatal): {e}")
             return None
-
-    def count_margin_adds(self, symbol: str, side: str, since_iso: str) -> int:
-        """Number of margin-call adds already applied to this position."""
-        row = self.conn.execute(
-            "SELECT COUNT(*) FROM opens WHERE symbol=? AND side=? AND type='margin' AND open_time >= ?",
-            (symbol, side, since_iso),
-        ).fetchone()
-        return row[0] if row else 0
 
     def close(self):
         try:

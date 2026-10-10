@@ -1,838 +1,338 @@
+"""EvoClaw v2.0 — 交易所客户端。
+
+借鉴 v1 的成熟做法：价格缓存 + 精度处理 + 最小名义值 + 错误码分类 + 取消安全。
+v2 同时支持两个市场：
+  - futures（binanceusdm）：方案B 低杠杆网格
+  - spot（binance）      ：方案C 现货定投
+
+dry_run=True 时，策略层不会调用下单方法；客户端仍可读行情/余额用于模拟。
+"""
+
 import asyncio
 import logging
 import math
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+
 import ccxt.async_support as ccxt
 
 log = logging.getLogger(__name__)
 
 
 def _extract_code(err: str) -> str:
-    """Extract Binance error code from exception string, e.g. '-2019'."""
     m = re.search(r'"code":(-?\d+)', err)
     return m.group(1) if m else ""
 
 
 class LogThrottle:
-    """Suppress duplicate log messages within a cooldown window.
+    """同一 key 在冷却窗口内只打一条日志。"""
 
-    First occurrence of a key is logged normally.  Subsequent occurrences
-    within *cooldown* seconds are silently counted.  When the cooldown
-    expires the next occurrence is logged with a suppressed-count suffix.
-    """
-
-    def __init__(self, cooldown: float = 30.0):
+    def __init__(self, cooldown: float = 300.0):
         self._cooldown = cooldown
-        self._entries: dict[str, tuple[float, int]] = {}  # key -> (last_emit, suppressed)
+        self._entries: dict[str, tuple[float, int]] = {}
 
     def emit(self, key: str) -> str | None:
-        """Return None to suppress, or a string suffix (``""`` = no suffix)."""
         now = time.monotonic()
         entry = self._entries.get(key)
         if entry is None:
             self._entries[key] = (now, 0)
             return ""
-        last_emit, suppressed = entry
-        if now - last_emit >= self._cooldown:
+        last, suppressed = entry
+        if now - last >= self._cooldown:
             self._entries[key] = (now, 0)
-            if suppressed > 0:
-                return f" (suppressed {suppressed} in {self._cooldown:.0f}s)"
-            return ""
-        self._entries[key] = (last_emit, suppressed + 1)
+            return f" (suppressed {suppressed} in {self._cooldown:.0f}s)" if suppressed else ""
+        self._entries[key] = (last, suppressed + 1)
         return None
 
 
-# Module-level throttles — each throttles independently
-_throttle_error = LogThrottle(cooldown=600)   # for ERROR-level repeats (10 min)
-_throttle_warn = LogThrottle(cooldown=600)    # for WARNING-level repeats (10 min)
-
-# Headroom added on top of the minimum order notional when sizing an order, so
-# a small price move between sizing and matching cannot push the executed
-# notional below the exchange floor (which Binance rejects with -4164).
-NOTIONAL_SAFETY = 1.02
+_throttle = LogThrottle(cooldown=300)
 
 
 class ExchangeClient:
     def __init__(self, config: dict):
-        exchange_class = getattr(ccxt, "binanceusdm")
-        kwargs = config.get("exchange_kwargs", {}).copy()
+        self.config = config
+        self.dry_run = bool(config.get("dry_run", True))
+
+        kwargs = dict(config.get("exchange_kwargs", {}))
         kwargs.setdefault("enableRateLimit", True)
-        kwargs.setdefault("timeout", 10000)
-        # Close any stale aiohttp sessions inside ccxt (prevents Unclosed connector)
+        kwargs.setdefault("timeout", 15000)
         kwargs.setdefault("http_proxy", None)
-        self.exchange = exchange_class(kwargs)
-        # Binance API clock tolerance:
-        # - recvWindow 60000ms: tolerate up to 60s of clock drift per request
-        # - adjustForTimeDifference: ccxt auto-syncs local timestamps with exchange server time
-        self.exchange.options['recvWindow'] = 60000
-        self.exchange.options['adjustForTimeDifference'] = True
-        self.market_info = {}
-        self.symbol_map = {}
-        self._reverse_map = {}
-        self._prices = {}
+
+        self.futures = ccxt.binanceusdm(dict(kwargs))
+        self.futures.options["recvWindow"] = 60000
+        self.futures.options["adjustForTimeDifference"] = True
+
+        self._spot = None
+        self._spot_kwargs = kwargs
+
+        self._fut_markets: dict = {}
+        self._spot_markets: dict = {}
+        self._reverse: dict = {}          # ccxt unified symbol -> user symbol
+        self._prices: dict = {}           # user symbol -> last price
+        self._price_ts: dict = {}         # user symbol -> monotonic ts
         self._closed = False
-        # Minimum order notional (USDT). Acts as a floor on top of the
-        # exchange's own per-market MIN_NOTIONAL — a new open/加仓 order will
-        # always be sized so its value >= max(exchange_min, this value).
-        # Editable via the 交易配置 page; trader.tick() keeps it in sync with DB.
         self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
-        # Per-symbol last price timestamp (monotonic) so we know when a cached
-        # price is too old to size an order from (see ensure_price()).
-        self._price_ts: dict[str, float] = {}
-        # Last order failure code per "symbol:side" so the trader can classify
-        # failures (e.g. -2027 position limit vs -4164 sizing) instead of
-        # treating every failure as a position-limit breaker.
-        self._last_order_error: dict[str, str] = {}
-        # While available balance < min_order_notional, all order attempts are
-        # pointless. Cache that state for 60s so we don't call get_balance (or
-        # log) once per symbol per tick while the account is fully margined.
-        self._balance_short_until = 0.0
-        # Track position-limit blocks to avoid wasted API calls
-        self._blocked_until: dict[str, float] = {}
-        self._block_count: dict[str, int] = {}
+        self.notional_safety = float(config.get("order_notional_safety", 1.02) or 1.02)
 
-        # === Delisting watch state ===
-        # market_status: exchange symbol -> status from exchangeInfo
-        #   (TRADING / SETTLING / BREAK / CLOSE_DELIVERY / PENDING_TRADING ...)
-        # market_delivery_ms: exchange symbol -> scheduled delivery/settlement ms
-        self.market_status: dict[str, str] = {}
-        self.market_delivery_ms: dict[str, int] = {}
-        self._market_status_ts = 0.0
-        self._market_status_ttl = 300.0   # re-check exchangeInfo every 5 min
-        # Upcoming delist schedule from SAPI (spot/margin) — advance notice.
-        self._schedule_cache: list[dict] = []
-        self._schedule_ts = 0.0
-        self._schedule_ttl = 21600.0      # re-fetch schedule every 6 h
-        self.delist_schedule_bases: set[str] = set()
-
-    def _mark_blocked(self, key: str) -> None:
-        """Mark a symbol+side as blocked due to -2027, with escalating cooldown."""
-        self._block_count[key] = self._block_count.get(key, 0) + 1
-        count = self._block_count[key]
-        durations = [60, 300, 900, 1800, 3600]  # 1min, 5min, 15min, 30min, 1hr
-        cooldown = durations[min(count - 1, len(durations) - 1)]
-        self._blocked_until[key] = time.monotonic() + cooldown
-
-    def is_position_blocked(self, symbol: str, side: str) -> bool:
-        """Check if a symbol+side is in cooldown after -2027 errors."""
-        key = f"{symbol}:{side}"
-        until = self._blocked_until.get(key, 0)
-        if time.monotonic() < until:
-            return True
-        return False
-
-    @staticmethod
-    def _extract_order_price(order: dict) -> float | None:
-        """Extract fill price from a ccxt order dict, or None if absent.
-
-        Binance futures market orders returned by create_order() are often just
-        ACK responses with NO average/price/fill data — the real avg fill price
-        is only available via fetch_order()/queryOrder.
-        """
-        avg = order.get("average") or order.get("price")
-        if not avg:
-            info = order.get("info", {})
-            avg = info.get("avgPrice") or info.get("averagePrice")
-        if not avg:
-            cost = order.get("cost")
-            filled = order.get("filled")
-            if cost and filled and filled > 0:
-                avg = cost / filled
-        if not avg:
-            return None
-        try:
-            return float(avg)
-        except (TypeError, ValueError):
-            return None
-
-    async def _resolve_fill_price(self, order: dict, symbol: str) -> float:
-        """Best-effort resolution of actual fill price for an order.
-
-        Order of preference:
-          1. fill price embedded in the order response
-          2. fetch_order() to query the real avgPrice (authoritative)
-          3. live fetch_ticker() (realtime, but not the exact fill)
-          4. last cached price
-        """
-        avg = self._extract_order_price(order)
-        if avg:
-            return avg
-        oid = str(order.get("id", ""))
-        if oid:
-            try:
-                filled_order = await self._safe_call(
-                    self.exchange.fetch_order(oid, symbol), timeout=10
-                )
-                avg = self._extract_order_price(filled_order)
-                if avg:
-                    return avg
-            except Exception:
-                pass
-        # Fallback: live ticker (better than stale refresh cache)
-        try:
-            ticker = await self._safe_call(self.exchange.fetch_ticker(symbol), timeout=10)
-            last = float(ticker.get("last", 0) or 0)
-            if last > 0:
-                return last
-        except Exception:
-            pass
-        # Last resort: refresh_prices cache
-        return float(self._prices.get(symbol, 0) or 0)
-
-    async def _resolve_fill_price_safe(self, order: dict, symbol: str) -> float:
-        """Tick-timeout cancellation can land inside the fill-price resolution
-        AFTER the order already executed on the exchange. Swallowing the cancel
-        here (falling back to the price embedded in the order ACK) guarantees
-        the caller receives the result and can finish its DB bookkeeping —
-        otherwise the trade silently vanishes from the ledger."""
-        try:
-            return await self._resolve_fill_price(order, symbol)
-        except asyncio.CancelledError:
-            avg = self._extract_order_price(order)
-            log.warning(f"{symbol}: fill-price resolution cancelled by tick timeout, using order-embedded price")
-            return float(avg or 0)
-
-    async def _safe_call(self, coro, timeout=10):
-        """Wrap ccxt call with hard timeout to prevent event loop blocking."""
+    # ===== 基础设施 =====
+    async def _safe_call(self, coro, timeout=20):
         if self._closed:
             raise RuntimeError("ExchangeClient already closed")
-        try:
-            return await asyncio.wait_for(coro, timeout=timeout)
-        except asyncio.TimeoutError:
-            log.warning("CCXT call timed out")
-            raise
-        except Exception:
-            raise
+        return await asyncio.wait_for(coro, timeout=timeout)
 
     async def close(self):
-        """Close the ccxt exchange and release all aiohttp connections."""
         if self._closed:
             return
         self._closed = True
-        try:
-            # Close the underlying aiohttp session first to prevent leaks
-            session = getattr(self.exchange, 'session', None)
-            if session and hasattr(session, 'close'):
-                await asyncio.wait_for(session.close(), timeout=3)
-            await asyncio.wait_for(self.exchange.close(), timeout=5)
-            log.info("Exchange client closed cleanly")
-        except Exception as e:
-            log.warning(f"Exchange close warning: {e}")
+        for ex in (self.futures, self._spot):
+            if ex is None:
+                continue
+            try:
+                session = getattr(ex, "session", None)
+                if session and hasattr(session, "close"):
+                    await asyncio.wait_for(session.close(), timeout=3)
+                await asyncio.wait_for(ex.close(), timeout=5)
+            except Exception as e:
+                log.warning(f"Exchange close warning: {e}")
 
     async def load_markets(self):
-        markets = await self._safe_call(self.exchange.load_markets(), timeout=20)
-        for symbol in self.exchange.symbols:
-            m = markets.get(symbol)
-            if m and m.get("swap") and m.get("quote") == "USDT":
-                self.market_info[symbol] = m
-                exchange_id = m.get("id", "")
-                if exchange_id and exchange_id not in self.symbol_map:
-                    self.symbol_map[exchange_id] = symbol
-                base = symbol.replace(":", "").replace("/", "")
-                if base and base not in self.symbol_map:
-                    self.symbol_map[base] = symbol
-                eid = m.get("id", "")
-                self._reverse_map[symbol] = eid if eid else base
-        log.info(f"Loaded {len(self.market_info)} USDT swap markets, {len(self.symbol_map)} aliases")
+        markets = await self._safe_call(self.futures.load_markets(), timeout=25)
+        for sym, m in markets.items():
+            if m.get("swap") and m.get("quote") == "USDT":
+                self._fut_markets[sym] = m
+                self._register_reverse(sym)
+        log.info(f"Futures markets loaded: {len(self._fut_markets)} USDT swaps")
 
-    async def refresh_prices(self, symbols: list):
-        """Refresh the price cache. Raises on failure — the trader's stale-price
-        circuit breaker depends on seeing this exception (it used to be swallowed
-        here, which left the breaker dead while trading on stale prices)."""
-        resolved = [self.resolve_symbol(s) for s in symbols]
-        tickers = await self._safe_call(self.exchange.fetch_tickers(resolved), timeout=15)
+    async def ensure_spot(self):
+        """惰性加载现货市场（只有 DCA 模式才需要）。"""
+        if self._spot is not None:
+            return
+        self._spot = ccxt.binance(dict(self._spot_kwargs))
+        self._spot.options["recvWindow"] = 60000
+        self._spot.options["adjustForTimeDifference"] = True
+        markets = await self._safe_call(self._spot.load_markets(), timeout=25)
+        for sym, m in markets.items():
+            if m.get("spot") and m.get("quote") == "USDT":
+                self._spot_markets[sym] = m
+                self._register_reverse(sym)
+        log.info(f"Spot markets loaded: {len(self._spot_markets)} USDT pairs")
+
+    def _register_reverse(self, ccxt_sym: str):
+        if ccxt_sym not in self._reverse:
+            self._reverse[ccxt_sym] = ccxt_sym.replace("/", "").replace(":USDT", "")
+
+    def user_symbol(self, ccxt_sym: str) -> str:
+        return self._reverse.get(ccxt_sym, ccxt_sym)
+
+    def to_ccxt(self, user_symbol: str, kind: str = "futures") -> str:
+        """把 BTCUSDT / BTC/USDT 统一成 ccxt 的 `BTC/USDT:USDT`（合约）或 `BTC/USDT`（现货）。"""
+        s = user_symbol.replace("/", "").replace(":USDT", "")
+        base = s[:-4] if s.endswith("USDT") else s
+        if kind == "futures":
+            return f"{base}/USDT:USDT"
+        return f"{base}/USDT"
+
+    def market_info(self, user_symbol: str, kind: str = "futures") -> dict:
+        table = self._fut_markets if kind == "futures" else self._spot_markets
+        return table.get(self.to_ccxt(user_symbol, kind), {})
+
+    # ===== 价格 =====
+    async def refresh_prices(self, symbols: list[str]):
+        """刷新价格缓存；失败会抛异常（由引擎决定是否降级）。"""
+        resolved = [self.to_ccxt(s, "futures") for s in symbols]
+        resolved = [s for s in resolved if s in self._fut_markets]
+        if not resolved:
+            return
+        tickers = await self._safe_call(self.futures.fetch_tickers(resolved), timeout=20)
         ts = time.monotonic()
-        for sym, ticker in tickers.items():
-            if ticker and ticker.get("last"):
-                self._prices[sym] = float(ticker["last"])
-                self._price_ts[sym] = ts
+        for sym, t in tickers.items():
+            if t and t.get("last"):
+                us = self.user_symbol(sym)
+                self._prices[us] = float(t["last"])
+                self._price_ts[us] = ts
 
-    async def ensure_price(self, symbol: str, max_age: float = 30.0) -> float:
-        """Return a fresh-enough last price for a symbol, fetching one if needed.
-
-        refresh_prices() only covers the current candidate set, but the trader
-        also sizes orders for held symbols that have dropped out of that set —
-        those would otherwise use a stale/missing price and compute a far-too-
-        small order (Binance rejects it with -4164).  A single ticker call here
-        keeps order sizing correct at negligible API cost.
-        """
-        resolved = self.resolve_symbol(symbol)
+    async def ensure_price(self, user_symbol: str, max_age: float = 30.0) -> float:
         now = time.monotonic()
-        cached = self._prices.get(resolved)
-        if cached and cached > 0 and (now - self._price_ts.get(resolved, 0)) < max_age:
-            return float(cached)
+        p = self._prices.get(user_symbol)
+        if p and p > 0 and (now - self._price_ts.get(user_symbol, 0)) < max_age:
+            return float(p)
+        ccxt_sym = self.to_ccxt(user_symbol, "futures")
         try:
-            ticker = await self._safe_call(self.exchange.fetch_ticker(resolved), timeout=10)
-            last = float(ticker.get("last", 0) or 0)
+            t = await self._safe_call(self.futures.fetch_ticker(ccxt_sym), timeout=10)
+            last = float(t.get("last", 0) or 0)
             if last > 0:
-                self._prices[resolved] = last
-                self._price_ts[resolved] = now
-                if resolved in self.market_info:
-                    self.market_info[resolved]["info"]["lastPrice"] = str(last)
+                self._prices[user_symbol] = last
+                self._price_ts[user_symbol] = now
                 return last
         except Exception as e:
-            log.warning(f"ensure_price {symbol} failed: {e}")
-        return float(self._prices.get(resolved, 0) or 0)
+            log.warning(f"ensure_price {user_symbol} failed: {e}")
+        return float(self._prices.get(user_symbol, 0) or 0)
 
-    # ===== Order failure classification =====
+    def last_price(self, user_symbol: str) -> float:
+        return float(self._prices.get(user_symbol, 0) or 0)
 
-    def _set_order_error(self, symbol: str, side: str, code: str):
-        self._last_order_error[f"{symbol}:{side}"] = code or ""
+    # ===== 精度与最小下单量 =====
+    def min_notional_of(self, user_symbol: str, kind: str = "futures") -> float:
+        """该标的「一手」至少需要多少 USDT（交易所最小名义值 vs 配置最小额的较大者）。"""
+        m = self.market_info(user_symbol, kind)
+        if not m:
+            return self.min_order_notional
+        ex_min = float((m.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
+        return max(ex_min, self.min_order_notional)
 
-    def clear_order_error(self, symbol: str, side: str):
-        self._last_order_error.pop(f"{symbol}:{side}", None)
-
-    def get_last_order_error(self, symbol: str, side: str) -> str:
-        """Last Binance error code for symbol:side ('' when the last attempt
-        succeeded or the failure was a network error without a code)."""
-        return self._last_order_error.get(f"{symbol}:{side}", "")
-
-    def is_balance_short(self) -> bool:
-        """True while available balance is known to be below the minimum
-        notional (set by _has_min_available, cached for 60s)."""
-        return time.monotonic() < self._balance_short_until
-
-    async def _has_min_available(self, symbol: str, side: str) -> bool:
-        """Cheap guard: is available balance enough for another order?
-
-        Skips silently (with no per-symbol log) while the account is fully
-        margined — the shortage is logged once per throttle window by this
-        method itself, so callers must not log again per symbol.
-        """
-        now = time.monotonic()
-        if now < self._balance_short_until:
-            self._set_order_error(symbol, side, "-2019")
-            return False
+    def min_amount(self, user_symbol: str, price: float, kind: str = "futures") -> float:
+        """满足最小名义值与最小数量精度所需的最小可下数量；算不出（资金/精度不足）返回 0。"""
+        m = self.market_info(user_symbol, kind)
+        if not m or price <= 0:
+            return 0.0
+        ex = self.futures if kind == "futures" else self._spot
         try:
-            bal = await self.get_balance()
+            cs = float(m.get("contractSize", 1) or 1)
+            target = self.min_notional_of(user_symbol, kind) * self.notional_safety
+            min_amt = float((m.get("limits", {}).get("amount", {}).get("min", 0)) or 0)
+            raw = max(1.0, math.ceil(target / (price * cs)))
+            if min_amt > 0:
+                raw = max(raw, math.ceil(min_amt / cs))
+            return float(ex.amount_to_precision(self.to_ccxt(user_symbol, kind), raw))
         except Exception:
-            return True  # can't check → let the real order decide
-        if bal.get("available_balance", 0) < self.min_order_notional:
-            self._balance_short_until = now + 60
-            self._set_order_error(symbol, side, "-2019")
-            s = _throttle_warn.emit("balance_short")
-            if s is not None:
-                log.warning(
-                    f"Orders skipped: available balance "
-                    f"{bal.get('available_balance', 0):.2f} < min {self.min_order_notional} USDT "
-                    f"(fully margined){s}"
-                )
-            return False
-        return True
+            return 0.0
 
-    async def get_candidate_symbols(self, volume_threshold: float, price_threshold: float) -> list[str]:
+    def amount_for_notional(self, user_symbol: str, usdt: float, price: float,
+                            kind: str = "futures") -> float:
+        """按目标名义金额算数量（不低于最小可下量）；该金额买不起「一手」时返回 0。
+
+        返回 0 的典型原因：目标金额低于该标的的最小名义值（如 BTC 一手 ≈ 82U）。
+        这种情况由调用方汇总成一条清晰的「资金不足」提示，不在这里逐档刷屏。
+        """
+        m = self.market_info(user_symbol, kind)
+        if not m or price <= 0:
+            return 0.0
+        ex = self.futures if kind == "futures" else self._spot
         try:
-            tickers = await self._safe_call(self.exchange.fetch_tickers(), timeout=15)
-            candidates = []
-            for ccxt_sym, ticker in tickers.items():
-                if ccxt_sym not in self.market_info:
-                    continue
-                last = float(ticker.get("last", 0) or 0)
-                volume = float(ticker.get("quoteVolume", 0) or 0)
-                price_ok = price_threshold <= 0 or last <= price_threshold
-                volume_ok = volume_threshold <= 0 or volume >= volume_threshold
-                if price_ok and volume_ok:
-                    user_sym = self.user_symbol(ccxt_sym)
-                    if user_sym:
-                        candidates.append(user_sym)
-            return candidates
-        except Exception as e:
-            log.error(f"get_candidate_symbols failed: {e}")
-            return []
+            cs = float(m.get("contractSize", 1) or 1)
+            lo = self.min_amount(user_symbol, price, kind)
+            if lo <= 0:
+                return 0.0
+            raw = usdt / (price * cs)
+            try:
+                amt = float(ex.amount_to_precision(self.to_ccxt(user_symbol, kind), raw))
+            except Exception:
+                return 0.0
+            if amt <= 0:
+                return 0.0
+            return max(amt, lo)
+        except Exception:
+            return 0.0
 
-    def resolve_symbol(self, symbol: str) -> str:
-        if symbol in self.market_info:
-            return symbol
-        if symbol in self.symbol_map:
-            return self.symbol_map[symbol]
-        log.warning(f"Symbol {symbol} not found in swap markets")
-        return symbol
+    def round_price(self, user_symbol: str, price: float, kind: str = "futures") -> float:
+        ex = self.futures if kind == "futures" else self._spot
+        try:
+            return float(ex.price_to_precision(self.to_ccxt(user_symbol, kind), price))
+        except Exception:
+            return price
 
-    def user_symbol(self, ccxt_symbol: str) -> str:
-        if ccxt_symbol in self._reverse_map:
-            return self._reverse_map[ccxt_symbol]
-        return ccxt_symbol
-
-    def get_market_info(self, symbol: str) -> dict:
-        resolved = self.resolve_symbol(symbol)
-        return self.market_info.get(resolved, {})
-
-    def should_stop_replenish(self, sym: str, side: str, stop_threshold: float, position_map: dict) -> bool:
-        if stop_threshold <= 0:
-            return False
-        opposite_side = "short" if side == "long" else "long"
-        opposite_pos = position_map.get(f"{sym}:{opposite_side}")
-        if not opposite_pos:
-            return False
-        entry_price = float(opposite_pos.get("entryPrice", 0) or 0)
-        if entry_price <= 0:
-            return False
-        resolved = self.resolve_symbol(sym)
-        price = self._prices.get(resolved)
-        if not price or price <= 0:
-            log.warning(f"REPLENISH STOP {sym} {side}: price unavailable, defaulting to STOP")
-            return True
-        deviation = abs(entry_price - price) / entry_price
-        if deviation >= stop_threshold:
-            log.info(
-                f"REPLENISH STOP {sym} {side}: opposite {opposite_side} "
-                f"entry={entry_price:.6f} price={price:.6f} deviation={deviation:.4%}"
-            )
-            return True
-        return False
-
-    async def get_balance(self) -> dict:
-        balance = await self._safe_call(self.exchange.fetch_balance(), timeout=10)
-        usdt_total = balance.get("total", {}).get("USDT", 0)
-        usdt_free = balance.get("free", {}).get("USDT", 0)
+    # ===== 账户 =====
+    async def get_futures_balance(self) -> dict:
+        b = await self._safe_call(self.futures.fetch_balance(), timeout=15)
         return {
-            "balance": float(usdt_total) if usdt_total else 0,
-            "available_balance": float(usdt_free) if usdt_free else 0,
+            "balance": float(b.get("total", {}).get("USDT", 0) or 0),
+            "available": float(b.get("free", {}).get("USDT", 0) or 0),
         }
 
-    async def fetch_liquidations(self, since_minutes: int = 1440, with_pnl: bool = False) -> list[dict]:
-        """Fetch liquidation (force order) history from Binance.
+    async def get_spot_balance(self, asset: str = "USDT") -> dict:
+        await self.ensure_spot()
+        b = await self._safe_call(self._spot.fetch_balance(), timeout=15)
+        return {
+            "free": float(b.get("free", {}).get(asset, 0) or 0),
+            "total": float(b.get("total", {}).get(asset, 0) or 0),
+        }
 
-        If with_pnl=True, also fetches all user trades in the window and matches
-        realized PnL to each liquidation record.
+    async def get_positions(self) -> list[dict]:
+        """合约持仓（仅数量>0 的）。"""
+        rows = await self._safe_call(self.futures.fetch_positions(), timeout=20)
+        out = []
+        for p in rows:
+            c = float(p.get("contracts", 0) or 0)
+            if c > 0:
+                out.append(p)
+        return out
 
-        Returns list of dicts with: symbol, side, origQty, avgPrice, executedQty, pnl, time.
-        """
+    # ===== 交易 =====
+    async def set_leverage(self, user_symbol: str, leverage: int):
+        if self.dry_run:
+            return
         try:
-            since_ms = int((datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).timestamp() * 1000)
-            raw = await self._safe_call(
-                self.exchange.fapiPrivateGetForceOrders({"startTime": since_ms, "limit": 100}),
-                timeout=20,
-            )
-            result = []
-            for fo in raw:
-                sym_id = fo.get("symbol", "")
-                sym = self.user_symbol(sym_id)
-                side = "LONG" if fo.get("positionSide", "") == "LONG" else "SHORT"
-                raw_time = fo.get("time", 0)
-                if isinstance(raw_time, str):
-                    raw_time = int(raw_time)
-                result.append({
-                    "symbol": sym,
-                    "side": side,
-                    "origQty": float(fo.get("origQty", 0)),
-                    "avgPrice": float(fo.get("price", 0) or fo.get("averagePrice", 0) or 0),
-                    "executedQty": float(fo.get("executedQty", 0)),
-                    "pnl": 0.0,
-                    "time": datetime.fromtimestamp(raw_time / 1000, tz=timezone.utc).isoformat(),
-                    "timestamp_ms": raw_time,
-                    "order_id": fo.get("orderId"),
-                })
-
-            # Optionally enrich with PnL from all trades in one batch call
-            if with_pnl and result:
-                try:
-                    all_trades = await self._safe_call(
-                        self.exchange.fapiPrivateGetUserTrades({"startTime": since_ms, "limit": 1000}),
-                        timeout=20,
-                    )
-                    # Build lookup: (symbol, orderId) -> total realized PnL
-                    trade_pnl: dict[tuple, float] = {}
-                    for t in all_trades:
-                        sym_id = t.get("symbol", "")
-                        sym = self.user_symbol(sym_id)
-                        oid = str(t.get("orderId", ""))
-                        rpnl = float(t.get("realizedPnl", 0) or 0)
-                        key = (sym, oid)
-                        trade_pnl[key] = trade_pnl.get(key, 0) + rpnl
-
-                    for r in result:
-                        matched = trade_pnl.get((r["symbol"], str(r.get("order_id", ""))))
-                        if matched is not None:
-                            r["pnl"] = matched
-                except Exception as e:
-                    log.warning(f"PnL enrichment failed: {e}")
-
-            # Clean up internal fields before returning
-            for r in result:
-                r.pop("order_id", None)
-            return result
+            await self._safe_call(
+                self.futures.set_leverage(int(leverage), self.to_ccxt(user_symbol, "futures")),
+                timeout=10)
         except Exception as e:
-            log.warning(f"fetch_liquidations failed: {e}")
-            return []
+            log.warning(f"set_leverage {user_symbol} x{leverage} failed: {e}")
 
-    # ===== Delisting watch =====
+    async def create_limit_order(self, user_symbol: str, side: str, amount: float,
+                                 price: float, kind: str = "futures",
+                                 reduce_only: bool = False) -> dict | None:
+        """限价单。dry_run 时返回模拟成交结构（不触网）。"""
+        if self.dry_run:
+            return {"order_id": f"dry-{int(time.time()*1000)}", "price": price,
+                    "amount": amount, "dry_run": True}
+        ex = self.futures if kind == "futures" else self._spot
+        params = {}
+        if kind == "futures" and reduce_only:
+            params["reduceOnly"] = True
+        try:
+            o = await self._safe_call(ex.create_order(
+                self.to_ccxt(user_symbol, kind), "limit", side, amount, price, params), timeout=20)
+            return {
+                "order_id": str(o.get("id", "")),
+                "price": float(o.get("price") or price),
+                "amount": float(o.get("amount") or amount),
+                "dry_run": False,
+            }
+        except Exception as e:
+            code = _extract_code(str(e))
+            s = _throttle.emit(f"limit_err:{user_symbol}:{code}")
+            if s is not None:
+                log.warning(f"Limit order failed {user_symbol} {side} {amount}@{price}: {e}{s}")
+            return None
 
-    async def refresh_market_statuses(self, force: bool = False) -> bool:
-        """Refresh the per-symbol contract status map from exchangeInfo.
+    async def create_market_order(self, user_symbol: str, side: str, amount: float,
+                                  kind: str = "futures") -> dict | None:
+        if self.dry_run:
+            px = self.last_price(user_symbol) or await self.ensure_price(user_symbol)
+            return {"order_id": f"dry-{int(time.time()*1000)}", "price": px,
+                    "amount": amount, "dry_run": True}
+        ex = self.futures if kind == "futures" else self._spot
+        try:
+            o = await self._safe_call(ex.create_order(
+                self.to_ccxt(user_symbol, kind), "market", side, amount), timeout=20)
+            px = float(o.get("average") or o.get("price") or 0 or 0)
+            if px <= 0:
+                px = await self.ensure_price(user_symbol)
+            return {"order_id": str(o.get("id", "")), "price": px,
+                    "amount": float(o.get("amount") or amount), "dry_run": False}
+        except Exception as e:
+            code = _extract_code(str(e))
+            s = _throttle.emit(f"market_err:{user_symbol}:{code}")
+            if s is not None:
+                log.warning(f"Market order failed {user_symbol} {side} {amount}: {e}{s}")
+            return None
 
-        Binance does not expose a USDT-M *futures* delist-schedule endpoint
-        anymore (fapi/v1/futures/data/delist-schedule returns 404), so the
-        reliable realtime signal we poll is the contract `status` field:
-        a normal perp is TRADING; when Binance stops trading before a
-        settlement it flips to SETTLING (and after a permanent delisting the
-        symbol disappears from exchangeInfo entirely).  TTL ~5 min.
-        """
-        now = time.monotonic()
-        if not force and self._market_status_ts and (now - self._market_status_ts) < self._market_status_ttl:
+    async def cancel_order(self, order_id: str, user_symbol: str, kind: str = "futures") -> bool:
+        if self.dry_run or not order_id or order_id.startswith("dry-"):
+            return True
+        ex = self.futures if kind == "futures" else self._spot
+        try:
+            await self._safe_call(ex.cancel_order(order_id, self.to_ccxt(user_symbol, kind)), timeout=15)
+            return True
+        except Exception as e:
+            log.warning(f"Cancel order failed {user_symbol} {order_id}: {e}")
             return False
+
+    async def fetch_open_orders(self, user_symbol: str, kind: str = "futures") -> list[dict]:
+        ex = self.futures if kind == "futures" else self._spot
         try:
-            info = await self._safe_call(self.exchange.fapiPublicGetExchangeInfo(), timeout=20)
+            return await self._safe_call(ex.fetch_open_orders(self.to_ccxt(user_symbol, kind)), timeout=15)
         except Exception as e:
-            log.warning(f"refresh_market_statuses failed: {e}")
-            return False
-        status_map = {}
-        delivery_map = {}
-        for s in info.get("symbols", []):
-            ct = s.get("contractType", "")
-            if ct in ("PERPETUAL", "TRADIFI_PERPETUAL"):
-                sym = s.get("symbol", "")
-                if not sym:
-                    continue
-                status_map[sym] = s.get("status", "")
-                d = s.get("deliveryDate")
-                try:
-                    delivery_map[sym] = int(d) if d else 0
-                except (TypeError, ValueError):
-                    delivery_map[sym] = 0
-        self.market_status = status_map
-        self.market_delivery_ms = delivery_map
-        self._market_status_ts = now
-        return True
-
-    def get_market_status(self, symbol: str) -> str:
-        """Contract status for a user symbol ('' if unknown / not refreshed)."""
-        return self.market_status.get(symbol, "")
-
-    def get_market_delivery_ms(self, symbol: str) -> int:
-        return self.market_delivery_ms.get(symbol, 0)
-
-    @staticmethod
-    def _base_asset(symbol: str) -> str:
-        """Strip the quote currency to get the underlying base asset."""
-        sym = symbol.split(":")[0]
-        for q in ("USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH"):
-            if sym.endswith(q) and len(sym) > len(q):
-                return sym[:-len(q)]
-        return sym
-
-    async def fetch_delist_schedule(self) -> list[dict]:
-        """Fetch upcoming delist schedule from Binance SAPI (spot + margin).
-
-        There is no perp-specific feed, but when Binance delists a token it
-        normally removes the coin from spot/margin AND settles its USDⓈ-M
-        perpetual around the same time — so the spot/margin schedule works as
-        advance notice for the underlying base asset.  Cached for 6 h.
-        """
-        now = time.monotonic()
-        if self._schedule_ts and (now - self._schedule_ts) < self._schedule_ttl:
-            return self._schedule_cache
-        entries: list[dict] = []
-        ok = False
-        try:
-            for method, market_type in (("sapiGetSpotDelistSchedule", "spot"),
-                                        ("sapiGetMarginDelistSchedule", "margin")):
-                fn = getattr(self.exchange, method, None)
-                if not fn:
-                    continue
-                raw = await self._safe_call(fn(), timeout=20)
-                if not isinstance(raw, list):
-                    continue
-                for s in raw:
-                    sym = s.get("symbol", "")
-                    if not sym:
-                        continue
-                    base = self._base_asset(sym)
-                    dt = s.get("delistTime")
-                    try:
-                        ms = int(dt) if dt else 0
-                    except (TypeError, ValueError):
-                        ms = 0
-                    entries.append({
-                        "market": market_type,
-                        "symbol": sym,
-                        "base": base,
-                        "delist_time": datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat() if ms else "",
-                        "delist_ms": ms,
-                        "status": s.get("delistStatus", ""),
-                    })
-            ok = True
-        except Exception as e:
-            log.warning(f"fetch_delist_schedule failed: {e}")
-        if ok:
-            self._schedule_cache = entries
-            self._schedule_ts = now
-            self.delist_schedule_bases = {e["base"] for e in entries}
-            if entries:
-                log.info(f"Delist schedule: {len(entries)} entries across {len(self.delist_schedule_bases)} base assets")
-        return self._schedule_cache
-
-    def get_delist_schedule(self) -> list[dict]:
-        """Cached schedule entries (may be stale up to the 6 h TTL)."""
-        return self._schedule_cache or []
-
-    def delist_schedule_hit(self, symbol: str) -> dict | None:
-        """Return the schedule entry whose base asset matches symbol, if any."""
-        base = self._base_asset(symbol)
-        for e in self.get_delist_schedule():
-            if e.get("base") == base:
-                return e
-        return None
-
-    async def fetch_user_trades(self, symbol: str, since_ms: int) -> list:
-        """Fetch user trades for a symbol since since_ms (Binance id format).
-
-        Used to reconcile a delisting settlement with the authoritative
-        realized PnL.  Returns [] if the call fails (e.g. symbol fully
-        delisted and history pruned).
-        """
-        try:
-            return await self._safe_call(self.exchange.fapiPrivateGetUserTrades({
-                "symbol": symbol,
-                "startTime": int(since_ms),
-                "limit": 1000,
-            }), timeout=20)
-        except Exception as e:
-            log.warning(f"fetch_user_trades {symbol}: {e}")
+            log.warning(f"fetch_open_orders {user_symbol} failed: {e}")
             return []
-
-    def get_last_price(self, symbol: str) -> float:
-        """Last cached price for a symbol (0 if never seen)."""
-        resolved = self.resolve_symbol(symbol)
-        return float(self._prices.get(resolved, 0) or 0)
-
-    async def get_positions(self, symbols: list = None) -> list[dict]:
-        resolved = [self.resolve_symbol(s) for s in symbols] if symbols else None
-        positions = await self._safe_call(self.exchange.fetch_positions(resolved or None), timeout=15)
-        result = []
-        for p in positions:
-            contracts = float(p.get("contracts", 0) or 0)
-            if contracts <= 0:
-                continue
-            result.append(p)
-        return result
-
-    def calc_min_contracts(self, symbol: str) -> float:
-        try:
-            resolved = self.resolve_symbol(symbol)
-            market = self.market_info.get(resolved)
-            if not market:
-                return 1
-            contract_size = float(market.get("contractSize", 1) or 1)
-            # Effective minimum notional = the larger of the exchange's own
-            # MIN_NOTIONAL for this market and the user-configured floor.
-            exchange_min_notional = float((market.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
-            min_notional = max(exchange_min_notional, float(self.min_order_notional or 0))
-            min_amount = float((market.get("limits", {}).get("amount", {}).get("min", 0)) or 0)
-            amount_precision = int(float(market.get("precision", {}).get("amount", 0) or 0))
-
-            raw = 1
-            if min_amount > 0:
-                raw = max(raw, int(math.ceil(min_amount / contract_size)))
-            if min_notional > 0:
-                price = self._prices.get(resolved)
-                if not price or price <= 0:
-                    # No usable price → cannot size a valid order. Return 0 so
-                    # callers skip instead of placing a garbage-sized order.
-                    # (The old fallback assumed price = cs*10, yielding ~0.05
-                    # USDT orders that Binance rejected with -4164 forever.)
-                    s = _throttle_warn.emit(f"no_price:{resolved}")
-                    if s is not None:
-                        log.warning(f"calc_min_contracts {symbol}: no price available, skipping order sizing{s}")
-                    return 0
-                target_notional = min_notional * NOTIONAL_SAFETY
-                raw = max(raw, int(math.ceil(target_notional / (price * contract_size))))
-            return float(round(raw, amount_precision))
-        except Exception as e:
-            log.error(f"calc_min_contracts failed {symbol}: {e}")
-            return 1
-
-    async def open_position(self, symbol: str, side: str) -> dict | None:
-        resolved = self.resolve_symbol(symbol)
-        if self.is_position_blocked(resolved, side):
-            self._set_order_error(symbol, side, "-2027")
-            return None
-        # Make sure the cached price for this symbol is fresh before sizing the
-        # order — held symbols outside the candidate set are not covered by the
-        # periodic refresh, and a stale price under-sizes the order (-4164).
-        await self.ensure_price(symbol)
-        amount = self.calc_min_contracts(resolved)
-        if amount <= 0:
-            self._set_order_error(symbol, side, "")
-            return None
-        # Available balance guard (cached; logs the shortage once, not per leg).
-        if not await self._has_min_available(symbol, side):
-            return None
-        try:
-            order = await self._safe_call(self.exchange.create_order(
-                symbol=resolved, type="market", side=side, amount=amount,
-                params={"positionSide": "LONG" if side == "buy" else "SHORT"},
-            ), timeout=15)
-            log.info(f"Open {side} {resolved} {amount} -> {order.get('id')}")
-            avg = await self._resolve_fill_price_safe(order, resolved)
-            self.clear_order_error(symbol, side)
-            return {
-                "order_id": str(order.get("id", "")),
-                "average": float(avg or 0),
-                "amount": amount,
-            }
-        except Exception as e:
-            err = str(e)
-            code = _extract_code(err)
-            self._set_order_error(symbol, side, code)
-            if "-2027" in err or "exceeded" in err.lower():
-                self._mark_blocked(f"{resolved}:{side}")
-                key = f"open_blocked:{resolved}:{side}"
-                s = _throttle_warn.emit(key)
-                if s is not None:
-                    log.warning(f"Open position blocked (max position) {resolved} {side}: {e}{s}")
-            elif "-2019" in err or "insufficient" in err.lower():
-                key = f"open_margin:{resolved}:{side}"
-                s = _throttle_warn.emit(key)
-                if s is not None:
-                    log.warning(f"Open position skipped (insufficient margin) {resolved} {side}{s}")
-            else:
-                key = f"open_err:{resolved}:{side}:{code}"
-                s = _throttle_error.emit(key)
-                if s is not None:
-                    log.error(f"Open position failed {resolved} {side}: {e}{s}")
-            return None
-
-    async def safe_open(self, symbol: str, side: str) -> dict | None:
-        """Open position once. No retries — tick loop is the retry mechanism."""
-        return await self.open_position(symbol, side)
-
-    async def add_position(self, symbol: str, side: str, amount: float) -> dict | None:
-        resolved = self.resolve_symbol(symbol)
-        if self.is_position_blocked(resolved, side):
-            self._set_order_error(symbol, side, "-2027")
-            return None
-        if amount <= 0:
-            return None
-        # Keep the add order above the exchange's minimum notional: refresh the
-        # price and re-floor the amount (caller may have sized it from a stale
-        # price outside the candidate set).
-        await self.ensure_price(symbol)
-        min_amount = self.calc_min_contracts(resolved)
-        if min_amount > 0 and amount < min_amount:
-            amount = min_amount
-        if amount <= 0:
-            return None
-        # Available balance guard (cached; logs the shortage once, not per leg).
-        if not await self._has_min_available(symbol, side):
-            return None
-        try:
-            open_side = "buy" if side == "long" else "sell"
-            order = await self._safe_call(self.exchange.create_order(
-                symbol=resolved, type="market", side=open_side, amount=amount,
-                params={"positionSide": side.upper()},
-            ), timeout=15)
-            log.info(f"Add {side} {resolved} {amount} -> {order.get('id')}")
-            avg = await self._resolve_fill_price_safe(order, resolved)
-            self.clear_order_error(symbol, side)
-            return {
-                "order_id": str(order.get("id", "")),
-                "average": float(avg or 0),
-                "amount": amount,
-            }
-        except Exception as e:
-            err = str(e)
-            code = _extract_code(err)
-            self._set_order_error(symbol, side, code)
-            if "-2027" in err or "exceeded" in err.lower():
-                self._mark_blocked(f"{resolved}:{side}")
-                key = f"add_blocked:{resolved}:{side}"
-                s = _throttle_warn.emit(key)
-                if s is not None:
-                    log.warning(f"Add position blocked (max position) {resolved} {side}: {e}{s}")
-            elif "-2019" in err or "insufficient" in err.lower():
-                # Margin is insufficient — was previously swallowed silently,
-                # which made margin-call failures invisible (and then
-                # mislabelled as "-2027"). Log it once per throttle window.
-                key = f"add_margin:{resolved}:{side}"
-                s = _throttle_warn.emit(key)
-                if s is not None:
-                    log.warning(f"Add position skipped (insufficient margin) {resolved} {side}{s}")
-            else:
-                key = f"add_err:{resolved}:{side}:{code}"
-                s = _throttle_error.emit(key)
-                if s is not None:
-                    log.error(f"Add position failed {resolved} {side}: {e}{s}")
-            return None
-
-    async def close_position(self, symbol: str, side: str, contracts: float | None = None) -> dict | None:
-        resolved = self.resolve_symbol(symbol)
-        if contracts is None:
-            positions = await self.get_positions([resolved])
-            target = None
-            for p in positions:
-                pos_side = p.get("side")
-                if (side == "long" and pos_side == "long") or (side == "short" and pos_side == "short"):
-                    target = p
-                    break
-            if not target:
-                return None
-            contracts = float(target.get("contracts", 0) or 0)
-
-        close_side = "sell" if side == "long" else "buy"
-        try:
-            order = await self._safe_call(self.exchange.create_order(
-                symbol=resolved, type="market", side=close_side, amount=contracts,
-                # Hedge mode: side+positionSide IS the reduce instruction on the
-                # exchange side — a SELL/LONG order cannot flip into an opposite
-                # open. (reduceOnly must NOT be sent in Hedge Mode: Binance
-                # rejects it with -1106. Review-confirmed.)
-                params={"positionSide": side.upper()},
-            ), timeout=15)
-            log.info(f"Close {side} {resolved} {contracts} -> {order.get('id')}")
-            avg = await self._resolve_fill_price_safe(order, resolved)
-            return {
-                "order_id": str(order.get("id", "")),
-                "average": float(avg or 0),
-                "closedPnL": order.get("closedPnL", 0),
-                "contracts": contracts,
-            }
-        except Exception as e:
-            log.warning(f"Close failed {resolved} {side}: {e}")
-            return None
-
-    async def close_all_positions(self, positions: list[dict]) -> list[dict]:
-        tasks = []
-        for p in positions:
-            symbol = p["symbol"]
-            pos_side = p.get("side")
-            contracts = float(p.get("contracts", 0) or 0)
-            if contracts <= 0:
-                continue
-            close_side = "sell" if pos_side == "long" else "buy"
-
-            async def _close(sym=symbol, cs=close_side, amt=contracts, ps=pos_side):
-                try:
-                    order = await self._safe_call(self.exchange.create_order(
-                        symbol=sym, type="market", side=cs, amount=amt,
-                        params={"positionSide": ps.upper()},
-                    ), timeout=15)
-                    log.info(f"All-close {ps} {sym} {amt} -> {order.get('id')}")
-                    return {
-                        "symbol": sym, "side": ps, "amount": amt,
-                        "order": {
-                            "order_id": str(order.get("id", "")),
-                            "average": float(order.get("average", 0) or 0),
-                            "closedPnL": order.get("closedPnL", 0),
-                        },
-                        "error": None,
-                    }
-                except Exception as e:
-                    log.error(f"All-close failed {sym} {ps}: {e}")
-                    return {"symbol": sym, "side": ps, "amount": amt, "order": None, "error": str(e)}
-
-            tasks.append(_close())
-
-        if not tasks:
-            return []
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        normalized = []
-        for r in results:
-            if isinstance(r, BaseException):
-                log.error(f"All-close task raised exception: {r}")
-                normalized.append({"symbol": "", "side": "", "amount": 0, "order": None, "error": str(r)})
-            else:
-                normalized.append(r)
-        return normalized

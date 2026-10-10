@@ -1,85 +1,50 @@
-# EvoClaw
+# EvoClaw v2.0
 
-高速微盈利加密货币自动交易系统，基于 Binance USDT-M 永续合约双向持仓模式（Hedge Mode）。
+双模式自动交易系统：**低杠杆网格**（合约）· **现货定投**。
 
-## 核心特性
+## 核心原则
 
-- **微盈利策略**：单币种盈利 0.2% 即平仓，追求高胜率、快周转
-- **双向持仓**：同一币种同时持有 LONG + SHORT，对冲单边风险
-- **动态选币**：按 24h 成交量和币单价自动筛选交易对，无需手动维护
-- **账户级全平**：整体盈利达标时一键全平，快速落袋
-- **亏损加仓**：亏损达标时自动追加仓位，降低平均成本
-- **多空对平**：多空持仓平均盈利达标时双向平仓
-- **停补保护**：对方仓位偏离过大时自动停止补仓，防止无限加仓
-- **持仓矩阵**：100 格可视化矩阵，实时展示每单盈亏状态
-
-## 技术栈
-
-| 层 | 技术 |
-|----|------|
-| 后端 | Python 3.12 + asyncio |
-| 交易所 | ccxt (binanceusdm) |
-| Web | aiohttp |
-| 数据库 | SQLite (WAL 模式) |
-| 前端 | 单 HTML + 原生 JS |
+1. **不设止损，也不被强平** —— 靠低杠杆（默认 3x）+ 账户敞口闸门（总名义 ≤ 权益 3 倍）实现。
+2. **模拟盘优先** —— 默认 `dry_run=true`，完整计算并记录每一笔「本应下的单」，但不发真实订单。
+3. **双模式隔离** —— 通过配置切换，同时只跑一种。
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
 pip install -r requirements.txt
-
-# 2. 启动服务（首次启动会用内置默认配置初始化 SQLite）
-python3 main.py
-
-# 3. 访问 Web UI，在「交易配置」页填写 API 密钥
-open http://localhost:8080
+python3 main.py          # 或 ./restart-v2.sh
 ```
 
-## 配置说明
+- 控制台：http://localhost:8091
+- 介绍页：http://localhost:8091/intro.html
+- 首次启动会在日志里打印随机管理密码（写接口需要）
 
-所有配置均持久化在 `data/evoclaw.db` 中。首次启动时，`main.py` 会用内置默认配置初始化数据库；之后所有配置都通过 Web UI 或 `/api/config` 修改。
+## 配置
 
-首次使用必须在 Web UI 的「交易配置」页填写：
-- `exchange_kwargs.apiKey` — Binance API Key
-- `exchange_kwargs.secret` — Binance API Secret
+- 数据库 `config` 表是唯一真源；网页「交易配置」可改（需密码）。
+- 关键参数：
+  - `mode`: `off` / `grid` / `dca`
+  - `dry_run`: `true`（安全）/ `false`（实盘）
+  - `grid.leverage` / `grid.max_exposure_ratio`: **两次爆仓换来的保险丝，请勿调高**
+  - `grid.symbols[]`: `symbol / lower / upper / grids / size_usdt`（lower/upper 填 0 = 首次按现价自动生成）
 
-主要配置项：
+## 目录
 
-| 字段 | 说明 |
-|------|------|
-| `side` | 交易方向：`both` / `long` / `short` |
-| `profit_tiers` | 分层止盈档位，每档包含 `threshold`（盈利率）和 `close_pct`（平仓比例） |
-| `replenish_stop_threshold` | 停补阈值：对方仓位偏离≥此比例时停止补仓 |
-| `max_position_count` | 最高持仓数量上限 |
-| `enable_all_close` | 启用账户级全平 |
-| `enable_margin_call` | 启用亏损加仓 |
-| `margin_call_threshold_long/short` | 多空加仓亏损阈值 |
-| `volume_threshold` | 24h 成交量筛选（USDT） |
-| `price_threshold` | 币单价筛选（USDT），只选价格≤此值的币 |
-
-## 一键重启
-
-```bash
-./restart.sh
+```
+main.py            入口：日志 / PID锁 / 启动 / Web
+config.py          默认配置
+database.py        SQLite（WAL + 跨线程锁 + 启动备份）
+exchange_client.py ccxt 封装（合约 + 现货，精度/最小额/错误码）
+engine.py          主循环，按 mode 调度策略
+strategies/grid.py 方案B 低杠杆网格
+strategies/dca.py  方案C 现货定投
+web_server.py      aiohttp API（写接口需鉴权）
+web/index.html     仪表盘
+web/intro.html     介绍页
 ```
 
-自动完成：停止进程 → 清理端口 → 备份日志 → 启动服务。
+## 历史
 
-## 系统要求
-
-- Python 3.12+
-- Binance 账户已开通 USDT-M 合约交易
-- 账户已启用 **双向持仓模式（Hedge Mode）**
-- 服务器建议部署在靠近交易所的区域以降低延迟
-
-## 风险提示
-
-1. 本系统为自动化交易程序，使用即表示您了解并愿意承担相关风险
-2. 双向持仓模式下，极端行情可能导致多空同时亏损
-3. 亏损加仓功能会放大仓位，请根据风险承受能力谨慎使用
-4. 建议先用小资金测试，确认策略符合预期后再加大投入
-
-## 设计文档
-
-详见 [DESIGN.md](./DESIGN.md)，包含完整的技术架构、模块设计、核心流程和踩坑记录。
+- **v1.0**（已归档，tag `v1.0-final` / 分支 `archive/v1`）：对冲 + 分档止盈 + 亏损加仓。
+  实测止盈 +361.6U，但两次强平 −516.6U，净 −155U。根因：单边止盈藏浮亏 + 17 倍账户杠杆。
+- **v2.0**（当前）：改用低杠杆、可控敞口的网格与定投。
