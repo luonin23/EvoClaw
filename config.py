@@ -44,7 +44,9 @@ DEFAULT_CONFIG = {
         #        掉出名单的持仓不会抛弃，而是转入「只卖不买」，卖光后退役。
         # false = 使用下面的 symbols 手写清单。
         "auto_select": True,
-        "max_symbols": 0,              # 同时跑几个标的：0 = 不限制（所有合格标的都跑，由敞口闸门刹车）
+        # 同时跑几个标的：0/留空 = 按资金自动推导（推荐）——单标的占用 ≈ 档数×单格金额，
+        # 并发数 = max_exposure_ratio×权益 / 单标的（夹 1~10）；>0 = 固定个数。
+        "max_symbols": 0,
         "refresh_hours": 6,            # 选币刷新周期
         "min_quote_volume": 100000000, # 24h 成交额下限（1 亿 U）
         "min_daily_range": 0.02,       # 24h 振幅下限 2%
