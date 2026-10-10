@@ -173,7 +173,8 @@ let STATE = {};
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const nf = (v,d=4)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—';};
-const nfP = (v,d=2)=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(d):'—';};
+const nfP = (v,d=4)=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(d):'—';};
+const nfR = (v,d=2)=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+(n*100).toFixed(d)+'%':'—';};
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 function authHeaders(){return PWD?{'X-Web-Password':PWD}:{};}
 async function api(p,opt){try{const r=await fetch(p,opt);return await r.json();}catch(e){return null;}}
@@ -238,8 +239,12 @@ async function loadGrid(){
       + (s.status==='draining' ? ' <span class="badge warn" style="font-size:10px">只卖不买</span>' : '')
       + '</span>'
       + '<span class="sub" style="font-size:11px;color:var(--t3);font-family:var(--mono)">'
-        + '现价 '+nf(px,4)+' · 底仓 '+nf(s.base_qty,4)+' (≈'+nf(s.position_value,2)+'U) · 已实现 '
-        + '<span class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl)+'</span>'
+        + '现价 '+nf(px,6)+' · 底仓 '+nf(s.base_qty,4)+' 张 @均价 '+nf(s.avg_price,6)
+        + ' (市值 '+nf(s.position_value,4)+'U)'
+        + ' · 浮盈 <span class="'+(s.unrealized_pnl>=0?'pos':'neg')+'">'+nfP(s.unrealized_pnl,4)
+        + ' ('+nfR(s.unrealized_pnl_rate)+')</span>'
+        + ' · 已实现 <span class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl,4)
+        + ' ('+nfR(s.realized_pnl_rate)+')</span>'
         + ' · 买'+s.buy_count+'/卖'+s.sell_count+'</span></div>'
       + '<div class="gbar">'+lvls+'<div class="px" style="left:'+pct.toFixed(2)+'%"></div></div>'
       + '<div class="gbar-lbl"><span>'+nf(lo,4)+'</span><span>区间 '+(up>lo?(s.grids+' 格'):'未设置')+'</span><span>'+nf(up,4)+'</span></div>'

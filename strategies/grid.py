@@ -490,8 +490,11 @@ class GridStrategy:
                 "size_usdt": st["size_usdt"], "price": price,
                 "base_qty": qty, "avg_price": round(avg, 6),
                 "position_value": round(qty * price, 4),
+                "cost_value": round(cost, 4),
                 "unrealized_pnl": round((price - avg) * qty, 4) if qty > 0 else 0,
-                "realized_pnl": round(float(st.get("realized_pnl", 0) or 0), 4),
+                "unrealized_pnl_rate": round((price - avg) / avg, 6) if avg > 0 else 0,
+                "realized_pnl": round(float(st.get("realized_pnl", 0) or 0), 6),
+                "realized_pnl_rate": round(float(st.get("realized_pnl", 0) or 0) / cost, 6) if cost > 0 else 0,
                 "status": st.get("status", "active"),
                 "buy_count": st.get("buy_count", 0), "sell_count": st.get("sell_count", 0),
                 "levels": [

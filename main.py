@@ -101,11 +101,48 @@ def migrate_api_keys(db: Database, log):
         log.warning(f"API key 迁移失败（可手动填写）: {e}")
 
 
+def verify_and_repair_db(log):
+    """启动时检查数据库完整性；损坏则从最近的完好备份自动恢复。
+
+    SQLite 索引损坏不会报错、不会崩溃，只会让主键约束悄悄失效
+    （实测出现过同一 symbol 两行）。必须主动检测。
+    """
+    import shutil, glob as _glob
+
+    def _ok(path):
+        try:
+            c = sqlite3.connect(path)
+            r = c.execute("PRAGMA integrity_check").fetchone()[0]
+            c.close()
+            return r == "ok"
+        except Exception:
+            return False
+
+    if _ok(DB_PATH):
+        return
+    log.error("数据库完整性检查未通过，尝试从备份恢复…")
+    for bak in sorted(_glob.glob(os.path.join("data", "backup-v2", "evoclaw-v2-*.db")), reverse=True):
+        if _ok(bak):
+            try:
+                shutil.copyfile(DB_PATH, DB_PATH + ".corrupt")
+                for suf in ("", "-wal", "-shm"):
+                    p = DB_PATH + suf
+                    if os.path.exists(p):
+                        os.remove(p)
+                shutil.copyfile(bak, DB_PATH)
+                log.warning(f"已从备份恢复: {bak}（损坏库另存为 .corrupt）")
+                return
+            except Exception as e:
+                log.error(f"从 {bak} 恢复失败: {e}")
+    log.error("没有可用备份，将以当前库继续（风险自负）")
+
+
 async def main():
     gc.collect()
     setup_logging()
     log = logging.getLogger("main")
 
+    verify_and_repair_db(log)
     db = Database(DB_PATH)
     if db.seed_config(DEFAULT_CONFIG):
         log.info("已用默认配置初始化数据库")
