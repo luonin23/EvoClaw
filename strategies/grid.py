@@ -113,7 +113,7 @@ class GridStrategy:
         active = {s["symbol"] for s in specs if s.get("symbol")}
 
         # 处理「掉出名单」：先标记，再继续维护它们的卖单
-        self._reconcile_status(active)
+        await self._reconcile_status(active)
 
         # 需要维护的标的 = 选中的 + 正在 draining 的（draining 只卖不买）
         manage: list[dict] = list(specs)
@@ -181,6 +181,20 @@ class GridStrategy:
             or int(st["grids"]) != grids
             or abs(float(st["size_usdt"]) - size_usdt) > 1e-9
         )
+        # 网格「死态」自愈：初始化时底仓买入失败会留下「无挂单、无持仓」的空壳，
+        # 若不重试就永远闲置（资金到位后也不会复活）。检测到空壳则重新初始化，
+        # 带 60 秒冷却防止资金不足时每 tick 空转重试。
+        if not need_init and st:
+            lv_count = len(self.db.get_grid_levels(sym))
+            if (lv_count == 0 and float(st.get("base_qty", 0) or 0) <= 1e-12
+                    and (st.get("status") or "active") == "active"):
+                last_fail = float(self.db.get_runtime_stat(f"grid_init_fail:{sym}", 0) or 0)
+                if time.time() - last_fail >= 60:
+                    log.info(f"GRID {sym}: 检测到空壳网格（无挂单无持仓），重新初始化")
+                    need_init = True
+                else:
+                    return
+
         if need_init:
             await self._init_grid(sym, lower, upper, grids, size_usdt, price)
             st = self.db.get_grid_state(sym)
