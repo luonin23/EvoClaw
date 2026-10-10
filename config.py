@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
         "auto_range_pct": 0,       # 0 = 随标的波动率自适应（推荐）；>0 = 固定百分比
 
         # ---- 动态跟随（价格突破区间后网格自动重新居中）----
+        "min_tp_ratio": 0.002,        # 最小止盈率：卖价 ≥ 成本×(1+此值)，保证真的赚钱
         "auto_recenter": True,
         "recenter_margin": 0.01,      # 突破区间 1% 才触发
         "recenter_cooldown_min": 30,  # 同一标的两次重排的最小间隔（分钟）

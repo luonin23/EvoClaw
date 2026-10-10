@@ -94,3 +94,40 @@ async def select_grid_symbols(client, cfg: dict, size_usdt: float,
     else:
         log.warning(f"选币：无合格标的（量≥{min_vol/1e8:.0f}亿 振幅{min_rng*100:.0f}~{max_rng*100:.0f}% 单格{size_usdt}U）")
     return picked
+
+
+async def qualify_symbol(client, cfg: dict, symbol: str) -> tuple[bool, str]:
+    """下单前复核：该标的**当前**是否仍满足入选条件。
+
+    选币每 6 小时才刷新一次；补仓（新开敞口）前用单标的 ticker 再核一次，
+    避免在流动性枯竭 / 状态异常时继续加仓。开销很小（一次 ticker 调用）。
+    拿不到数据时返回 True（不误伤），由后续下单逻辑兜底。
+    """
+    cfg = cfg or {}
+    try:
+        ccxt_sym = client.to_ccxt(symbol, "futures")
+        t = await client._safe_call(client.futures.fetch_ticker(ccxt_sym), timeout=10)
+    except Exception:
+        return True, ""
+    m = client.market_info(symbol, "futures")
+    info = m.get("info", {}) or {}
+    if info.get("contractType") != "PERPETUAL":
+        return False, "非永续合约"
+    if info.get("status") != "TRADING":
+        return False, f"状态异常({info.get('status')})"
+    qvol = float(t.get("quoteVolume") or 0)
+    min_vol = float(cfg.get("min_quote_volume", 100_000_000) or 0)
+    if min_vol > 0 and qvol < min_vol:
+        return False, f"成交额 {qvol/1e8:.2f}亿 < {min_vol/1e8:.0f}亿"
+    close = float(t.get("close") or t.get("last") or 0)
+    high = float(t.get("high") or 0)
+    low = float(t.get("low") or 0)
+    if close > 0 and high > 0 and low > 0:
+        rng = (high - low) / close
+        lo = float(cfg.get("min_daily_range", 0.02) or 0)
+        hi = float(cfg.get("max_daily_range", 0.20) or 1)
+        if rng < lo:
+            return False, f"振幅 {rng*100:.1f}% 低于 {lo*100:.0f}%"
+        if rng > hi:
+            return False, f"振幅 {rng*100:.1f}% 高于 {hi*100:.0f}%"
+    return True, ""

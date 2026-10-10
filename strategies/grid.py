@@ -12,7 +12,7 @@ import logging
 import time
 
 from exchange_client import _throttle
-from selector import select_grid_symbols
+from selector import select_grid_symbols, qualify_symbol
 
 log = logging.getLogger(__name__)
 
@@ -381,7 +381,9 @@ class GridStrategy:
         # 先算好卖单（离现价最近的排最后，便于补量）
         # 不设止损：若已持仓，卖价永不低于持仓均价（决不亏损卖出）
         ex_qty0, ex_entry0 = (await self._current_entry(sym)) if not self.client.dry_run else (0.0, 0.0)
-        min_sell = ex_entry0 if (ex_qty0 > 0 and ex_entry0 > 0) else 0.0
+        # 卖价下限 = 持仓均价 × (1 + 最小止盈率)，确保每笔卖出都真的盈利
+        min_tp = float(cfg.get("min_tp_ratio", 0.002) or 0)
+        min_sell = (ex_entry0 * (1 + min_tp)) if (ex_qty0 > 0 and ex_entry0 > 0) else 0.0
 
         sells = []   # [[level_idx, price, amount], ...]
         for i, p in enumerate(pts):
@@ -649,6 +651,8 @@ class GridStrategy:
             if lv["side"] == "buy":
                 if draining:
                     continue          # 收缩中：不挂买单
+                if not await self._still_qualified(sym):
+                    continue          # 补仓前复核入选条件（流动性/波动率/状态）
                 if not await self._exposure_ok(sym, equity):
                     continue
                 if not await self._has_free_margin(sym, lv):
@@ -660,6 +664,28 @@ class GridStrategy:
                 self.db.conn.execute("UPDATE grid_levels SET order_id=? WHERE id=?",
                                      (res["order_id"], lv["id"]))
                 self.db.conn.commit()
+
+    async def _still_qualified(self, sym: str) -> bool:
+        """补仓/再买入前复核该标的是否仍满足入选条件（30 分钟缓存）。
+
+        选币 6 小时才刷新一次；若在这期间标的流动性枯竭或状态异常，
+        不应继续买入（避免在已失去交易价值的币上越买越多）。
+        """
+        cfg = self.cfg
+        if not cfg.get("auto_select"):
+            return True                      # 手动模式：用户自己负责
+        key = f"grid_qual:{sym}"
+        last = float(self.db.get_runtime_stat(key, 0) or 0)
+        if time.time() - last < 1800:        # 30 分钟缓存
+            return float(self.db.get_runtime_stat(f"grid_qual_ok:{sym}", 1) or 1) > 0
+        ok, why = await qualify_symbol(self.client, cfg, sym)
+        self.db.set_runtime_stat(key, time.time())
+        self.db.set_runtime_stat(f"grid_qual_ok:{sym}", 1 if ok else 0)
+        if not ok:
+            s = _throttle.emit(f"grid_unqual:{sym}")
+            if s is not None:
+                log.warning(f"GRID {sym}: 已不再满足入选条件（{why}）→ 暂停买入{s}")
+        return ok
 
     async def _has_free_margin(self, sym: str, lv: dict) -> bool:
         """挂买单前检查可用保证金，不够就跳过（否则每次都会 -2019 刷屏）。"""
