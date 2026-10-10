@@ -41,31 +41,68 @@ class GridStrategy:
         return self.config.get("grid", {}) or {}
 
     # ===== 选币 =====
-    async def _refresh_selection(self):
+    def _derive_grids(self, pct: float) -> int:
+        """按波动率推导档位数：档距 = 振幅 × step_ratio，换算成档数。"""
+        ratio = float(self.cfg.get("step_ratio", 0.3) or 0.3)
+        step = max(1e-6, abs(pct) * ratio)
+        span = (1 + pct) / (1 - pct)
+        g = int(round(math.log(span) / math.log(1 + step))) + 1
+        return max(2, min(int(self.cfg.get("max_grids", 15) or 15), g))
+
+    def _symbol_range_pct(self, pick: dict) -> float:
+        fixed = float(self.cfg.get("auto_range_pct", 0) or 0)
+        if fixed > 0:
+            return fixed
+        return max(0.04, min(0.15, float((pick or {}).get("range") or 0.06)))
+
+    def _auto_symbol_cap(self, equity: float, picks: list) -> int:
+        """max_symbols=0（自动）时，按资金推导能同时跑几个标的。
+
+        单标的占用名义 ≈ 档数 × 单格金额（最坏情况：价格跌到区间底、买档全成交）。
+        敞口上限 = max_exposure_ratio × 权益，可容纳标的数 = 上限 / 单标的占用。
+        账户越大能跑的越多，不需要人手填数字。
+        """
+        size = float(self.cfg.get("size_usdt", 0) or 0)
+        ratio = float(self.cfg.get("max_exposure_ratio", 3.0) or 3.0)
+        if size <= 0 or ratio <= 0 or equity <= 0 or not picks:
+            return 1
+        per = max(self._derive_grids(self._symbol_range_pct(p)) for p in picks) * size
+        if per <= 0:
+            return 1
+        return max(1, min(10, int((equity * ratio) / per)))
+
+    async def _refresh_selection(self, equity: float = 0.0):
         """按配置周期重新选币（默认 6 小时一次）。
 
         引擎每 tick 会新建策略实例，因此选币结果与时间戳必须落库，
         否则会在每个 tick 重扫全市场（拉取全部 ticker，代价很高）。
+        max_symbols=0 表示自动：按资金推导上限，而非无限（否则会为
+        买不起的标的反复建空壳网格）。
         """
         cfg = self.cfg
         interval = float(cfg.get("refresh_hours", 6) or 6) * 3600
         now = time.time()
+        n = int(cfg.get("max_symbols", 0) or 0)
         ts = float(self.db.get_runtime_stat("grid_selection_ts", 0) or 0)
         if ts and (now - ts) < interval:
-            # 沿用已落库的选币结果，但按当前 max_symbols 截断
-            # （改了 max_symbols 不必等 6 小时才生效）
-            n = int(cfg.get("max_symbols", 0) or 0)
-            saved = (self.config.get("grid_selection") or [])
-            if n > 0:
-                saved = saved[:n]
+            # 沿用已落库的选币结果，但按当前上限截断
+            # （改了 max_symbols / 资金变化不必等 6 小时才生效）
+            saved = list(self.config.get("grid_selection") or [])
+            limit = n if n > 0 else self._auto_symbol_cap(equity, saved)
+            saved = saved[:limit] if limit > 0 else []
             if saved:
                 self._selection = saved
                 self._sel_ts = ts
                 return
         size = float(cfg.get("size_usdt", 0) or 0)
-        n = int(cfg.get("max_symbols", 0) or 0)
         picks = await select_grid_symbols(
             self.client, cfg, size, n if n > 0 else 999)
+        if picks and n <= 0:
+            cap = self._auto_symbol_cap(equity, picks)
+            if len(picks) > cap:
+                log.info(f"选币：{len(picks)} 个合格，按资金自动取前 {cap} 个"
+                         f"（敞口上限 {self.cfg.get('max_exposure_ratio')}× 权益 {equity:.1f}U）")
+                picks = picks[:cap]
         if picks:
             self._selection = picks
             self._sel_ts = now
@@ -107,9 +144,10 @@ class GridStrategy:
     # ===== 主循环 =====
     async def step(self):
         cfg = self.cfg
+        equity = await self._equity()          # 选币自动上限需要权益
         if cfg.get("auto_select"):
             try:
-                await self._refresh_selection()
+                await self._refresh_selection(equity)
             except Exception as e:
                 log.warning(f"GRID 选币失败，沿用上次结果: {e}")
 
@@ -137,7 +175,6 @@ class GridStrategy:
             log.warning(f"GRID 行情刷新失败，跳过本轮: {e}")
             return
 
-        equity = await self._equity()
         for spec in manage:
             sym = spec.get("symbol")
             if not sym:
@@ -185,12 +222,8 @@ class GridStrategy:
         if grids < 2:
             pct0 = float(spec.get("auto_range_pct") or self.cfg.get("auto_range_pct", 0) or 0)
             if pct0 <= 0:
-                pct0 = max(0.04, min(0.15, float(spec.get("range") or 0.06)))
-            ratio0 = float(self.cfg.get("step_ratio", 0.3) or 0.3)
-            step_target = pct0 * ratio0
-            span = (1 + pct0) / (1 - pct0)
-            grids = int(round(math.log(span) / math.log(1 + step_target))) + 1
-            grids = max(2, min(int(self.cfg.get("max_grids", 15) or 15), grids))
+                pct0 = self._symbol_range_pct(spec)
+            grids = self._derive_grids(pct0)
         if grids < 2:
             return
         need_init = (
@@ -386,6 +419,12 @@ class GridStrategy:
         pts = grid_points(lower, upper, grids)
         if not pts:
             return
+        # 全新建仓前先过敞口闸门：资金不够就直接不建（连 grid_state 记录都不留），
+        # 否则会留下「无挂单无持仓」的空壳，被自愈逻辑每 60 秒重试一次、刷日志。
+        # 已有持仓的重建不受此限（下面还有按 delta 的增量闸门）。
+        if not self.client.dry_run and self.db.get_grid_state(sym) is None:
+            if not await self._exposure_ok(sym, await self._equity()):
+                return
         # 实盘：先把该标的设为逐仓并设好杠杆，再挂单
         # （逐仓 = 单仓爆仓只损失该仓保证金，不牵连整个账户）
         if not self.client.dry_run:
@@ -414,7 +453,7 @@ class GridStrategy:
         # 不设止损：若已持仓，卖价永不低于持仓均价（决不亏损卖出）
         ex_qty0, ex_entry0 = (await self._current_entry(sym)) if not self.client.dry_run else (0.0, 0.0)
         # 卖价下限 = 持仓均价 × (1 + 最小止盈率)，确保每笔卖出都真的盈利
-        min_tp = float(cfg.get("min_tp_ratio", 0.002) or 0)
+        min_tp = float(self.cfg.get("min_tp_ratio", 0.002) or 0)
         min_sell = (ex_entry0 * (1 + min_tp)) if (ex_qty0 > 0 and ex_entry0 > 0) else 0.0
 
         sells = []   # [[level_idx, price, amount], ...]
@@ -860,12 +899,14 @@ class GridStrategy:
                 ],
             })
         cfg = self.cfg
-        n = int(cfg.get("max_symbols", 3) or 3)
-        sel = (self._selection or (self.config.get("grid_selection") or []))[:n]
+        n = int(cfg.get("max_symbols", 0) or 0)          # 0 = 按资金自动
+        sel_all = list(self._selection or (self.config.get("grid_selection") or []))
+        sel = sel_all[:n] if n > 0 else sel_all          # 自动时不截断展示
         return {
             "symbols": out,
             "auto_select": bool(cfg.get("auto_select")),
             "selection": [{"symbol": s["symbol"], "range": s.get("range"),
                            "quote_volume": s.get("quote_volume")} for s in sel],
-            "max_symbols": int(cfg.get("max_symbols", 3) or 3),
+            "max_symbols": n,                             # 0 表示自动
+            "max_symbols_effective": len(sel),
         }
