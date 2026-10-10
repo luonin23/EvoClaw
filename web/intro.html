@@ -98,6 +98,28 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--surface);border:1
         <p>杠杆默认 3 倍 + 账户敞口闸门（总名义 ≤ 权益的 3 倍）。跌到区间底部只是持有底仓，不会强平。</p></div>
       <div class="card warnc"><div class="ico">!</div><h3>代价</h3>
         <p>单边暴跌时会被套（但等得起）；单边暴涨时早早卖光、少赚。网格赚的是震荡的钱。</p></div>
+      <div class="card"><div class="ico">↻</div><h3>动态跟随</h3>
+        <p>价格突破区间后，网格会<strong>自动重新居中</strong>（默认 30 分钟冷却），不会「死」在旧区间里。
+        但有一条硬约束：<strong>亏损时不重排</strong>——避免把卖单挂到成本价以下，变相止损。</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="label">可视化</div>
+    <h2>一眼看清：成本、现价、买档、卖档</h2>
+    <p>每个网格标的都有一条价格轴，把关键位置画在同一个尺度上：</p>
+    <ul>
+      <li><strong>成本线</strong>（蓝）+ 标注 —— 你的持仓均价</li>
+      <li><strong>现价线</strong>（琥珀）+ 标注 —— 实时价格</li>
+      <li><strong>买档</strong>（绿）/ <strong>卖档</strong>（红）—— 标注「方向 + 张数 + 价格」</li>
+      <li><strong>盈亏实心填充</strong> —— 成本到现价之间：<span class="accent">盈利=绿色</span>、<span class="err">亏损=红色</span></li>
+    </ul>
+    <p>显示范围自动取「区间 ∪ 成本 ∪ 现价」，三个标记永远都在视野内；贴近边界时标注会自动翻边，不会被裁切。</p>
+    <div class="note">
+      <p><strong>每一张持仓都必须有卖单覆盖。</strong>加仓后若卖档不够，系统会把缺口累加到最高卖档；
+      每轮还会自愈检查一次，历史遗留的「有货没卖单」也会被自动补上——绝不让货沉淀在那里卖不掉。</p>
     </div>
   </div>
 </section>
@@ -175,6 +197,19 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--surface);border:1
     <p>配置文件里最关键的两个数字：<code>leverage</code>（杠杆）与 <code>max_exposure_ratio</code>（敞口上限）。<span class="warn">它们是两次爆仓换来的保险丝，请勿调高。</span></p>
   </div>
 </section>
+
+<div class="wrap" style="text-align:center;padding-bottom:8px">
+  <span class="badge" style="display:inline-block;margin:3px;padding:4px 12px;border-radius:20px;
+    border:1px solid var(--bd);color:var(--t2);font-family:var(--mono);font-size:11px">不设止损</span>
+  <span class="badge" style="display:inline-block;margin:3px;padding:4px 12px;border-radius:20px;
+    border:1px solid rgba(0,208,132,.3);color:var(--accent);font-family:var(--mono);font-size:11px">逐仓 3x</span>
+  <span class="badge" style="display:inline-block;margin:3px;padding:4px 12px;border-radius:20px;
+    border:1px solid rgba(0,208,132,.3);color:var(--accent);font-family:var(--mono);font-size:11px">动态跟随</span>
+  <span class="badge" style="display:inline-block;margin:3px;padding:4px 12px;border-radius:20px;
+    border:1px solid var(--bd2);color:var(--t2);font-family:var(--mono);font-size:11px">价格轴可视化</span>
+  <span class="badge" style="display:inline-block;margin:3px;padding:4px 12px;border-radius:20px;
+    border:1px solid rgba(245,158,11,.35);color:var(--warn);font-family:var(--mono);font-size:11px">模拟盘优先</span>
+</div>
 
 <div class="foot">
   EvoClaw v2.0 — 低杠杆网格 · 现货定投 &nbsp;·&nbsp; <a href="/">进入终端</a>
