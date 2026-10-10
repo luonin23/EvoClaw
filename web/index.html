@@ -69,6 +69,29 @@ tr:hover td{background:var(--hover)}
 .gbar .lvl.pend{background:rgba(255,255,255,.18)}
 .gbar .px{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--warn);box-shadow:0 0 8px rgba(245,158,11,.7)}
 .gbar-lbl{display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono)}
+/* 网格卡片：盈利=绿 / 亏损=红 / 空仓=灰 */
+.gcard{background:var(--surface);border:1px solid var(--bd);border-left:3px solid var(--t3);
+  border-radius:10px;padding:12px 14px;margin-bottom:12px;transition:.2s}
+.gcard.profit{border-left-color:var(--accent);background:linear-gradient(90deg,rgba(0,208,132,.07),rgba(0,208,132,.01) 45%,transparent)}
+.gcard.lose{border-left-color:var(--error);background:linear-gradient(90deg,rgba(255,71,87,.08),rgba(255,71,87,.01) 45%,transparent)}
+.gcard.empty{opacity:.5;border-left-style:dashed}
+.gc-head{display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap}
+.gc-sym{font-family:var(--mono);font-weight:700;font-size:14px;color:var(--t1)}
+.gc-state{font-size:10px;padding:2px 8px;border-radius:20px;border:1px solid var(--bd2);color:var(--t3)}
+.gc-state.hold{border-color:rgba(0,208,132,.4);color:var(--accent);background:rgba(0,208,132,.08)}
+.gc-state.drain{border-color:rgba(245,158,11,.4);color:var(--warn);background:rgba(245,158,11,.08)}
+.gc-pnl{margin-left:auto;font-family:var(--mono);font-weight:700;font-size:17px;letter-spacing:-.02em}
+.gc-meta{font-family:var(--mono);font-size:11px;color:var(--t3);line-height:1.8;margin-bottom:4px}
+.gc-row{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;margin:6px 0}
+.gc-row b{font-weight:600}
+.gc-ord{display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;margin-top:7px}
+.gc-ord span{padding:2px 9px;border-radius:5px;border:1px solid var(--bd);color:var(--t3)}
+.gc-ord .b{border-color:rgba(0,208,132,.3);color:var(--accent);background:rgba(0,208,132,.05)}
+.gc-ord .sl{border-color:rgba(255,71,87,.3);color:var(--error);background:rgba(255,71,87,.05)}
+.gc-liq{margin-top:9px;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.03);
+  border:1px solid var(--bd);font-family:var(--mono);font-size:11px;color:var(--t3)}
+.gc-liq.danger{background:rgba(255,71,87,.12);border-color:rgba(255,71,87,.4);color:var(--error);font-weight:600}
+.gc-liq.warn{border-color:rgba(245,158,11,.35);color:var(--warn)}
 
 /* config */
 .lock{display:flex;flex-direction:column;gap:10px;align-items:center;padding:22px 0;text-align:center}
@@ -227,31 +250,54 @@ async function loadGrid(){
   }
   for(const s of d.symbols){
     const lo=s.lower, up=s.upper, px=s.price;
+    const hasPos = (s.base_qty||0) > 0;
+    const pnl = s.unrealized_pnl||0;
+    // 有仓：盈利绿 / 亏损红；无仓：灰（空仓待机）
+    const cardCls = !hasPos ? 'empty' : (pnl >= 0 ? 'profit' : 'lose');
+    const stateTxt = s.status==='draining' ? '只卖不买' : (hasPos ? '持仓中' : '空仓待机');
+    const stateCls = s.status==='draining' ? 'drain' : (hasPos ? 'hold' : '');
     const pct = up>lo ? Math.max(0,Math.min(100,(px-lo)/(up-lo)*100)) : 50;
     const lvls = (s.levels||[]).map(l=>{
       const lp = up>lo ? Math.max(0,Math.min(100,(l.price-lo)/(up-lo)*100)) : 50;
-      const cls = l.side==='sell' ? 'hold' : 'pend';
-      return '<div class="lvl '+cls+'" style="left:'+lp.toFixed(2)+'%"></div>';
+      return '<div class="lvl '+(l.side==='sell'?'hold':'pend')+'" style="left:'+lp.toFixed(2)+'%"></div>';
     }).join('');
-    html += '<div style="margin-bottom:18px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">'
-      + '<span class="num" style="font-family:var(--mono);font-size:13px">'+esc(s.symbol)
-      + (s.status==='draining' ? ' <span class="badge warn" style="font-size:10px">只卖不买</span>' : '')
-      + '</span>'
-      + '<span class="sub" style="font-size:11px;color:var(--t3);font-family:var(--mono)">'
-        + '现价 '+nf(px,6)+' · 底仓 '+nf(s.base_qty,4)+' 张 @均价 '+nf(s.avg_price,6)
-        + ' (市值 '+nf(s.position_value,4)+'U)'
-        + ' · 浮盈 <span class="'+(s.unrealized_pnl>=0?'pos':'neg')+'">'+nfP(s.unrealized_pnl,4)
-        + ' ('+nfR(s.unrealized_pnl_rate)+')</span>'
-        + ' · 已实现 <span class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl,4)
-        + ' ('+nfR(s.realized_pnl_rate)+')</span>'
-        + ' · 买'+s.buy_count+'/卖'+s.sell_count
-        + (s.liq_price ? ('  ·  <span style="color:' + (Math.abs(s.liq_distance||0) < 0.25 ? 'var(--error)' : 'var(--text-tertiary)') + '">'
-            + (s.margin_mode==='isolated'?'逐仓 ':'全仓! ')+ '强平 '+nf(s.liq_price,6)
-            + ' ('+((s.liq_distance||0)*100).toFixed(1)+'%)</span>') : '')
-        + '</span></div>'
+    const buys  = (s.levels||[]).filter(l=>l.side==='buy');
+    const sells = (s.levels||[]).filter(l=>l.side==='sell');
+    const ordHtml = (buys.length||sells.length)
+      ? '<div class="gc-ord">'
+        + buys.map(l=>'<span class="b">买 '+nf(l.amount,0)+' @ '+nf(l.price,6)+'</span>').join('')
+        + sells.map(l=>'<span class="sl">卖 '+nf(l.amount,0)+' @ '+nf(l.price,6)+'</span>').join('')
+        + '</div>' : '';
+    const liqDist = Math.abs(s.liq_distance||0);
+    const liqCls = s.margin_mode!=='isolated' ? 'danger' : (liqDist < 0.25 ? 'danger' : (liqDist < 0.4 ? 'warn' : ''));
+    const liqHtml = s.liq_price
+      ? '<div class="gc-liq '+liqCls+'">'
+        + (s.margin_mode==='isolated'?'逐仓':'<b>全仓(风险!)</b>') + ' · ' + (s.leverage||'?') + 'x'
+        + ' · 强平价 ' + nf(s.liq_price,6)
+        + ' · 距强平 ' + ((s.liq_distance||0)*100).toFixed(1) + '%'
+        + (liqDist < 0.25 ? '  ⚠ 接近强平' : '') + '</div>' : '';
+
+    html += '<div class="gcard '+cardCls+'">'
+      + '<div class="gc-head">'
+        + '<span class="gc-sym">'+esc(s.symbol)+'</span>'
+        + '<span class="gc-state '+stateCls+'">'+stateTxt+'</span>'
+        + '<span class="gc-pnl '+(hasPos ? (pnl>=0?'pos':'neg') : '')+'">'
+        + (hasPos ? nfR(s.unrealized_pnl_rate) : '—') + '</span>'
+      + '</div>'
+      + '<div class="gc-meta">现价 '+nf(px,6)+(hasPos?(' · 均价 '+nf(s.avg_price,6)):'')+'</div>'
+      + '<div class="gc-row">'
+        + '<span>底仓 <b>'+nf(s.base_qty,4)+'</b> 张</span>'
+        + '<span>市值 <b>'+nf(s.position_value,4)+'</b> U</span>'
+        + '<span>浮盈 <b class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</b> U '
+        + '<span class="'+(pnl>=0?'pos':'neg')+'">('+nfR(s.unrealized_pnl_rate)+')</span></span>'
+        + '<span>已实现 <b class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl,4)+'</b> U '
+        + '<span class="'+(s.realized_pnl>=0?'pos':'neg')+'">('+nfR(s.realized_pnl_rate)+')</span></span>'
+        + '<span>成交 买'+s.buy_count+'/卖'+s.sell_count+'</span>'
+      + '</div>'
       + '<div class="gbar">'+lvls+'<div class="px" style="left:'+pct.toFixed(2)+'%"></div></div>'
       + '<div class="gbar-lbl"><span>'+nf(lo,4)+'</span><span>区间 '+(up>lo?(s.grids+' 格'):'未设置')+'</span><span>'+nf(up,4)+'</span></div>'
+      + ordHtml
+      + liqHtml
       + '</div>';
   }
   $('gridBody').innerHTML = html;

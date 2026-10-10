@@ -421,13 +421,33 @@ class GridStrategy:
 
     # ===== 实盘挂单 =====
     async def _place_live(self, sym: str, equity: float, draining: bool = False):
+        # 先取交易所实际挂单：DB 若丢了单号（如从备份恢复），
+        # 直接按「同向+同价」认领，避免重复挂单（重复挂会因超出持仓被拒 -2022）。
+        try:
+            live = {}
+            for o in await self.client.fetch_open_orders(sym, "futures"):
+                live[(str(o.get("side")), round(float(o.get("price") or 0), 8))] = o
+        except Exception:
+            live = {}
+
         for lv in self.db.get_grid_levels(sym):
             if lv["status"] != "pending" or lv["order_id"]:
+                continue
+            key = (lv["side"], round(float(lv["price"]), 8))
+            if key in live:
+                o = live[key]
+                self.db.conn.execute(
+                    "UPDATE grid_levels SET order_id=?, amount=? WHERE id=?",
+                    (str(o.get("id")), float(o.get("amount") or lv["amount"]), lv["id"]))
+                self.db.conn.commit()
+                log.info(f"GRID {sym}: 认领交易所已有挂单 {lv['side']} {o.get('amount')}@{o.get('price')}")
                 continue
             if lv["side"] == "buy":
                 if draining:
                     continue          # 收缩中：不挂买单
                 if not await self._exposure_ok(sym, equity):
+                    continue
+                if not await self._has_free_margin(sym, lv):
                     continue
             res = await self.client.create_limit_order(
                 sym, lv["side"], float(lv["amount"]), float(lv["price"]), "futures",
@@ -436,6 +456,22 @@ class GridStrategy:
                 self.db.conn.execute("UPDATE grid_levels SET order_id=? WHERE id=?",
                                      (res["order_id"], lv["id"]))
                 self.db.conn.commit()
+
+    async def _has_free_margin(self, sym: str, lv: dict) -> bool:
+        """挂买单前检查可用保证金，不够就跳过（否则每次都会 -2019 刷屏）。"""
+        try:
+            b = await self.client.get_futures_balance()
+            free = float(b.get("available", 0) or 0)
+        except Exception:
+            return True
+        lev = max(1, int(self.cfg.get("leverage", 3) or 3))
+        need = float(lv["amount"]) * float(lv["price"]) / lev
+        if free < need:
+            s = _throttle.emit(f"grid_margin:{sym}")
+            if s is not None:
+                log.warning(f"GRID {sym}: 可用保证金 {free:.2f}U < 买单需 {need:.2f}U，暂不挂买单{s}")
+            return False
+        return True
 
     async def _exposure_ok(self, sym: str, equity: float) -> bool:
         ratio = float(self.cfg.get("max_exposure_ratio", 3.0) or 3.0)
