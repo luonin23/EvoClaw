@@ -120,6 +120,27 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--surface);border:1
 
 <section>
   <div class="wrap">
+    <div class="label">选币</div>
+    <h2>系统自己挑标的，也自己收尾</h2>
+    <p>网格每 6 小时自动扫描全市场，按三个硬条件筛选：</p>
+    <table>
+      <tr><th>条件</th><th>门槛</th><th>为什么</th></tr>
+      <tr><td>流动性</td><td>24h 成交额 ≥ 1 亿 U</td><td>挂单能成交、滑点小</td></tr>
+      <tr><td>波动率</td><td>日振幅 2% ~ 20%</td><td>太低没差价可吃，太高容易穿出区间</td></tr>
+      <tr><td>可负担</td><td>单格金额买得起「一手」</td><td>小资金才布得起多档网格</td></tr>
+    </table>
+    <p>排序按「振幅 × 流动性权重」，取前 N 个（默认 3 个）。区间宽度随标的自身波动率自适应 —— 高波动币给宽区间，避免频繁穿出。</p>
+    <div class="note">
+      <p><strong>掉出名单的币怎么处理？</strong>（这正是 v1 翻车的那个坑）<br>
+      掉出选币清单的标的<strong>不会被抛弃</strong>，而是自动转入「只卖不买」：停止挂新买单，
+      继续把已有存货按网格卖出，<strong>卖光后自动退役</strong>。若它重回名单，则自动恢复双向网格。
+      仪表盘上会标注「只卖不买」状态。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
     <div class="label">安全设计</div>
     <h2>这次，把「不归零」放在第一位</h2>
     <div class="cards">
@@ -129,6 +150,8 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--surface);border:1
         <p>总名义价值 / 权益 一旦触及上限，立即停止买入。这是防爆仓的最后一道闸。</p></div>
       <div class="card"><div class="ico">3</div><h3>双模式隔离</h3>
         <p>网格（合约）与定投（现货）通过配置切换，同时只跑一种，资金与逻辑不打架。</p></div>
+      <div class="card"><div class="ico">7</div><h3>选币自动收尾</h3>
+        <p>每 6 小时自动选币；掉出名单的标的转入「只卖不买」，卖光后退役——不会产生无人管理的孤儿仓位。</p></div>
       <div class="card"><div class="ico">4</div><h3>数据安全</h3>
         <p>每次启动自动备份（保留 14 份）；数据库跨线程加锁；独立数据库，与 v1 完全隔离。</p></div>
       <div class="card"><div class="ico">5</div><h3>只读安全</h3>

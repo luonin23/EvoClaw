@@ -84,6 +84,7 @@ class Database:
                 size_usdt REAL NOT NULL DEFAULT 0,
                 base_qty REAL NOT NULL DEFAULT 0,      -- 当前持仓数量
                 total_cost REAL NOT NULL DEFAULT 0,    -- 持仓总成本
+                status TEXT NOT NULL DEFAULT 'active', -- active=在选清单 / draining=已掉出,只卖不买
                 realized_pnl REAL NOT NULL DEFAULT 0,
                 buy_count INTEGER NOT NULL DEFAULT 0,
                 sell_count INTEGER NOT NULL DEFAULT 0,
@@ -131,7 +132,8 @@ class Database:
         """)
         self.conn.commit()
         # 迁移：为已存在的 grid_state 补列
-        for _col, _type in [("total_cost", "REAL NOT NULL DEFAULT 0")]:
+        for _col, _type in [("total_cost", "REAL NOT NULL DEFAULT 0"),
+                            ("status", "TEXT NOT NULL DEFAULT 'active'")]:
             try:
                 self.conn.execute(f"ALTER TABLE grid_state ADD COLUMN {_col} {_type}")
                 self.conn.commit()
@@ -219,13 +221,13 @@ class Database:
             if not row:
                 return None
             cols = ["symbol", "lower", "upper", "grids", "size_usdt", "base_qty",
-                    "total_cost", "realized_pnl", "buy_count", "sell_count"]
+                    "total_cost", "status", "realized_pnl", "buy_count", "sell_count"]
             return dict(zip(cols, row))
         rows = self.conn.execute(
-            """SELECT symbol, lower, upper, grids, size_usdt, base_qty, total_cost,
+            """SELECT symbol, lower, upper, grids, size_usdt, base_qty, total_cost, status,
                       realized_pnl, buy_count, sell_count FROM grid_state""").fetchall()
         cols = ["symbol", "lower", "upper", "grids", "size_usdt", "base_qty",
-                "total_cost", "realized_pnl", "buy_count", "sell_count"]
+                "total_cost", "status", "realized_pnl", "buy_count", "sell_count"]
         return [dict(zip(cols, r)) for r in rows]
 
     def upsert_grid_state(self, symbol: str, **fields):

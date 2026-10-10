@@ -9,8 +9,10 @@
 """
 
 import logging
+import time
 
 from exchange_client import _throttle
+from selector import select_grid_symbols
 
 log = logging.getLogger(__name__)
 
@@ -30,24 +32,106 @@ class GridStrategy:
         self.client = client
         self.db = db
         self.config = config
+        self._selection: list[dict] = []
+        self._sel_ts = 0.0
 
     @property
     def cfg(self) -> dict:
         return self.config.get("grid", {}) or {}
 
+    # ===== 选币 =====
+    async def _refresh_selection(self):
+        """按配置周期重新选币（默认 6 小时一次）。
+
+        引擎每 tick 会新建策略实例，因此选币结果与时间戳必须落库，
+        否则会在每个 tick 重扫全市场（拉取全部 ticker，代价很高）。
+        """
+        cfg = self.cfg
+        interval = float(cfg.get("refresh_hours", 6) or 6) * 3600
+        now = time.time()
+        ts = float(self.db.get_runtime_stat("grid_selection_ts", 0) or 0)
+        if ts and (now - ts) < interval:
+            saved = self.config.get("grid_selection") or []
+            if saved:
+                self._selection = saved
+                self._sel_ts = ts
+                return
+        size = float(cfg.get("size_usdt", 0) or 0)
+        picks = await select_grid_symbols(
+            self.client, cfg, size, int(cfg.get("max_symbols", 3) or 3))
+        if picks:
+            self._selection = picks
+            self._sel_ts = now
+            self.db.set_runtime_stat("grid_selection_ts", now)
+            fresh = self.db.load_config()
+            fresh["grid_selection"] = picks
+            self.db.save_config(fresh)
+
+    def _specs(self) -> list[dict]:
+        """当前要跑网格的标的清单。auto_select 时来自选币结果，否则来自手写配置。"""
+        cfg = self.cfg
+        if cfg.get("auto_select"):
+            grids = int(cfg.get("grids", 9) or 9)
+            size = float(cfg.get("size_usdt", 0) or 0)
+            fixed = float(cfg.get("auto_range_pct", 0) or 0)
+            out = []
+            for s in self._selection:
+                # 区间宽度随标的自身波动率自适应：取 1 倍日振幅，夹在 4%~15%。
+                # 固定区间对高波动币会频繁穿出，对低波动币又几乎不成交。
+                rng = fixed if fixed > 0 else max(0.04, min(0.15, float(s.get("range") or 0.06)))
+                out.append({"symbol": s["symbol"], "lower": 0, "upper": 0,
+                            "grids": grids, "size_usdt": size, "auto_range_pct": rng})
+            return out
+        return cfg.get("symbols", [])
+
+    async def _reconcile_status(self, active: set):
+        """选清单外的持仓 → draining（只卖不买）；回到清单 → 恢复 active。"""
+        for st in self.db.get_grid_state(None) or []:
+            sym, status = st["symbol"], st.get("status", "active")
+            if sym not in active:
+                if status != "draining":
+                    self.db.upsert_grid_state(sym, status="draining")
+                    log.info(f"GRID {sym}: 掉出选币清单 → 转为「只卖不买」，卖光后自动退役")
+            else:
+                if status == "draining":
+                    self.db.upsert_grid_state(sym, status="active")
+                    log.info(f"GRID {sym}: 重回选币清单 → 恢复双向网格")
+
     # ===== 主循环 =====
     async def step(self):
-        specs = self.cfg.get("symbols", [])
-        if not specs:
+        cfg = self.cfg
+        if cfg.get("auto_select"):
+            try:
+                await self._refresh_selection()
+            except Exception as e:
+                log.warning(f"GRID 选币失败，沿用上次结果: {e}")
+
+        specs = self._specs()
+        active = {s["symbol"] for s in specs if s.get("symbol")}
+
+        # 处理「掉出名单」：先标记，再继续维护它们的卖单
+        self._reconcile_status(active)
+
+        # 需要维护的标的 = 选中的 + 正在 draining 的（draining 只卖不买）
+        manage: list[dict] = list(specs)
+        for st in self.db.get_grid_state(None) or []:
+            if st["symbol"] not in active:
+                manage.append({"symbol": st["symbol"], "lower": float(st["lower"]),
+                               "upper": float(st["upper"]), "grids": int(st["grids"]),
+                               "size_usdt": float(st["size_usdt"]),
+                               "auto_range_pct": float(cfg.get("auto_range_pct", 0.06) or 0.06)})
+
+        symbols = [s["symbol"] for s in manage if s.get("symbol")]
+        if not symbols:
             return
-        symbols = [s.get("symbol") for s in specs if s.get("symbol")]
         try:
             await self.client.refresh_prices(symbols)
         except Exception as e:
             log.warning(f"GRID 行情刷新失败，跳过本轮: {e}")
             return
+
         equity = await self._equity()
-        for spec in specs:
+        for spec in manage:
             sym = spec.get("symbol")
             if not sym:
                 continue
@@ -80,7 +164,7 @@ class GridStrategy:
                     and float(st.get("upper", 0) or 0) > float(st.get("lower", 0) or 0):
                 lower, upper = float(st["lower"]), float(st["upper"])
             else:
-                pct = float(self.cfg.get("auto_range_pct", 0.25) or 0.25)
+                pct = float(spec.get("auto_range_pct") or self.cfg.get("auto_range_pct", 0.25) or 0.25)
                 lower, upper = price * (1 - pct), price * (1 + pct)
 
         grids = int(spec.get("grids") or 10)
@@ -100,9 +184,15 @@ class GridStrategy:
             if not st:
                 return
 
-        await self._check_fills(sym, price)
+        draining = (st.get("status") or "active") == "draining"
+        await self._check_fills(sym, price, draining)
+        if draining:
+            st2 = self.db.get_grid_state(sym) or {}
+            if float(st2.get("base_qty", 0) or 0) <= 1e-12:
+                self._retire(sym)
+                return
         if not self.client.dry_run:
-            await self._place_live(sym, equity)
+            await self._place_live(sym, equity, draining)
 
     # ===== 初始化 =====
     async def _init_grid(self, sym: str, lower: float, upper: float,
@@ -164,17 +254,18 @@ class GridStrategy:
                  f"/ 底仓 {base_amt} / 挂单 {created - (1 if above else 0)} 条 (现价 {price:.6g})")
 
     # ===== 成交检测 =====
-    async def _check_fills(self, sym: str, price: float):
+    async def _check_fills(self, sym: str, price: float, draining: bool = False):
         for lv in self.db.get_grid_levels(sym):
             if lv["status"] != "pending":
                 continue
             side, op = lv["side"], float(lv["price"])
             if side == "buy" and price <= op:
-                await self._on_fill(sym, lv, "buy", op, price)
+                await self._on_fill(sym, lv, "buy", op, price, draining)
             elif side == "sell" and price >= op:
-                await self._on_fill(sym, lv, "sell", op, price)
+                await self._on_fill(sym, lv, "sell", op, price, draining)
 
-    async def _on_fill(self, sym: str, lv: dict, side: str, fill_price: float, market: float):
+    async def _on_fill(self, sym: str, lv: dict, side: str, fill_price: float,
+                       market: float, draining: bool = False):
         amt = float(lv["amount"])
         st = self.db.get_grid_state(sym) or {}
         qty = float(st.get("base_qty", 0) or 0)
@@ -205,7 +296,7 @@ class GridStrategy:
         log.info(f"{tag} GRID {sym} {side} {amt} @ {fill_price:.6g}")
 
         # 生成反向单（买→上一档卖；卖→下一档买）
-        await self._arm_next(sym, side, fill_price)
+        await self._arm_next(sym, side, fill_price, draining)
 
     def _levels_of(self, sym: str) -> list[float]:
         st = self.db.get_grid_state(sym)
@@ -219,7 +310,8 @@ class GridStrategy:
                 return True
         return False
 
-    async def _arm_next(self, sym: str, filled_side: str, fill_price: float):
+    async def _arm_next(self, sym: str, filled_side: str, fill_price: float,
+                        draining: bool = False):
         st = self.db.get_grid_state(sym) or {}
         size = float(st.get("size_usdt", 0) or 0)
         if size <= 0:
@@ -235,6 +327,8 @@ class GridStrategy:
             cand = [p for p in pts if p < fill_price * 0.9999]
             want = cand[-1] if cand else fill_price / ((pts[-1] / pts[0]) ** (1.0 / max(1, len(pts) - 1)))
             side = "buy"
+        if draining and side == "buy":
+            return  # 已掉出清单：不再挂买单，只把存货卖掉
         rp = self.client.round_price(sym, want, "futures")
         if self._has_pending(sym, rp):
             return
@@ -245,12 +339,15 @@ class GridStrategy:
         self.db.insert_grid_level(sym, idx, rp, side, amt)
 
     # ===== 实盘挂单 =====
-    async def _place_live(self, sym: str, equity: float):
+    async def _place_live(self, sym: str, equity: float, draining: bool = False):
         for lv in self.db.get_grid_levels(sym):
             if lv["status"] != "pending" or lv["order_id"]:
                 continue
-            if lv["side"] == "buy" and not await self._exposure_ok(sym, equity):
-                continue
+            if lv["side"] == "buy":
+                if draining:
+                    continue          # 收缩中：不挂买单
+                if not await self._exposure_ok(sym, equity):
+                    continue
             res = await self.client.create_limit_order(
                 sym, lv["side"], float(lv["amount"]), float(lv["price"]), "futures")
             if res:
@@ -288,6 +385,13 @@ class GridStrategy:
         if s is not None:
             log.warning(msg + s)
 
+    def _retire(self, sym: str):
+        """draining 且已卖光 → 从管理清单移除。"""
+        self.db.replace_grid_levels(sym, [])
+        self.db.conn.execute("DELETE FROM grid_state WHERE symbol=?", (sym,))
+        self.db.conn.commit()
+        log.info(f"GRID {sym}: 存货已清空，网格退役（不再纳入管理）")
+
     # ===== 前端状态 =====
     async def status(self) -> dict:
         out = []
@@ -306,6 +410,7 @@ class GridStrategy:
                 "position_value": round(qty * price, 4),
                 "unrealized_pnl": round((price - avg) * qty, 4) if qty > 0 else 0,
                 "realized_pnl": round(float(st.get("realized_pnl", 0) or 0), 4),
+                "status": st.get("status", "active"),
                 "buy_count": st.get("buy_count", 0), "sell_count": st.get("sell_count", 0),
                 "levels": [
                     {"idx": l["level_idx"], "price": l["price"], "side": l["side"],
@@ -313,4 +418,12 @@ class GridStrategy:
                     for l in lv if l["status"] == "pending"
                 ],
             })
-        return {"symbols": out}
+        cfg = self.cfg
+        sel = self._selection or (self.config.get("grid_selection") or [])
+        return {
+            "symbols": out,
+            "auto_select": bool(cfg.get("auto_select")),
+            "selection": [{"symbol": s["symbol"], "range": s.get("range"),
+                           "quote_volume": s.get("quote_volume")} for s in sel],
+            "max_symbols": int(cfg.get("max_symbols", 3) or 3),
+        }

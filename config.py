@@ -23,15 +23,25 @@ DEFAULT_CONFIG = {
     "grid": {
         "leverage": 3,             # 逐仓杠杆（越低越安全，建议 2~3）
         "max_exposure_ratio": 3.0, # 总名义价值 / 权益 的上限（超过则停止买入）
-        # 每个网格标的：
-        #   size_usdt  = 单格下单金额（名义）
-        #   grids      = 网格数量
-        #   lower/upper= 价格区间（留空则由引擎按当前价自动生成）
-        "symbols": [
-            {"symbol": "BTCUSDT", "lower": 0, "upper": 0, "grids": 10, "size_usdt": 20},
-            {"symbol": "ETHUSDT", "lower": 0, "upper": 0, "grids": 10, "size_usdt": 20},
-        ],
-        "auto_range_pct": 0.25,    # lower/upper 留空时：以现价 ±25% 自动生成区间
+        "size_usdt": 20,           # 单格下单金额（名义）—— 决定每档多大
+        "grids": 9,                # 每个标的的档位数
+        "auto_range_pct": 0,       # 0 = 随标的波动率自适应（推荐）；>0 = 固定百分比
+
+        # ---- 自动选币 ----
+        # true = 系统按下列标准自动挑标的（无需手动维护）；
+        #        掉出名单的持仓不会抛弃，而是转入「只卖不买」，卖光后退役。
+        # false = 使用下面的 symbols 手写清单。
+        "auto_select": True,
+        "max_symbols": 3,              # 同时跑几个标的
+        "refresh_hours": 6,            # 选币刷新周期
+        "min_quote_volume": 100000000, # 24h 成交额下限（1 亿 U）
+        "min_daily_range": 0.02,       # 24h 振幅下限 2%
+        "max_daily_range": 0.20,       # 24h 振幅上限 20%
+        "blacklist": [],               # 额外排除的标的（稳定币已内置排除）
+
+        # 手动模式（auto_select=false 时生效）：
+        #   symbol / lower / upper / grids / size_usdt（lower/upper 填 0 = 自动生成）
+        "symbols": [],
     },
 
     # ===== 方案C：现货定投 =====

@@ -207,9 +207,23 @@ async function loadState(){
 
 async function loadGrid(){
   const d = await api('/api/grid'); if(!d||!d.symbols) return;
-  $('gridTag').textContent = d.symbols.length + ' 个标的';
-  if(!d.symbols.length){ $('gridBody').innerHTML='<div class="empty">未配置网格标的</div>'; return; }
+  const sel = d.selection||[];
+  $('gridTag').textContent = d.auto_select
+    ? ('自动选币 ' + sel.length + ' 个 · 运行 ' + d.symbols.length + ' 个')
+    : (d.symbols.length + ' 个标的');
+  if(!d.symbols.length){
+    $('gridBody').innerHTML = d.auto_select
+      ? '<div class="empty">自动选币进行中…（无合格标的或资金不足）</div>'
+      : '<div class="empty">未配置网格标的</div>';
+    return;
+  }
   let html='';
+  if(d.auto_select && sel.length){
+    html += '<div class="hint" style="margin:-4px 0 14px">当前选中：' +
+      sel.map(s => '<span class="badge" style="margin-right:6px">'+esc(s.symbol)+
+        ' · 振幅'+((s.range||0)*100).toFixed(1)+'% · '+(s.quote_volume/1e8).toFixed(1)+'亿</span>').join('') +
+      '<br>掉出名单的标的会自动转入「只卖不买」，卖光后退役——不会被直接抛弃。</div>';
+  }
   for(const s of d.symbols){
     const lo=s.lower, up=s.upper, px=s.price;
     const pct = up>lo ? Math.max(0,Math.min(100,(px-lo)/(up-lo)*100)) : 50;
@@ -220,7 +234,9 @@ async function loadGrid(){
     }).join('');
     html += '<div style="margin-bottom:18px">'
       + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">'
-      + '<span class="num" style="font-family:var(--mono);font-size:13px">'+esc(s.symbol)+'</span>'
+      + '<span class="num" style="font-family:var(--mono);font-size:13px">'+esc(s.symbol)
+      + (s.status==='draining' ? ' <span class="badge warn" style="font-size:10px">只卖不买</span>' : '')
+      + '</span>'
       + '<span class="sub" style="font-size:11px;color:var(--t3);font-family:var(--mono)">'
         + '现价 '+nf(px,4)+' · 底仓 '+nf(s.base_qty,4)+' (≈'+nf(s.position_value,2)+'U) · 已实现 '
         + '<span class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl)+'</span>'
