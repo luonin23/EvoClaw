@@ -187,6 +187,24 @@ class GridStrategy:
             if not st:
                 return
 
+        # 与交易所对账持仓数量与成本：交易所为准。
+        # 若数量明显不符，说明漏记了成交（如外部干预/离线成交），按交易所均价重置，
+        # 否则 base_qty 与 total_cost 不一致会算出错误的均价与盈亏。
+        if not self.client.dry_run:
+            ex_qty, ex_entry = await self._current_entry(sym)
+            db_qty = float(st.get("base_qty", 0) or 0)
+            db_cost = float(st.get("total_cost", 0) or 0)
+            db_avg = (db_cost / db_qty) if db_qty > 0 else 0
+            # 触发条件：数量不符，或均价与交易所偏差超过 0.5%
+            qty_bad = ex_qty > 0 and abs(ex_qty - db_qty) >= 1
+            avg_bad = (ex_qty > 0 and ex_entry > 0 and db_qty > 0
+                       and abs(db_avg - ex_entry) / ex_entry > 0.005)
+            if qty_bad or avg_bad:
+                self.db.upsert_grid_state(sym, base_qty=ex_qty, total_cost=ex_qty * ex_entry)
+                st = self.db.get_grid_state(sym)
+                log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
+                            f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
+
         draining = (st.get("status") or "active") == "draining"
         await self._check_fills(sym, price, draining)
         if draining:
@@ -197,6 +215,16 @@ class GridStrategy:
         if not self.client.dry_run:
             await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
+
+    async def _current_entry(self, sym: str):
+        """返回 (持仓张数, 开仓均价)；无持仓返回 (0, 0)。"""
+        try:
+            for p in await self.client.get_positions():
+                if self.client.user_symbol(p.get("symbol", "")) == sym and p.get("side") == "long":
+                    return float(p.get("contracts", 0) or 0), float(p.get("entryPrice", 0) or 0)
+        except Exception as e:
+            log.warning(f"GRID {sym}: 读取持仓失败: {e}")
+        return 0.0, 0.0
 
     async def _current_position(self, sym: str) -> float:
         """该标的当前的多头持仓张数（重建网格时用来算差额，避免重复买入）。"""
@@ -265,26 +293,33 @@ class GridStrategy:
             # 底仓：实盘按「实际持仓 → 目标量」的差额调整
             # （重建网格时不能无脑再买一次，否则仓位会翻倍）
             fill = price
+            traded_side, traded_amt = "buy", base_amt      # 模拟盘视为买入底仓
             if not self.client.dry_run:
                 cur = await self._current_position(sym)
                 delta = base_amt - cur
                 if abs(delta) >= 1:
-                    side = "buy" if delta > 0 else "sell"
+                    traded_side = "buy" if delta > 0 else "sell"
+                    traded_amt = abs(delta)
                     res = await self.client.create_market_order(
-                        sym, side, abs(delta), "futures", position_side="LONG")
+                        sym, traded_side, traded_amt, "futures", position_side="LONG")
                     if not res:
-                        log.error(f"GRID {sym}: 底仓调整失败({side} {abs(delta):.0f})，放弃本次初始化")
+                        log.error(f"GRID {sym}: 底仓调整失败({traded_side} {traded_amt:.0f})，放弃本次初始化")
                         return
                     fill = float(res.get("price") or price)
-                    log.info(f"GRID {sym}: 底仓调整 {cur:.0f} → {base_amt:.0f} ({side} {abs(delta):.0f})")
-                elif cur > 0:
-                    fill = await self.client.ensure_price(sym) or price
-            self.db.insert_order({
-                "mode": "grid", "symbol": sym, "side": "buy", "type": "grid_base",
-                "price": fill, "amount": base_amt, "cost": round(base_amt * fill, 6),
-                "fee": round(base_amt * fill * 0.0005, 6),
-                "dry_run": self.client.dry_run, "note": "网格底仓",
-            })
+                    log.info(f"GRID {sym}: 底仓调整 {cur:.0f} → {base_amt:.0f} ({traded_side} {traded_amt:.0f})")
+                else:
+                    traded_amt = 0.0
+                    if cur > 0:
+                        fill = await self.client.ensure_price(sym) or price
+            # 记录「实际成交的方向与数量」，不要硬编码成 buy / base_amt
+            if traded_amt > 0:
+                self.db.insert_order({
+                    "mode": "grid", "symbol": sym, "side": traded_side, "type": "grid_base",
+                    "price": fill, "amount": traded_amt, "cost": round(traded_amt * fill, 6),
+                    "fee": round(traded_amt * fill * 0.0005, 6),
+                    "dry_run": self.client.dry_run,
+                    "note": "网格底仓" if traded_side == "buy" else "网格底仓调整",
+                })
             self.db.upsert_grid_state(sym, base_qty=base_amt, total_cost=base_amt * fill)
             created += 1
 
@@ -521,6 +556,8 @@ class GridStrategy:
                     "liq_price": float(p.get("liquidationPrice", 0) or 0),
                     "leverage": p.get("leverage") or self.cfg.get("leverage"),
                     "margin_mode": p.get("marginMode") or "",
+                    "unrealized": float(p.get("unrealizedPnl", 0) or 0),
+                    "mark": float(p.get("markPrice", 0) or 0),
                 }
         except Exception as e:
             log.warning(f"读取持仓元数据失败: {e}")
@@ -540,7 +577,11 @@ class GridStrategy:
                 "base_qty": qty, "avg_price": round(avg, 6),
                 "position_value": round(qty * price, 4),
                 "cost_value": round(cost, 4),
-                "unrealized_pnl": round((price - avg) * qty, 4) if qty > 0 else 0,
+                # 浮盈优先用交易所权威值（与你在币安看到的完全一致），拿不到才自算
+                "unrealized_pnl": round(
+                    (meta.get(sym) or {}).get("unrealized")
+                    if (meta.get(sym) or {}).get("unrealized") is not None and qty > 0
+                    else ((price - avg) * qty if qty > 0 else 0), 4),
                 "unrealized_pnl_rate": round((price - avg) / avg, 6) if avg > 0 else 0,
                 "realized_pnl": round(float(st.get("realized_pnl", 0) or 0), 6),
                 "realized_pnl_rate": round(float(st.get("realized_pnl", 0) or 0) / cost, 6) if cost > 0 else 0,

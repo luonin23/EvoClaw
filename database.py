@@ -215,7 +215,7 @@ class Database:
     def get_grid_state(self, symbol: str = None):
         if symbol:
             row = self.conn.execute(
-                """SELECT symbol, lower, upper, grids, size_usdt, base_qty,
+                """SELECT symbol, lower, upper, grids, size_usdt, base_qty, total_cost, status,
                           realized_pnl, buy_count, sell_count FROM grid_state WHERE symbol=?""",
                 (symbol,)).fetchone()
             if not row:
