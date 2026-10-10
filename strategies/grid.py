@@ -227,8 +227,55 @@ class GridStrategy:
                 self._retire(sym)
                 return
         if not self.client.dry_run:
+            if await self._maybe_recenter(sym, st, price, size_usdt, grids, spec, draining):
+                st = self.db.get_grid_state(sym)
+                if not st:
+                    return
+                draining = (st.get("status") or "active") == "draining"
             await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
+
+    async def _maybe_recenter(self, sym: str, st: dict, price: float, size_usdt: float,
+                              grids: int, spec: dict, draining: bool) -> bool:
+        """价格突破区间后让网格跟随（动态居中）。
+
+        规则（安全性优先）：
+          · 触发：价格超出区间一定幅度（默认 1%），且有冷却（默认 30 分钟）
+          · 允许条件：无持仓，或现价 ≥ 持仓均价（即不在亏损时重排 —— 避免变相止损）
+          · draining（只卖不买）也允许：否则手里的存货永远没有卖单可挂
+        返回 True 表示已重建。
+        """
+        cfg = self.cfg
+        if not cfg.get("auto_recenter", True):
+            return False
+        lower, upper = float(st["lower"]), float(st["upper"])
+        if lower <= 0 or upper <= lower:
+            return False
+        margin = float(cfg.get("recenter_margin", 0.01) or 0.01)
+        if lower * (1 - margin) <= price <= upper * (1 + margin):
+            return False
+
+        key = f"grid_recenter:{sym}"
+        cooldown = float(cfg.get("recenter_cooldown_min", 30) or 30) * 60
+        last = float(self.db.get_runtime_stat(key, 0) or 0)
+        if time.time() - last < cooldown:
+            return False
+
+        ex_qty, ex_entry = await self._current_entry(sym)
+        if ex_qty > 0 and ex_entry > 0 and price < ex_entry:
+            s = _throttle.emit(f"grid_norec:{sym}")
+            if s is not None:
+                log.warning(f"GRID {sym}: 价格 {price:.6f} 跌破区间且低于成本 {ex_entry:.6f}，"
+                            f"按「不设止损」继续持有等待（不重排网格）{s}")
+            return False
+
+        pct = float(spec.get("auto_range_pct") or cfg.get("auto_range_pct", 0.06) or 0.06)
+        log.warning(f"GRID {sym}: 价格 {price:.6f} 突破区间 {lower:.6f}~{upper:.6f} → "
+                    f"网格动态居中到 ±{pct*100:.1f}%")
+        self.db.set_runtime_stat(key, time.time())
+        await self._init_grid(sym, price * (1 - pct), price * (1 + pct),
+                              grids, size_usdt, price, draining)
+        return True
 
     async def _current_entry(self, sym: str):
         """返回 (持仓张数, 开仓均价)；无持仓返回 (0, 0)。"""
@@ -252,7 +299,8 @@ class GridStrategy:
 
     # ===== 初始化 =====
     async def _init_grid(self, sym: str, lower: float, upper: float,
-                         grids: int, size_usdt: float, price: float):
+                         grids: int, size_usdt: float, price: float,
+                         draining: bool = False):
         pts = grid_points(lower, upper, grids)
         if not pts:
             return
@@ -266,20 +314,30 @@ class GridStrategy:
             for lv in self.db.get_grid_levels(sym):
                 if lv["status"] == "pending" and lv.get("order_id"):
                     await self.client.cancel_order(lv["order_id"], sym, "futures")
-        # 先清空旧状态
+        # 先清空旧档位；但**保留已实现盈亏与买卖计数**——重建网格（如动态跟随）
+        # 不能把历史收益抹掉。
+        prev = self.db.get_grid_state(sym) or {}
         self.db.replace_grid_levels(sym, [])
         self.db.upsert_grid_state(sym, lower=lower, upper=upper, grids=grids,
                                   size_usdt=size_usdt, base_qty=0.0, total_cost=0.0,
-                                  realized_pnl=0.0, buy_count=0, sell_count=0)
+                                  realized_pnl=float(prev.get("realized_pnl", 0) or 0),
+                                  buy_count=int(prev.get("buy_count", 0) or 0),
+                                  sell_count=int(prev.get("sell_count", 0) or 0))
 
         half = max(1, grids // 2)
         below = [p for p in pts if p < price][-half:]      # 现价下方最近的 half 档
         above = [p for p in pts if p > price][:half]       # 现价上方最近的 half 档
 
         # 先算好卖单（离现价最近的排最后，便于补量）
+        # 不设止损：若已持仓，卖价永不低于持仓均价（决不亏损卖出）
+        ex_qty0, ex_entry0 = (await self._current_entry(sym)) if not self.client.dry_run else (0.0, 0.0)
+        min_sell = ex_entry0 if (ex_qty0 > 0 and ex_entry0 > 0) else 0.0
+
         sells = []   # [[level_idx, price, amount], ...]
         for i, p in enumerate(pts):
             if p > price and p in above:
+                if min_sell > 0 and p < min_sell * 0.999:
+                    continue          # 低于成本价，不挂卖（不亏损卖出）
                 a = self.client.amount_for_notional(sym, size_usdt, p, "futures")
                 if a > 0:
                     sells.append([i, p, a])
@@ -296,6 +354,9 @@ class GridStrategy:
             if min_now > base_amt:
                 sells[-1][2] += (min_now - base_amt)
                 base_amt = min_now
+            if draining and ex_qty0 > 0:
+                # 只卖不买：目标持仓 = 现有持仓，不额外买入
+                base_amt = ex_qty0
             if base_amt <= 0:
                 need = self.client.min_notional_of(sym, "futures")
                 s = _throttle.emit(f"grid_nocap:{sym}")
@@ -342,6 +403,8 @@ class GridStrategy:
         for i, p in enumerate(pts):
             rp = self.client.round_price(sym, p, "futures")
             if p < price and p in below:
+                if draining:
+                    continue          # 只卖不买：不挂买档
                 a = self.client.amount_for_notional(sym, size_usdt, p, "futures")
                 if a > 0:
                     self.db.insert_grid_level(sym, i, rp, "buy", a)
@@ -359,8 +422,11 @@ class GridStrategy:
             if lv["status"] != "pending":
                 continue
             side, op = lv["side"], float(lv["price"])
-            if side == "buy" and price <= op:
-                await self._on_fill(sym, lv, "buy", op, price, draining)
+            if side == "buy":
+                if draining:
+                    continue          # 只卖不买：买单即使被触及也不成交
+                if price <= op:
+                    await self._on_fill(sym, lv, "buy", op, price, draining)
             elif side == "sell" and price >= op:
                 await self._on_fill(sym, lv, "sell", op, price, draining)
 

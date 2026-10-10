@@ -69,6 +69,26 @@ tr:hover td{background:var(--hover)}
 .gbar .lvl.pend{background:rgba(255,255,255,.18)}
 .gbar .px{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--warn);box-shadow:0 0 8px rgba(245,158,11,.7)}
 .gbar-lbl{display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono)}
+/* 价格轴：成本线 / 现价线 / 买卖档 / 盈亏实心填充 */
+.gbar2{position:relative;height:34px;background:var(--surface);border:1px solid var(--bd);
+  border-radius:6px;margin:26px 0 24px}
+.gbar2 .fill{position:absolute;top:0;bottom:0}
+.gbar2 .fill.g{background:linear-gradient(90deg,rgba(0,208,132,.30),rgba(0,208,132,.62));
+  border-left:1px solid rgba(0,208,132,.8);border-right:1px solid rgba(0,208,132,.8)}
+.gbar2 .fill.r{background:linear-gradient(90deg,rgba(255,71,87,.62),rgba(255,71,87,.30));
+  border-left:1px solid rgba(255,71,87,.8);border-right:1px solid rgba(255,71,87,.8)}
+.gbar2 .lvlz{position:absolute;top:6px;bottom:6px;width:2px}
+.gbar2 .lvlz.buy{background:rgba(0,208,132,.7)}
+.gbar2 .lvlz.sell{background:rgba(255,71,87,.7)}
+.gbar2 .mark{position:absolute;top:-3px;bottom:-3px;width:2px;z-index:3}
+.gbar2 .mark.cost{background:#60a5fa;box-shadow:0 0 6px rgba(96,165,250,.9)}
+.gbar2 .mark.price{background:var(--warn);box-shadow:0 0 9px rgba(245,158,11,1)}
+.gbar2 .mark span{position:absolute;transform:translateX(-50%);font-family:var(--mono);
+  font-size:10px;white-space:nowrap;padding:1px 6px;border-radius:4px;line-height:1.5}
+.gbar2 .mark.cost span{top:-20px;background:rgba(96,165,250,.18);border:1px solid rgba(96,165,250,.45);color:#60a5fa}
+.gbar2 .mark.price span{bottom:-20px;background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.5);color:var(--warn)}
+.gbar2 .edge{position:absolute;bottom:-17px;transform:translateX(-50%);font-family:var(--mono);
+  font-size:9px;color:var(--t3);opacity:.7}
 /* 成交汇总栏 */
 .ord-sum{display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;
   background:var(--surface);border:1px solid var(--bd);border-radius:8px;
@@ -266,11 +286,6 @@ async function loadGrid(){
     const cardCls = !hasPos ? 'empty' : (pnl >= 0 ? 'profit' : 'lose');
     const stateTxt = s.status==='draining' ? '只卖不买' : (hasPos ? '持仓中' : '空仓待机');
     const stateCls = s.status==='draining' ? 'drain' : (hasPos ? 'hold' : '');
-    const pct = up>lo ? Math.max(0,Math.min(100,(px-lo)/(up-lo)*100)) : 50;
-    const lvls = (s.levels||[]).map(l=>{
-      const lp = up>lo ? Math.max(0,Math.min(100,(l.price-lo)/(up-lo)*100)) : 50;
-      return '<div class="lvl '+(l.side==='sell'?'hold':'pend')+'" style="left:'+lp.toFixed(2)+'%"></div>';
-    }).join('');
     const buys  = (s.levels||[]).filter(l=>l.side==='buy');
     const sells = (s.levels||[]).filter(l=>l.side==='sell');
     const ordHtml = (buys.length||sells.length)
@@ -286,6 +301,33 @@ async function loadGrid(){
         + ' · 强平价 ' + nf(s.liq_price,6)
         + ' · 距强平 ' + ((s.liq_distance||0)*100).toFixed(1) + '%'
         + (liqDist < 0.25 ? '  ⚠ 接近强平' : '') + '</div>' : '';
+
+    // ---- 价格轴：以「区间∪成本∪现价」为显示范围，保证三个标记都在视野内 ----
+    const vals = [lo, up, px].filter(v=>v>0);
+    if (hasPos && s.avg_price > 0) vals.push(s.avg_price);
+    const dLo0 = Math.min(...vals), dHi0 = Math.max(...vals);
+    const padD = (dHi0 - dLo0) * 0.06 || 0.001;
+    const dLo = dLo0 - padD, dHi = dHi0 + padD;
+    const pctOf = v => Math.max(0, Math.min(100, (v - dLo) / (dHi - dLo) * 100));
+    const pxPct = pctOf(px), costPct = (hasPos && s.avg_price>0) ? pctOf(s.avg_price) : null;
+    // 盈亏实心填充：成本 → 现价（盈=绿，亏=红）
+    let fillHtml = '';
+    if (costPct !== null) {
+      const a = Math.min(pxPct, costPct), b = Math.max(pxPct, costPct);
+      const isUp = px >= s.avg_price;
+      fillHtml = '<div class="fill '+(isUp?'g':'r')+'" style="left:'+a.toFixed(2)+'%;width:'+Math.max(0.5,b-a).toFixed(2)+'%"></div>';
+    }
+    const lvlHtml = (s.levels||[]).map(l=>
+      '<div class="lvlz '+(l.side==='sell'?'sell':'buy')+'" style="left:'+pctOf(l.price).toFixed(2)+'%" title="'+
+      (l.side==='sell'?'卖':'买')+' '+nf(l.amount,0)+' @ '+nf(l.price,6)+'"></div>').join('');
+    const costMark = costPct !== null
+      ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nf(s.avg_price,6)+'</span></div>' : '';
+    const axisHtml = '<div class="gbar2">'
+      + '<div class="edge" style="left:2%">'+nf(dLo,6)+'</div>'
+      + '<div class="edge" style="left:98%">'+nf(dHi,6)+'</div>'
+      + fillHtml + lvlHtml + costMark
+      + '<div class="mark price" style="left:'+pxPct.toFixed(2)+'%"><span>现价 '+nf(px,6)+'</span></div>'
+      + '</div>';
 
     html += '<div class="gcard '+cardCls+'">'
       + '<div class="gc-head">'
@@ -304,8 +346,7 @@ async function loadGrid(){
         + '<span class="'+(s.realized_pnl>=0?'pos':'neg')+'">('+nfR(s.realized_pnl_rate)+')</span></span>'
         + '<span>成交 买'+s.buy_count+'/卖'+s.sell_count+'</span>'
       + '</div>'
-      + '<div class="gbar">'+lvls+'<div class="px" style="left:'+pct.toFixed(2)+'%"></div></div>'
-      + '<div class="gbar-lbl"><span>'+nf(lo,4)+'</span><span>区间 '+(up>lo?(s.grids+' 格'):'未设置')+'</span><span>'+nf(up,4)+'</span></div>'
+      + axisHtml
       + ordHtml
       + liqHtml
       + '</div>';
