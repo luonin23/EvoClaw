@@ -476,6 +476,19 @@ class GridStrategy:
 
     # ===== 前端状态 =====
     async def status(self) -> dict:
+        # 读取交易所持仓元数据（强平价 / 杠杆 / 保证金模式）—— 安全信息，必须可见
+        meta = {}
+        try:
+            for p in await self.client.get_positions():
+                us = self.client.user_symbol(p.get("symbol", ""))
+                meta[us] = {
+                    "liq_price": float(p.get("liquidationPrice", 0) or 0),
+                    "leverage": p.get("leverage") or self.cfg.get("leverage"),
+                    "margin_mode": p.get("marginMode") or "",
+                }
+        except Exception as e:
+            log.warning(f"读取持仓元数据失败: {e}")
+
         out = []
         for st in self.db.get_grid_state(None) or []:
             sym = st["symbol"]
@@ -496,6 +509,12 @@ class GridStrategy:
                 "realized_pnl": round(float(st.get("realized_pnl", 0) or 0), 6),
                 "realized_pnl_rate": round(float(st.get("realized_pnl", 0) or 0) / cost, 6) if cost > 0 else 0,
                 "status": st.get("status", "active"),
+                "leverage": (meta.get(sym) or {}).get("leverage"),
+                "margin_mode": (meta.get(sym) or {}).get("margin_mode", ""),
+                "liq_price": (meta.get(sym) or {}).get("liq_price", 0),
+                "liq_distance": round(
+                    ((meta.get(sym) or {}).get("liq_price", 0) - price) / price, 4)
+                    if (meta.get(sym) or {}).get("liq_price", 0) > 0 and price > 0 else None,
                 "buy_count": st.get("buy_count", 0), "sell_count": st.get("sell_count", 0),
                 "levels": [
                     {"idx": l["level_idx"], "price": l["price"], "side": l["side"],

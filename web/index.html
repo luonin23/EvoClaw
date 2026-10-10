@@ -245,7 +245,11 @@ async function loadGrid(){
         + ' ('+nfR(s.unrealized_pnl_rate)+')</span>'
         + ' · 已实现 <span class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl,4)
         + ' ('+nfR(s.realized_pnl_rate)+')</span>'
-        + ' · 买'+s.buy_count+'/卖'+s.sell_count+'</span></div>'
+        + ' · 买'+s.buy_count+'/卖'+s.sell_count
+        + (s.liq_price ? ('  ·  <span style="color:' + (Math.abs(s.liq_distance||0) < 0.25 ? 'var(--error)' : 'var(--text-tertiary)') + '">'
+            + (s.margin_mode==='isolated'?'逐仓 ':'全仓! ')+ '强平 '+nf(s.liq_price,6)
+            + ' ('+((s.liq_distance||0)*100).toFixed(1)+'%)</span>') : '')
+        + '</span></div>'
       + '<div class="gbar">'+lvls+'<div class="px" style="left:'+pct.toFixed(2)+'%"></div></div>'
       + '<div class="gbar-lbl"><span>'+nf(lo,4)+'</span><span>区间 '+(up>lo?(s.grids+' 格'):'未设置')+'</span><span>'+nf(up,4)+'</span></div>'
       + '</div>';
