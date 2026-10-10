@@ -30,7 +30,7 @@ class Database:
         for _name in (
             "save_config", "seed_config", "set_runtime_stat", "insert_order",
             "update_order_status", "upsert_grid_state", "replace_grid_levels",
-            "insert_grid_level", "fill_grid_level", "mark_grid_level",
+            "insert_grid_level", "fill_grid_level", "clear_grid_order_id", "mark_grid_level",
             "upsert_dca_state", "insert_dca_record",
             "backup_to", "checkpoint",
         ):
@@ -280,6 +280,11 @@ class Database:
              datetime.now(timezone.utc).isoformat()))
         self.conn.commit()
         return cur.lastrowid
+
+    def clear_grid_order_id(self, row_id: int):
+        """清空挂单号（交易所那笔已不存在时调用，下轮会重新挂）。"""
+        self.conn.execute("UPDATE grid_levels SET order_id='' WHERE id=?", (row_id,))
+        self.conn.commit()
 
     def fill_grid_level(self, row_id: int, order_id: str = ""):
         self.conn.execute(

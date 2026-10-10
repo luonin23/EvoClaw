@@ -353,6 +353,18 @@ class ExchangeClient:
             log.warning(f"Cancel order failed {user_symbol} {order_id}: {e}")
             return False
 
+    async def fetch_order_status(self, order_id: str, user_symbol: str,
+                                 kind: str = "futures") -> str:
+        """单笔订单状态：open / closed / canceled / expired / unknown。"""
+        if not order_id or order_id.startswith("dry-"):
+            return "open"
+        ex = self.futures if kind == "futures" else self._spot
+        try:
+            o = await self._safe_call(ex.fetch_order(order_id, self.to_ccxt(user_symbol, kind)), timeout=15)
+            return str(o.get("status") or "unknown")
+        except Exception:
+            return "unknown"
+
     async def fetch_open_orders(self, user_symbol: str, kind: str = "futures") -> list[dict]:
         ex = self.futures if kind == "futures" else self._spot
         try:

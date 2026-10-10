@@ -195,7 +195,18 @@ class GridStrategy:
                 self._retire(sym)
                 return
         if not self.client.dry_run:
+            await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
+
+    async def _current_position(self, sym: str) -> float:
+        """该标的当前的多头持仓张数（重建网格时用来算差额，避免重复买入）。"""
+        try:
+            for p in await self.client.get_positions():
+                if self.client.user_symbol(p.get("symbol", "")) == sym and p.get("side") == "long":
+                    return float(p.get("contracts", 0) or 0)
+        except Exception as e:
+            log.warning(f"GRID {sym}: 读取持仓失败: {e}")
+        return 0.0
 
     # ===== 初始化 =====
     async def _init_grid(self, sym: str, lower: float, upper: float,
@@ -223,14 +234,26 @@ class GridStrategy:
         below = [p for p in pts if p < price][-half:]      # 现价下方最近的 half 档
         above = [p for p in pts if p > price][:half]       # 现价上方最近的 half 档
 
-        # 底仓：为卖单背书
-        base_amt = 0.0
-        for p in above:
-            a = self.client.amount_for_notional(sym, size_usdt, p, "futures")
-            if a > 0:
-                base_amt += a
+        # 先算好卖单（离现价最近的排最后，便于补量）
+        sells = []   # [[level_idx, price, amount], ...]
+        for i, p in enumerate(pts):
+            if p > price and p in above:
+                a = self.client.amount_for_notional(sym, size_usdt, p, "futures")
+                if a > 0:
+                    sells.append([i, p, a])
+
         created = 0
-        if above:
+        base_amt = 0.0
+        if sells:
+            base_amt = sum(s[2] for s in sells)
+
+            # 底仓必须严格等于卖单总量，否则会沉淀出卖不掉的余量。
+            # 若按现价买入达不到最小名义值，就把缺口加在「最靠近现价的卖单」上，
+            # 而不是多买底仓（多买的部分没有卖单覆盖，会永远沉淀）。
+            min_now = self.client.min_amount(sym, price, "futures")
+            if min_now > base_amt:
+                sells[-1][2] += (min_now - base_amt)
+                base_amt = min_now
             if base_amt <= 0:
                 need = self.client.min_notional_of(sym, "futures")
                 s = _throttle.emit(f"grid_nocap:{sym}")
@@ -238,20 +261,24 @@ class GridStrategy:
                     log.warning(f"GRID {sym}: 单格 {size_usdt:.2f}U 买不起「一手」"
                                 f"（最小约 {need:.1f}U/手）→ 跳过。请加大单格金额或换低价标的{s}")
                 return
-            # 底仓以「市价成交价」校验最小名义值：
-            # 按档位价算出的数量在更低的市价下可能不足 5U，会被 -4164 拒绝。
-            min_now = self.client.min_amount(sym, price, "futures")
-            if min_now > 0:
-                base_amt = max(base_amt, min_now)
-            # 实盘必须真正买入底仓 —— 否则会「有卖单却没有持仓」，卖单全部失败
+
+            # 底仓：实盘按「实际持仓 → 目标量」的差额调整
+            # （重建网格时不能无脑再买一次，否则仓位会翻倍）
             fill = price
             if not self.client.dry_run:
-                res = await self.client.create_market_order(sym, "buy", base_amt, "futures",
-                                                            position_side="LONG")
-                if not res:
-                    log.error(f"GRID {sym}: 底仓买入失败，放弃本次初始化")
-                    return
-                fill = float(res.get("price") or price)
+                cur = await self._current_position(sym)
+                delta = base_amt - cur
+                if abs(delta) >= 1:
+                    side = "buy" if delta > 0 else "sell"
+                    res = await self.client.create_market_order(
+                        sym, side, abs(delta), "futures", position_side="LONG")
+                    if not res:
+                        log.error(f"GRID {sym}: 底仓调整失败({side} {abs(delta):.0f})，放弃本次初始化")
+                        return
+                    fill = float(res.get("price") or price)
+                    log.info(f"GRID {sym}: 底仓调整 {cur:.0f} → {base_amt:.0f} ({side} {abs(delta):.0f})")
+                elif cur > 0:
+                    fill = await self.client.ensure_price(sym) or price
             self.db.insert_order({
                 "mode": "grid", "symbol": sym, "side": "buy", "type": "grid_base",
                 "price": fill, "amount": base_amt, "cost": round(base_amt * fill, 6),
@@ -261,19 +288,21 @@ class GridStrategy:
             self.db.upsert_grid_state(sym, base_qty=base_amt, total_cost=base_amt * fill)
             created += 1
 
+        # 挂单：买单（现价下方）+ 卖单（用上面算好的量，保证底仓=卖单总量）
+        sell_idx = {s[0]: s for s in sells}
         for i, p in enumerate(pts):
-            a = self.client.amount_for_notional(sym, size_usdt, p, "futures")
-            if a <= 0:
-                continue
             rp = self.client.round_price(sym, p, "futures")
             if p < price and p in below:
-                self.db.insert_grid_level(sym, i, rp, "buy", a)
-                created += 1
-            elif p > price and p in above:
-                self.db.insert_grid_level(sym, i, rp, "sell", a)
+                a = self.client.amount_for_notional(sym, size_usdt, p, "futures")
+                if a > 0:
+                    self.db.insert_grid_level(sym, i, rp, "buy", a)
+                    created += 1
+            elif i in sell_idx:
+                self.db.insert_grid_level(sym, i, rp, "sell", sell_idx[i][2])
                 created += 1
         log.info(f"GRID {sym}: 区间 {lower:.6g}~{upper:.6g} / {grids} 档 / 单格 {size_usdt}U "
-                 f"/ 底仓 {base_amt} / 挂单 {created - (1 if above else 0)} 条 (现价 {price:.6g})")
+                 f"/ 底仓 {base_amt:.0f} / 卖单合计 {sum(s[2] for s in sells):.0f} "
+                 f"/ 挂单 {created - (1 if sells else 0)} 条 (现价 {price:.6g})")
 
     # ===== 成交检测 =====
     async def _check_fills(self, sym: str, price: float, draining: bool = False):
@@ -359,6 +388,36 @@ class GridStrategy:
             return
         idx = min(range(len(pts)), key=lambda i: abs(pts[i] - want))
         self.db.insert_grid_level(sym, idx, rp, side, amt)
+
+    # ===== 挂单对账 =====
+    async def _reconcile_orders(self, sym: str, price: float):
+        """核对 DB 里的挂单号是否仍存在于交易所。
+
+        外部撤单 / 手工干预 / 订单过期时，DB 仍存着 order_id，而 _place_live 见
+        「有单号」就跳过 → 那一侧永远不会补挂，网格会悄悄缺一条腿。这里每轮核对。
+        """
+        levels = [lv for lv in self.db.get_grid_levels(sym)
+                  if lv["status"] == "pending" and lv.get("order_id")]
+        if not levels:
+            return
+        try:
+            open_orders = await self.client.fetch_open_orders(sym, "futures")
+        except Exception:
+            return
+        live = {str(o.get("id")) for o in open_orders}
+        for lv in levels:
+            if str(lv["order_id"]) in live:
+                continue
+            st = await self.client.fetch_order_status(lv["order_id"], sym, "futures")
+            if st == "closed":
+                # 已成交（可能是离线期间成交的）→ 补记成交
+                await self._on_fill(sym, lv, lv["side"], float(lv["price"]), price, False)
+            else:
+                s = _throttle.emit(f"grid_stale:{sym}")
+                if s is not None:
+                    log.warning(f"GRID {sym}: 挂单 {lv['order_id']} 已不在交易所"
+                                f"(状态={st}) → 清空并重新挂单{s}")
+                self.db.clear_grid_order_id(lv["id"])
 
     # ===== 实盘挂单 =====
     async def _place_live(self, sym: str, equity: float, draining: bool = False):
