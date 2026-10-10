@@ -670,6 +670,11 @@ class GridStrategy:
         for lv in self.db.get_grid_levels(sym):
             if lv["status"] != "pending":
                 continue
+            # 实盘：只认「交易所上确实挂着」的档位（有 order_id）。
+            # 没有 order_id 说明这档从没挂成功（保证金不足等），若仅凭价格触达
+            # 就记成交，会产生**幽灵成交**——账面凭空多出一笔买卖，交易所却没有。
+            if not self.client.dry_run and not lv.get("order_id"):
+                continue
             side, op = lv["side"], float(lv["price"])
             if side == "buy":
                 if draining:
