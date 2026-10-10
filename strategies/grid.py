@@ -281,12 +281,23 @@ class GridStrategy:
                        and abs(db_avg - ex_entry) / ex_entry > 0.005)
             if qty_bad or avg_bad:
                 self.db.upsert_grid_state(sym, base_qty=ex_qty, total_cost=ex_qty * ex_entry)
+                # 账本以交易所为准重建（对账差异说明账本已不可信）
+                self.db.reset_lots(sym, ex_qty, ex_entry, "对账重建")
                 st = self.db.get_grid_state(sym)
                 log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
                             f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
 
         if not self.client.dry_run:
             await self._ensure_sell_coverage(sym, st)
+
+        # 账本兜底：有持仓但账本为空（首次引入该机制时的历史仓位）→ 按均价补记一笔，
+        # 否则卖出时无从配对、单笔盈亏会退化成均价口径。
+        lq, _ = self.db.lots_qty_cost(sym)
+        if lq <= 1e-12 and float(st.get("base_qty", 0) or 0) > 0:
+            bq = float(st["base_qty"])
+            self.db.reset_lots(sym, bq, float(st.get("total_cost", 0) or 0) / bq, "账本初始补记")
+            log.info(f"GRID {sym}: 账本为空，按持仓均价 {float(st.get('total_cost',0) or 0)/bq:.6g} "
+                     f"补记 {bq:.0f} 张")
 
         draining = (st.get("status") or "active") == "draining"
         await self._check_fills(sym, price, draining)
@@ -459,7 +470,13 @@ class GridStrategy:
             log.error(f"GRID {sym}: 移动止盈卖出失败，状态保留，下一轮重试")
             return False
         fill = float(res.get("price") or price)
-        trade_pnl = (fill - avg) * qty
+        # 按账本核销全部批次，逐笔加总真实盈亏（与 _on_fill 同一口径）
+        consumed = self.db.consume_lots(sym, fill, qty)
+        taken = sum(t for _, t in consumed)
+        trade_pnl = sum((fill - lp) * t for lp, t in consumed)
+        if taken < qty - 1e-9:            # 账本不足 → 余量按均价兜底
+            trade_pnl += (fill - avg) * (qty - taken)
+        self.db.clear_lots(sym)
         self.db.upsert_grid_state(
             sym, base_qty=0.0, total_cost=0.0,
             realized_pnl=float(st.get("realized_pnl", 0) or 0) + trade_pnl,
@@ -526,8 +543,11 @@ class GridStrategy:
         # 不能把历史收益抹掉。
         prev = self.db.get_grid_state(sym) or {}
         self.db.replace_grid_levels(sym, [])
+        # 持仓以账本为准（不要在这里硬写 0.0 —— 万一后面提前返回，持仓记录会
+        # 与交易所脱节，卖单覆盖也随之失效）。
+        _lq, _lc = self.db.lots_qty_cost(sym)
         self.db.upsert_grid_state(sym, lower=lower, upper=upper, grids=grids,
-                                  size_usdt=size_usdt, base_qty=0.0, total_cost=0.0,
+                                  size_usdt=size_usdt, base_qty=_lq, total_cost=_lc,
                                   realized_pnl=float(prev.get("realized_pnl", 0) or 0),
                                   buy_count=int(prev.get("buy_count", 0) or 0),
                                   sell_count=int(prev.get("sell_count", 0) or 0))
@@ -612,7 +632,15 @@ class GridStrategy:
                     "dry_run": self.client.dry_run,
                     "note": "网格底仓" if traded_side == "buy" else "网格底仓调整",
                 })
-            self.db.upsert_grid_state(sym, base_qty=base_amt, total_cost=base_amt * fill)
+            # 账本对齐到目标持仓：多则核销、少则补记（对重建/历史遗留都自愈）
+            lq, _ = self.db.lots_qty_cost(sym)
+            diff = base_amt - lq
+            if diff > 1e-9:
+                self.db.add_lot(sym, fill, diff, "网格底仓")
+            elif diff < -1e-9:
+                self.db.consume_lots(sym, fill, -diff)
+            qty0, cost0 = self.db.lots_qty_cost(sym)
+            self.db.upsert_grid_state(sym, base_qty=qty0, total_cost=cost0)
             # 建仓完成 → 消费掉「不追高」锚点：本轮重新入场已落地，
             # 下一次清仓时再记录新锚点。
             self.db.set_runtime_stat(f"grid_exit:{sym}", 0)
@@ -655,39 +683,48 @@ class GridStrategy:
                        market: float, draining: bool = False):
         amt = float(lv["amount"])
         st = self.db.get_grid_state(sym) or {}
-        qty = float(st.get("base_qty", 0) or 0)
-        cost = float(st.get("total_cost", 0) or 0)
         realized = float(st.get("realized_pnl", 0) or 0)
 
         self.db.fill_grid_level(lv["id"])
+        trade_pnl = 0.0
+        trade_rate = 0.0
         if side == "buy":
-            qty += amt
-            cost += fill_price * amt
-            self.db.upsert_grid_state(sym, base_qty=qty, total_cost=cost,
-                                      buy_count=int(st.get("buy_count", 0) or 0) + 1)
+            # 每一笔买入单独记一条账本（开仓/加仓都是），供卖出时按价配对核销
+            self.db.add_lot(sym, fill_price, amt, "网格买入")
+            self.db.upsert_grid_state(sym, buy_count=int(st.get("buy_count", 0) or 0) + 1)
             # 加仓后立即重置移动止盈的最高价：这是新的一轮持仓，
             # 旧的高点会让机制在刚加完仓就误触发。
             self.db.set_runtime_stat(f"tp_high:{sym}", 0)
         else:
-            avg = cost / qty if qty > 0 else fill_price
-            realized += (fill_price - avg) * amt
-            qty = max(0.0, qty - amt)
-            cost = max(0.0, cost - avg * amt)
-            self.db.upsert_grid_state(sym, base_qty=qty, total_cost=cost, realized_pnl=realized,
+            # 按「低于卖价者中价格最高优先」核销买入批次 —— 对应网格里下一档
+            # 买入，故单笔必然盈利（卖价 > 该笔买入价）。
+            consumed = self.db.consume_lots(sym, fill_price, amt)
+            taken = sum(t for _, t in consumed)
+            trade_pnl = sum((fill_price - lp) * t for lp, t in consumed)
+            trade_base = sum(lp * t for lp, t in consumed)
+            if taken < amt - 1e-9:
+                # 账本不足（历史遗留/对账差）：余量按原持仓均价兜底，不丢数
+                db_qty = float(st.get("base_qty", 0) or 0)
+                db_cost = float(st.get("total_cost", 0) or 0)
+                avg_fb = (db_cost / db_qty) if db_qty > 0 else fill_price
+                rest = amt - taken
+                trade_pnl += (fill_price - avg_fb) * rest
+                trade_base += avg_fb * rest
+            realized += trade_pnl
+            trade_rate = (trade_pnl / trade_base) if trade_base > 0 else 0.0
+            self.db.upsert_grid_state(sym, realized_pnl=realized,
                                       sell_count=int(st.get("sell_count", 0) or 0) + 1)
-            # 清仓（持仓归零）= 网格在本轮最高卖点退出。记下这个价位作为
-            # 锚点：之后只有价格回落到它附近或更低，才允许重新建仓（不追高）。
-            if qty <= 1e-12:
-                self.db.set_runtime_stat(f"grid_exit:{sym}", fill_price)
 
-        # 卖出时记录本笔盈亏与盈利率（相对该笔成本），供成交记录直接展示
-        trade_pnl = 0.0
-        trade_rate = 0.0
-        if side == "sell":
-            avg_now = (cost + fill_price * amt) / (qty + amt) if (qty + amt) > 0 else fill_price
-            trade_pnl = (fill_price - avg_now) * amt
-            base = avg_now * amt
-            trade_rate = (trade_pnl / base) if base > 0 else 0.0
+        # 持仓数量与成本统一从账本重算（账本是唯一真源）
+        qty, cost = self.db.lots_qty_cost(sym)
+        if qty <= 1e-12:
+            qty, cost = 0.0, 0.0
+            if side == "sell":
+                # 清仓 = 网格在本轮最高卖点退出。记锚点：之后只有价格回落到
+                # 它附近或更低，才允许重新建仓（不追高）。
+                self.db.set_runtime_stat(f"grid_exit:{sym}", fill_price)
+        self.db.upsert_grid_state(sym, base_qty=qty, total_cost=cost)
+
         self.db.insert_order({
             "mode": "grid", "symbol": sym, "side": side, "type": f"grid_{side}",
             "price": fill_price, "amount": amt, "cost": round(fill_price * amt, 6),
@@ -933,6 +970,7 @@ class GridStrategy:
         self.db.replace_grid_levels(sym, [])
         self.db.conn.execute("DELETE FROM grid_state WHERE symbol=?", (sym,))
         self.db.conn.commit()
+        self.db.clear_lots(sym)
         self.db.set_runtime_stat(f"tp_high:{sym}", 0)
         log.info(f"GRID {sym}: 存货已清空，网格退役（不再纳入管理）")
 
@@ -988,6 +1026,15 @@ class GridStrategy:
                     {"idx": l["level_idx"], "price": l["price"], "side": l["side"],
                      "amount": l["amount"], "status": l["status"]}
                     for l in lv if l["status"] == "pending"
+                ],
+                # 逐笔持仓账本：每一笔未卖出的买入，各自成本与浮盈（前端可展开）
+                "lots": [
+                    {"price": round(l["price"], 8), "qty": l["qty"],
+                     "remaining": l["remaining"], "ts": l["ts"], "note": l["note"],
+                     "unrealized": round((price - l["price"]) * l["remaining"], 6),
+                     "unrealized_rate": round((price - l["price"]) / l["price"], 6)
+                     if l["price"] > 0 else 0}
+                    for l in self.db.get_lots(sym)
                 ],
             })
         cfg = self.cfg

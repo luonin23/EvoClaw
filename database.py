@@ -31,6 +31,7 @@ class Database:
             "save_config", "seed_config", "set_runtime_stat", "insert_order",
             "update_order_status", "upsert_grid_state", "replace_grid_levels",
             "insert_grid_level", "fill_grid_level", "clear_grid_order_id", "mark_grid_level",
+            "add_lot", "consume_lots", "reset_lots", "clear_lots",
             "upsert_dca_state", "insert_dca_record",
             "backup_to", "checkpoint",
         ):
@@ -92,6 +93,20 @@ class Database:
                 sell_count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- 网格逐笔持仓账本：每一笔买入单独记一行，卖出按价格配对核销。
+            -- 开仓/加仓/平仓来回多次时，每笔卖出的盈亏都能追溯到它对应的
+            -- 那笔买入；且「卖价 > 该笔买入价」→ 单笔必然盈利。
+            CREATE TABLE IF NOT EXISTS grid_lots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                price REAL NOT NULL,              -- 该笔买入成交价（成本）
+                qty REAL NOT NULL,                -- 原始数量
+                remaining REAL NOT NULL,          -- 剩余未卖出数量
+                note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_grid_lots_sym ON grid_lots(symbol, remaining);
 
             -- 网格挂单/成交明细
             CREATE TABLE IF NOT EXISTS grid_levels (
@@ -335,6 +350,73 @@ class Database:
                 (status, order_id, amount,
                  datetime.now(timezone.utc).isoformat() if status == "filled" else "",
                  symbol, level_idx))
+        self.conn.commit()
+
+    # ===== 逐笔持仓账本 =====
+    def add_lot(self, symbol: str, price: float, qty: float, note: str = ""):
+        """记录一笔买入（开仓/加仓）。"""
+        self.conn.execute(
+            "INSERT INTO grid_lots (symbol, ts, price, qty, remaining, note) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (symbol, datetime.now(timezone.utc).isoformat(),
+             float(price), float(qty), float(qty), note))
+        self.conn.commit()
+
+    def get_lots(self, symbol: str, only_open: bool = True) -> list[dict]:
+        sql = ("SELECT id, symbol, ts, price, qty, remaining, note FROM grid_lots "
+               "WHERE symbol=?" + (" AND remaining > 0.0000001" if only_open else "")
+               + " ORDER BY id")
+        cols = ["id", "symbol", "ts", "price", "qty", "remaining", "note"]
+        return [dict(zip(cols, r)) for r in self.conn.execute(sql, (symbol,)).fetchall()]
+
+    def lots_qty_cost(self, symbol: str) -> tuple[float, float]:
+        """账本里的持仓数量与成本（唯一真源）。"""
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(remaining), 0), COALESCE(SUM(remaining * price), 0) "
+            "FROM grid_lots WHERE symbol=?", (symbol,)).fetchone()
+        return float(row[0] or 0), float(row[1] or 0)
+
+    def consume_lots(self, symbol: str, sell_price: float, amount: float) -> list[tuple]:
+        """卖出一笔，按「低于卖价者中价格最高优先」核销买入批次。
+
+        这样每笔卖出核销的就是「离它最近、且在它下方」的那一批买入 —— 正是
+        网格里下一档的买入，因此单笔盈亏必然为正。返回 [(买入价, 核销数量)]，
+        账本不足时返回部分，由调用方按持仓均价兜底。
+        """
+        left = float(amount)
+        out: list[tuple] = []
+        if left <= 0:
+            return out
+        rows = self.conn.execute(
+            "SELECT id, price, remaining FROM grid_lots "
+            "WHERE symbol=? AND remaining > 0.0000001 AND price < ? "
+            "ORDER BY price DESC, id DESC", (symbol, float(sell_price))).fetchall()
+        for lot_id, lp, rem in rows:
+            if left <= 1e-9:
+                break
+            take = min(float(rem), left)
+            self.conn.execute("UPDATE grid_lots SET remaining = remaining - ? WHERE id=?",
+                              (take, lot_id))
+            self.conn.execute("DELETE FROM grid_lots WHERE id=? AND remaining <= 0.0000001",
+                              (lot_id,))
+            out.append((float(lp), take))
+            left -= take
+        self.conn.commit()
+        return out
+
+    def reset_lots(self, symbol: str, qty: float, price: float, note: str = "对账重建"):
+        """把账本重建成一笔（对账/迁移用）。"""
+        self.conn.execute("DELETE FROM grid_lots WHERE symbol=?", (symbol,))
+        if qty > 0 and price > 0:
+            self.conn.execute(
+                "INSERT INTO grid_lots (symbol, ts, price, qty, remaining, note) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (symbol, datetime.now(timezone.utc).isoformat(),
+                 float(price), float(qty), float(qty), note))
+        self.conn.commit()
+
+    def clear_lots(self, symbol: str):
+        self.conn.execute("DELETE FROM grid_lots WHERE symbol=?", (symbol,))
         self.conn.commit()
 
     # ===== 定投 =====
