@@ -9,6 +9,7 @@
 """
 
 import logging
+import math
 import time
 
 from exchange_client import _throttle
@@ -53,15 +54,18 @@ class GridStrategy:
         if ts and (now - ts) < interval:
             # 沿用已落库的选币结果，但按当前 max_symbols 截断
             # （改了 max_symbols 不必等 6 小时才生效）
-            n = int(cfg.get("max_symbols", 3) or 3)
-            saved = (self.config.get("grid_selection") or [])[:n]
+            n = int(cfg.get("max_symbols", 0) or 0)
+            saved = (self.config.get("grid_selection") or [])
+            if n > 0:
+                saved = saved[:n]
             if saved:
                 self._selection = saved
                 self._sel_ts = ts
                 return
         size = float(cfg.get("size_usdt", 0) or 0)
+        n = int(cfg.get("max_symbols", 0) or 0)
         picks = await select_grid_symbols(
-            self.client, cfg, size, int(cfg.get("max_symbols", 3) or 3))
+            self.client, cfg, size, n if n > 0 else 999)
         if picks:
             self._selection = picks
             self._sel_ts = now
@@ -74,7 +78,7 @@ class GridStrategy:
         """当前要跑网格的标的清单。auto_select 时来自选币结果，否则来自手写配置。"""
         cfg = self.cfg
         if cfg.get("auto_select"):
-            grids = int(cfg.get("grids", 9) or 9)
+            grids = int(cfg.get("grids", 0) or 0)
             size = float(cfg.get("size_usdt", 0) or 0)
             fixed = float(cfg.get("auto_range_pct", 0) or 0)
             out = []
@@ -170,9 +174,24 @@ class GridStrategy:
                 pct = float(spec.get("auto_range_pct") or self.cfg.get("auto_range_pct", 0.25) or 0.25)
                 lower, upper = price * (1 - pct), price * (1 + pct)
 
-        grids = int(spec.get("grids") or 10)
+        grids = int(spec.get("grids") or 0)
         size_usdt = float(spec.get("size_usdt") or 0)
-        if size_usdt <= 0 or grids < 2:
+        if size_usdt <= 0:
+            return
+        # 档位自动推导：档距不该由人随手定，应由**币的波动率**决定。
+        # 目标档距 = 日振幅 × step_ratio（默认 0.3），即价格一天内大约穿越
+        # 一个档位数次 —— 既不会因档距过大长期等不到平仓，也不会因过小被手续费吃掉。
+        # 配置里把 grids 设为 0（或留空）即启用自动推导；填正数则用固定档位。
+        if grids < 2:
+            pct0 = float(spec.get("auto_range_pct") or self.cfg.get("auto_range_pct", 0) or 0)
+            if pct0 <= 0:
+                pct0 = max(0.04, min(0.15, float(spec.get("range") or 0.06)))
+            ratio0 = float(self.cfg.get("step_ratio", 0.3) or 0.3)
+            step_target = pct0 * ratio0
+            span = (1 + pct0) / (1 - pct0)
+            grids = int(round(math.log(span) / math.log(1 + step_target))) + 1
+            grids = max(2, min(int(self.cfg.get("max_grids", 15) or 15), grids))
+        if grids < 2:
             return
         need_init = (
             st is None
@@ -187,7 +206,8 @@ class GridStrategy:
         if not need_init and st:
             lv_count = len(self.db.get_grid_levels(sym))
             if (lv_count == 0 and float(st.get("base_qty", 0) or 0) <= 1e-12
-                    and (st.get("status") or "active") == "active"):
+                    and (st.get("status") or "active") == "active"
+                    and await self._reentry_ok(sym, price)):
                 last_fail = float(self.db.get_runtime_stat(f"grid_init_fail:{sym}", 0) or 0)
                 if time.time() - last_fail >= 60:
                     log.info(f"GRID {sym}: 检测到空壳网格（无挂单无持仓），重新初始化")
@@ -196,10 +216,18 @@ class GridStrategy:
                     return
 
         if need_init:
-            await self._init_grid(sym, lower, upper, grids, size_usdt, price)
-            st = self.db.get_grid_state(sym)
-            if not st:
-                return
+            # 空仓时的初始化 = 全新建仓（含「掉出名单后被重新选中」的币）。
+            # 先过「不追高」闸门：高于上次清仓价就不建仓，等回落。
+            flat = (st is None) or float(st.get("base_qty", 0) or 0) <= 1e-12
+            if flat and not await self._reentry_ok(sym, price):
+                if st is None:
+                    return            # 无任何状态可维护，直接等下一轮
+                need_init = False     # 保留旧网格（下方买单仍在），继续正常维护
+            else:
+                await self._init_grid(sym, lower, upper, grids, size_usdt, price)
+                st = self.db.get_grid_state(sym)
+                if not st:
+                    return
 
         # 与交易所对账持仓数量与成本：交易所为准。
         # 若数量明显不符，说明漏记了成交（如外部干预/离线成交），按交易所均价重置，
@@ -318,6 +346,10 @@ class GridStrategy:
                 log.warning(f"GRID {sym}: 价格 {price:.6f} 跌破区间且低于成本 {ex_entry:.6f}，"
                             f"按「不设止损」继续持有等待（不重排网格）{s}")
             return False
+        # 空仓时向上重排 = 在更高价买回底仓（追高）→ 交给「不追高」闸门裁决，
+        # 价格没回落到上次清仓价附近就保持空仓等待。
+        if ex_qty <= 0 and price > upper and not await self._reentry_ok(sym, price):
+            return False
 
         pct = float(spec.get("auto_range_pct") or cfg.get("auto_range_pct", 0.06) or 0.06)
         log.warning(f"GRID {sym}: 价格 {price:.6f} 突破区间 {lower:.6f}~{upper:.6f} → "
@@ -428,6 +460,9 @@ class GridStrategy:
             if not self.client.dry_run:
                 cur = await self._current_position(sym)
                 delta = base_amt - cur
+                # 建仓也要过敞口闸门：多标的并行时，防止一次性把敞口打满
+                if delta > 0 and not await self._exposure_ok(sym, await self._equity()):
+                    return
                 if abs(delta) >= 1:
                     traded_side = "buy" if delta > 0 else "sell"
                     traded_amt = abs(delta)
@@ -452,6 +487,9 @@ class GridStrategy:
                     "note": "网格底仓" if traded_side == "buy" else "网格底仓调整",
                 })
             self.db.upsert_grid_state(sym, base_qty=base_amt, total_cost=base_amt * fill)
+            # 建仓完成 → 消费掉「不追高」锚点：本轮重新入场已落地，
+            # 下一次清仓时再记录新锚点。
+            self.db.set_runtime_stat(f"grid_exit:{sym}", 0)
             created += 1
 
         # 挂单：买单（现价下方）+ 卖单（用上面算好的量，保证底仓=卖单总量）
@@ -507,6 +545,10 @@ class GridStrategy:
             cost = max(0.0, cost - avg * amt)
             self.db.upsert_grid_state(sym, base_qty=qty, total_cost=cost, realized_pnl=realized,
                                       sell_count=int(st.get("sell_count", 0) or 0) + 1)
+            # 清仓（持仓归零）= 网格在本轮最高卖点退出。记下这个价位作为
+            # 锚点：之后只有价格回落到它附近或更低，才允许重新建仓（不追高）。
+            if qty <= 1e-12:
+                self.db.set_runtime_stat(f"grid_exit:{sym}", fill_price)
 
         # 卖出时记录本笔盈亏与盈利率（相对该笔成本），供成交记录直接展示
         trade_pnl = 0.0
@@ -686,6 +728,29 @@ class GridStrategy:
             if s is not None:
                 log.warning(f"GRID {sym}: 已不再满足入选条件（{why}）→ 暂停买入{s}")
         return ok
+
+    async def _reentry_ok(self, sym: str, price: float) -> bool:
+        """「不追高」闸门：空仓后重新建仓前的价格复核。
+
+        场景：价格向上突破区间 → 卖单全部成交 → 空仓。此时若按「动态跟随」
+        在现价重新布网，就会在**比刚卖出更高的价位**买回底仓；一旦回落立刻
+        由盈转亏。网格的利润来自低买高卖，所以清仓后不该追高。
+
+        规则：以**上次清仓价**为锚，只有价格回落到 锚 × (1 + reentry_tol) 以内
+        才允许重新建仓；否则保持空仓等待（不追高、也不摊平）。首次交易
+        （无锚点）不受限制。成功建仓后锚点清零，等待下一次清仓重新记录。
+        """
+        anchor = float(self.db.get_runtime_stat(f"grid_exit:{sym}", 0) or 0)
+        if anchor <= 0:
+            return True
+        tol = float(self.cfg.get("reentry_tol", 0.003) or 0)
+        if price <= anchor * (1 + tol):
+            return True
+        self._warn_once(
+            f"grid_chase:{sym}",
+            f"GRID {sym}: 上次清仓价 {anchor:.6g}，现价 {price:.6g} 更高 → "
+            f"不追高，空仓等待回落")
+        return False
 
     async def _has_free_margin(self, sym: str, lv: dict) -> bool:
         """挂买单前检查可用保证金，不够就跳过（否则每次都会 -2019 刷屏）。"""
