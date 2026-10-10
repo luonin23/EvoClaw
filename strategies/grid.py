@@ -51,7 +51,10 @@ class GridStrategy:
         now = time.time()
         ts = float(self.db.get_runtime_stat("grid_selection_ts", 0) or 0)
         if ts and (now - ts) < interval:
-            saved = self.config.get("grid_selection") or []
+            # 沿用已落库的选币结果，但按当前 max_symbols 截断
+            # （改了 max_symbols 不必等 6 小时才生效）
+            n = int(cfg.get("max_symbols", 3) or 3)
+            saved = (self.config.get("grid_selection") or [])[:n]
             if saved:
                 self._selection = saved
                 self._sel_ts = ts
@@ -200,6 +203,11 @@ class GridStrategy:
         pts = grid_points(lower, upper, grids)
         if not pts:
             return
+        # 实盘：先把该标的设为逐仓并设好杠杆，再挂单
+        # （逐仓 = 单仓爆仓只损失该仓保证金，不牵连整个账户）
+        if not self.client.dry_run:
+            await self.client.set_margin_mode(sym, "isolated")
+            await self.client.set_leverage(sym, int(self.cfg.get("leverage", 3) or 3))
         # 实盘：重建前先撤掉交易所上的旧挂单，避免留下孤儿单
         if not self.client.dry_run:
             for lv in self.db.get_grid_levels(sym):
@@ -230,13 +238,27 @@ class GridStrategy:
                     log.warning(f"GRID {sym}: 单格 {size_usdt:.2f}U 买不起「一手」"
                                 f"（最小约 {need:.1f}U/手）→ 跳过。请加大单格金额或换低价标的{s}")
                 return
+            # 底仓以「市价成交价」校验最小名义值：
+            # 按档位价算出的数量在更低的市价下可能不足 5U，会被 -4164 拒绝。
+            min_now = self.client.min_amount(sym, price, "futures")
+            if min_now > 0:
+                base_amt = max(base_amt, min_now)
+            # 实盘必须真正买入底仓 —— 否则会「有卖单却没有持仓」，卖单全部失败
+            fill = price
+            if not self.client.dry_run:
+                res = await self.client.create_market_order(sym, "buy", base_amt, "futures",
+                                                            position_side="LONG")
+                if not res:
+                    log.error(f"GRID {sym}: 底仓买入失败，放弃本次初始化")
+                    return
+                fill = float(res.get("price") or price)
             self.db.insert_order({
                 "mode": "grid", "symbol": sym, "side": "buy", "type": "grid_base",
-                "price": price, "amount": base_amt, "cost": round(base_amt * price, 6),
-                "fee": round(base_amt * price * 0.0005, 6),
+                "price": fill, "amount": base_amt, "cost": round(base_amt * fill, 6),
+                "fee": round(base_amt * fill * 0.0005, 6),
                 "dry_run": self.client.dry_run, "note": "网格底仓",
             })
-            self.db.upsert_grid_state(sym, base_qty=base_amt, total_cost=base_amt * price)
+            self.db.upsert_grid_state(sym, base_qty=base_amt, total_cost=base_amt * fill)
             created += 1
 
         for i, p in enumerate(pts):
@@ -349,7 +371,8 @@ class GridStrategy:
                 if not await self._exposure_ok(sym, equity):
                     continue
             res = await self.client.create_limit_order(
-                sym, lv["side"], float(lv["amount"]), float(lv["price"]), "futures")
+                sym, lv["side"], float(lv["amount"]), float(lv["price"]), "futures",
+                position_side="LONG")
             if res:
                 self.db.conn.execute("UPDATE grid_levels SET order_id=? WHERE id=?",
                                      (res["order_id"], lv["id"]))
@@ -419,7 +442,8 @@ class GridStrategy:
                 ],
             })
         cfg = self.cfg
-        sel = self._selection or (self.config.get("grid_selection") or [])
+        n = int(cfg.get("max_symbols", 3) or 3)
+        sel = (self._selection or (self.config.get("grid_selection") or []))[:n]
         return {
             "symbols": out,
             "auto_select": bool(cfg.get("auto_select")),

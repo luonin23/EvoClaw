@@ -259,6 +259,19 @@ class ExchangeClient:
         return out
 
     # ===== 交易 =====
+    async def set_margin_mode(self, user_symbol: str, mode: str = "isolated"):
+        """逐仓：单仓爆仓只损失该仓保证金，不会牵连整个账户。"""
+        if self.dry_run:
+            return
+        try:
+            await self._safe_call(
+                self.futures.set_margin_mode(mode, self.to_ccxt(user_symbol, "futures")),
+                timeout=10)
+        except Exception as e:
+            # 已是该模式时交易所会报错，属正常
+            if "-4046" not in str(e) and "No need to change" not in str(e):
+                log.warning(f"set_margin_mode {user_symbol} {mode} failed: {e}")
+
     async def set_leverage(self, user_symbol: str, leverage: int):
         if self.dry_run:
             return
@@ -271,13 +284,20 @@ class ExchangeClient:
 
     async def create_limit_order(self, user_symbol: str, side: str, amount: float,
                                  price: float, kind: str = "futures",
-                                 reduce_only: bool = False) -> dict | None:
-        """限价单。dry_run 时返回模拟成交结构（不触网）。"""
+                                 reduce_only: bool = False,
+                                 position_side: str = "LONG") -> dict | None:
+        """限价单。dry_run 时返回模拟成交结构（不触网）。
+
+        本账户为**对冲模式**，合约单必须带 positionSide，否则报 -4061。
+        网格是「只做多」：所有单 positionSide=LONG（SELL 即平多）。
+        """
         if self.dry_run:
             return {"order_id": f"dry-{int(time.time()*1000)}", "price": price,
                     "amount": amount, "dry_run": True}
         ex = self.futures if kind == "futures" else self._spot
         params = {}
+        if kind == "futures":
+            params["positionSide"] = position_side.upper()
         if kind == "futures" and reduce_only:
             params["reduceOnly"] = True
         try:
@@ -297,15 +317,19 @@ class ExchangeClient:
             return None
 
     async def create_market_order(self, user_symbol: str, side: str, amount: float,
-                                  kind: str = "futures") -> dict | None:
+                                  kind: str = "futures",
+                                  position_side: str = "LONG") -> dict | None:
         if self.dry_run:
             px = self.last_price(user_symbol) or await self.ensure_price(user_symbol)
             return {"order_id": f"dry-{int(time.time()*1000)}", "price": px,
                     "amount": amount, "dry_run": True}
         ex = self.futures if kind == "futures" else self._spot
+        params = {"positionSide": position_side.upper()} if kind == "futures" else {}
         try:
+            # 注意 ccxt 签名：create_order(symbol, type, side, amount, price, params)
+            # 市价单 price 必须传 None，否则 params 会被当成 price 丢弃 → -4061
             o = await self._safe_call(ex.create_order(
-                self.to_ccxt(user_symbol, kind), "market", side, amount), timeout=20)
+                self.to_ccxt(user_symbol, kind), "market", side, amount, None, params), timeout=20)
             px = float(o.get("average") or o.get("price") or 0 or 0)
             if px <= 0:
                 px = await self.ensure_price(user_symbol)
