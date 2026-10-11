@@ -603,12 +603,15 @@ class GridStrategy:
                     f"（24h 区间 {pos*100:.0f}%，单次·最小仓·带止损·不加仓）")
 
     async def _cancel_short_stop(self, sym: str):
-        """撤掉该标的上的条件单（空单的止损单），按类型识别，不依赖记录单号。"""
+        """撤掉空单的止损单。
+
+        注意：交易所的条件单是「算法单」，普通挂单接口看不到、也撤不掉，
+        必须走算法单接口 —— 否则平仓后止损单会残留，之后触发会反手开多。
+        """
         try:
-            for o in await self.client.fetch_open_orders(sym, "futures"):
-                t = str(o.get("type") or "").upper()
-                if o.get("side") == "buy" and "STOP" in t:
-                    await self.client.cancel_order(str(o.get("id")), sym, "futures")
+            n = await self.client.cancel_algo_orders(sym)
+            if n:
+                log.info(f"GRID {sym}: 已撤销 {n} 条交易所条件单")
         except Exception as e:
             log.warning(f"GRID {sym}: 撤止损单失败: {e}")
 

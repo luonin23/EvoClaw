@@ -391,6 +391,35 @@ class ExchangeClient:
                 log.warning(f"Stop order failed {user_symbol} {side} {amount}@{stop_price}: {e}{s}")
             return None
 
+    async def fetch_open_algo_orders(self, user_symbol: str) -> list[dict]:
+        """条件单（止损/止盈）走的是币安「算法单」接口，**不在** fetch_open_orders 里。"""
+        if self.dry_run:
+            return []
+        try:
+            rows = await self._safe_call(
+                self.futures.fapiPrivateGetOpenAlgoOrders({}), timeout=15)
+        except Exception as e:
+            log.warning(f"fetch open algo orders failed: {e}")
+            return []
+        return [o for o in (rows or []) if o.get("symbol") == user_symbol]
+
+    async def cancel_algo_orders(self, user_symbol: str) -> int:
+        """撤销该标的的全部算法单（条件单）。普通 cancel_order 撤不掉它们。"""
+        if self.dry_run:
+            return 0
+        n = 0
+        for o in await self.fetch_open_algo_orders(user_symbol):
+            algo_id = o.get("algoId")
+            if not algo_id:
+                continue
+            try:
+                await self._safe_call(
+                    self.futures.fapiPrivateDeleteAlgoOrder({"algoId": algo_id}), timeout=15)
+                n += 1
+            except Exception as e:
+                log.warning(f"cancel algo order {algo_id} ({user_symbol}) failed: {e}")
+        return n
+
     async def cancel_order(self, order_id: str, user_symbol: str, kind: str = "futures") -> bool:
         if self.dry_run or not order_id or order_id.startswith("dry-"):
             return True
