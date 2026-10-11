@@ -141,6 +141,10 @@ tr:hover td{background:var(--hover)}
 .gc-ord span{padding:2px 9px;border-radius:5px;border:1px solid var(--bd);color:var(--t3)}
 .gc-ord .b{border-color:rgba(0,208,132,.3);color:var(--accent);background:rgba(0,208,132,.05)}
 .gc-ord .sl{border-color:rgba(255,71,87,.3);color:var(--error);background:rgba(255,71,87,.05)}
+/* 宽屏：轴内已全量标注每个档位（数量+价格）→ 下方标签条纯属重复，隐藏。
+   窄屏轴内标注收起，标签条是唯一能看到档位明细的地方，故保留。
+   （必须放在 .gc-ord 基础规则之后，同优先级下后者才生效） */
+@media (min-width:721px){ .gc-ord{display:none} }
 .gc-lots{margin-top:8px;border-top:1px dashed var(--bd);padding-top:7px}
 .gc-lots-h{font-size:10.5px;color:var(--t3);margin-bottom:5px}
 .lot{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;font-family:var(--mono);
