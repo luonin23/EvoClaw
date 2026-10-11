@@ -70,7 +70,7 @@ tr:hover td{background:var(--hover)}
 .gbar .px{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--warn);box-shadow:0 0 8px rgba(245,158,11,.7)}
 .gbar-lbl{display:flex;justify-content:space-between;font-size:10px;color:var(--t3);font-family:var(--mono)}
 /* 价格轴：成本线 / 现价线 / 买卖档 / 盈亏实心填充 */
-.gbar2{position:relative;height:34px;background:var(--surface);border:1px solid var(--bd);
+.gbar2{position:relative;height:52px;background:var(--surface);border:1px solid var(--bd);
   border-radius:6px;margin:26px 0 24px}
 .gbar2 .fill{position:absolute;top:0;bottom:0}
 .gbar2 .fill.g{background:linear-gradient(90deg,rgba(0,208,132,.30),rgba(0,208,132,.62));
@@ -78,6 +78,20 @@ tr:hover td{background:var(--hover)}
 .gbar2 .fill.r{background:linear-gradient(90deg,rgba(255,71,87,.62),rgba(255,71,87,.30));
   border-left:1px solid rgba(255,71,87,.8);border-right:1px solid rgba(255,71,87,.8)}
 .gbar2 .lvlz{position:absolute;top:6px;bottom:6px;width:2px}
+/* 窄屏：轴上的档位标注必然挤在一起 → 隐藏，改看下方「买/卖」档位条 */
+@media (max-width:720px){
+  .gbar2{height:34px;margin:22px 0 20px}
+  .gbar2 .lvlz span{display:none}
+  .gbar2 .edge{display:none}
+  .gbar2 .mark span{font-size:9px;padding:1px 4px}
+  .gc-ord{gap:6px;font-size:10.5px}
+  .gc-ord span{padding:2px 7px}
+  .lot{font-size:10px}
+  .lot .lp{min-width:56px}
+  .lot .lq{min-width:32px}
+  .lot .lr{white-space:nowrap}
+  .lot .ln{font-size:9px;min-width:0}
+}
 .gbar2 .lvlz.buy{background:rgba(0,208,132,.85)}
 .gbar2 .lvlz.sell{background:rgba(255,71,87,.85)}
 .gbar2 .lvlz span{position:absolute;top:50%;transform:translateY(-50%);
@@ -129,8 +143,8 @@ tr:hover td{background:var(--hover)}
 .gc-ord .sl{border-color:rgba(255,71,87,.3);color:var(--error);background:rgba(255,71,87,.05)}
 .gc-lots{margin-top:8px;border-top:1px dashed var(--bd);padding-top:7px}
 .gc-lots-h{font-size:10.5px;color:var(--t3);margin-bottom:5px}
-.lot{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;
-     padding:3px 0;color:var(--t2)}
+.lot{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;font-family:var(--mono);
+     font-size:11px;padding:3px 0;color:var(--t2)}
 .lot .lp{color:var(--t1);min-width:74px}
 .lot .lq{color:var(--t3);min-width:52px}
 .lot .lr{margin-left:auto;text-align:right}
@@ -246,6 +260,10 @@ const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
 const nf = (v,d=4)=>{const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—';};
 const nfP = (v,d=4)=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(d):'—';};
 const nfR = (v,d=2)=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+(n*100).toFixed(d)+'%':'—';};
+// 价格紧凑显示：按量级取有效位并去掉末尾 0（价格轴标签空间紧张，短一点少重叠）
+const nfpx = v=>{const n=Number(v);if(!Number.isFinite(n))return '—';
+  const a=Math.abs(n),d=a>=1000?2:a>=1?4:a>=0.01?5:6;
+  return n.toFixed(d).replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'');};
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 function authHeaders(){return PWD?{'X-Web-Password':PWD}:{};}
 async function api(p,opt){try{const r=await fetch(p,opt);return await r.json();}catch(e){return null;}}
@@ -346,21 +364,37 @@ async function loadGrid(){
       const isUp = px >= s.avg_price;
       fillHtml = '<div class="fill '+(isUp?'g':'r')+'" style="left:'+a.toFixed(2)+'%;width:'+Math.max(0.5,b-a).toFixed(2)+'%"></div>';
     }
+    // 档位标注防重叠：按 x 排序后分配到多条「泳道」，相邻挤在一起时自动换行。
+    const AXIS_W = Math.max(300, ($('gridBody')||{}).clientWidth || 600);
+    const LANES = [10, 26, 42];                 // 泳道标签上沿(px)，对应 .gbar2 高 52px
+    const laneRight = LANES.map(()=>-1e9);
     const lvlHtml = (s.levels||[]).slice().sort((a,b)=>a.price-b.price).map(l=>{
       const p = pctOf(l.price);
       const isSell = l.side === 'sell';
       // 卖单默认标注在右，>70% 翻到左侧；买单默认在左，<30% 翻到右侧
       const flip = isSell ? (p > 70) : (p < 30);
+      const txt = (isSell?'卖':'买')+' '+nf(l.amount,0)+' @ '+nfpx(l.price);
+      const w = txt.length * 5.5 + 12;          // 估算标签宽度
+      const cx = p/100 * AXIS_W;
+      const toRight = isSell ? !flip : flip;    // 标签在标记的哪一侧
+      const L = toRight ? cx + 5 : cx - 5 - w;
+      const R = toRight ? cx + 5 + w : cx - 5;
+      let lane = -1;
+      for (let i=0;i<LANES.length;i++){         // 找第一条放得下的泳道
+        if (L >= laneRight[i] + 8){ lane = i; break; }
+      }
+      if (lane < 0) lane = laneRight.indexOf(Math.min(...laneRight));  // 都放不下 → 选最空的一条
+      laneRight[lane] = Math.max(laneRight[lane], R);
       return '<div class="lvlz '+(isSell?'sell':'buy')+(flip?' flip':'')+'" style="left:'+p.toFixed(2)+'%">'
-        + '<span>'+(isSell?'卖':'买')+' '+nf(l.amount,0)+' 张 @ '+nf(l.price,6)+'</span></div>';
+        + '<span style="top:'+LANES[lane]+'px">'+esc(txt)+'</span></div>';
     }).join('');
     const costMark = costPct !== null
-      ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nf(s.avg_price,6)+'</span></div>' : '';
+      ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nfpx(s.avg_price)+'</span></div>' : '';
     const axisHtml = '<div class="gbar2">'
-      + '<div class="edge" style="left:2%">'+nf(dLo,6)+'</div>'
-      + '<div class="edge" style="left:98%">'+nf(dHi,6)+'</div>'
+      + '<div class="edge" style="left:2%">'+nfpx(dLo)+'</div>'
+      + '<div class="edge" style="left:98%">'+nfpx(dHi)+'</div>'
       + fillHtml + lvlHtml + costMark
-      + '<div class="mark price" style="left:'+pxPct.toFixed(2)+'%"><span>现价 '+nf(px,6)+'</span></div>'
+      + '<div class="mark price" style="left:'+pxPct.toFixed(2)+'%"><span>现价 '+nfpx(px)+'</span></div>'
       + '</div>';
 
     html += '<div class="gcard '+cardCls+'">'
