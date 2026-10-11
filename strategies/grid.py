@@ -300,6 +300,11 @@ class GridStrategy:
                      f"补记 {bq:.0f} 张")
 
         draining = (st.get("status") or "active") == "draining"
+        if draining:
+            # 只卖不买：撤掉全部买单（交易所 + DB），只保留覆盖持仓的卖单。
+            # 幂等 —— 没有买单时零开销。若不撤，交易所上的买单在价格下跌时
+            # 仍会真实成交加仓，与「只卖不买」的语义相悖。
+            await self._cancel_buy_orders(sym)
         await self._check_fills(sym, price, draining)
         if draining:
             st2 = self.db.get_grid_state(sym) or {}
@@ -318,6 +323,24 @@ class GridStrategy:
                 draining = (st.get("status") or "active") == "draining"
             await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
+
+    async def _cancel_buy_orders(self, sym: str):
+        """撤销该标的所有待成交买单（交易所挂单 + DB 档位），卖单不动。
+
+        用于「只卖不买」(draining)：标的掉出选币清单后，不再允许任何新开敞口。
+        之前只改状态位不撤单，交易所上的旧买单下跌时仍会真实成交 —— 表面在
+        收缩，实际在加仓。卖单覆盖着原仓位，保留不动。
+        """
+        levels = [l for l in self.db.get_grid_levels(sym)
+                  if l["status"] == "pending" and l["side"] == "buy"]
+        if not levels:
+            return
+        for lv in levels:
+            if lv.get("order_id") and not self.client.dry_run:
+                await self.client.cancel_order(lv["order_id"], sym, "futures")
+            self.db.conn.execute("DELETE FROM grid_levels WHERE id=?", (lv["id"],))
+        self.db.conn.commit()
+        log.info(f"GRID {sym}: 只卖不买 → 已撤销 {len(levels)} 条买单（卖单保留）")
 
     async def _ensure_sell_coverage(self, sym: str, st: dict):
         """确保卖单总量覆盖当前持仓。
