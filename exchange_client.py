@@ -71,6 +71,7 @@ class ExchangeClient:
         self._reverse: dict = {}          # ccxt unified symbol -> user symbol
         self._prices: dict = {}           # user symbol -> last price
         self._price_ts: dict = {}         # user symbol -> monotonic ts
+        self._hl: dict = {}               # user symbol -> (24h high, 24h low)
         self._closed = False
         self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
         self.notional_safety = float(config.get("order_notional_safety", 1.02) or 1.02)
@@ -151,6 +152,31 @@ class ExchangeClient:
                 us = self.user_symbol(sym)
                 self._prices[us] = float(t["last"])
                 self._price_ts[us] = ts
+                self._store_hl(us, t)
+
+    def _store_hl(self, user_symbol: str, t: dict):
+        try:
+            hi = float(t.get("high") or 0)
+            lo = float(t.get("low") or 0)
+            if hi > 0 and lo > 0 and hi > lo:
+                self._hl[user_symbol] = (hi, lo)
+        except (TypeError, ValueError):
+            pass
+
+    def range_pos(self, user_symbol: str) -> float | None:
+        """现价在 24h 区间中的位置：0=最低点，1=最高点；无数据返回 None。
+
+        用来判断「现在是高位还是低位」——选币时振幅已经很大，但程序并不知道
+        现价处在当日波动的顶部还是底部，这个指标就是那个代理量。
+        """
+        hl = self._hl.get(user_symbol)
+        p = self._prices.get(user_symbol)
+        if not hl or not p or p <= 0:
+            return None
+        hi, lo = hl
+        if hi <= lo:
+            return None
+        return max(0.0, min(1.0, (p - lo) / (hi - lo)))
 
     async def ensure_price(self, user_symbol: str, max_age: float = 30.0) -> float:
         now = time.monotonic()
@@ -164,6 +190,7 @@ class ExchangeClient:
             if last > 0:
                 self._prices[user_symbol] = last
                 self._price_ts[user_symbol] = now
+                self._store_hl(user_symbol, t)
                 return last
         except Exception as e:
             log.warning(f"ensure_price {user_symbol} failed: {e}")

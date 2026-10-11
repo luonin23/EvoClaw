@@ -435,6 +435,76 @@ class GridStrategy:
                               grids, size_usdt, price, draining)
         return True
 
+    async def _place_entry_orders(self, sym: str, pts: list, price: float,
+                                  size_usdt: float, lower: float, upper: float):
+        """空仓首次建仓：只用**限价买单**等回落，绝不市价追高。
+
+        三条规则：
+          1. 位置闸门 —— 现价在 24h 区间的位置 pos 越低越好；pos > entry_pos_max
+             就完全不建仓，等它跌回来。（选币时振幅已很大，但程序不知道现价是在
+             这波波动的顶部还是底部，pos 就是这个代理量。）
+          2. 挂单深度随 pos 变化 —— pos 越低越贴近现价（越容易成交）；越靠近门槛
+             要求越大的折价。总之下单位置越低越好。
+          3. 首单只用「最小可下金额」—— 把第一笔的风险压到最小；即使买错，浮亏也小，
+             后面的加仓才摊得动成本。
+        返回 True 表示已挂出建仓单。
+        """
+        cfg = self.cfg
+        if not cfg.get("entry_limit_only", True):
+            return False
+        pos = self.client.range_pos(sym)
+        pos_max = float(cfg.get("entry_pos_max", 0.6) or 0.6)
+        if pos is None:
+            self._warn_once(f"grid_nopos:{sym}",
+                            f"GRID {sym}: 无 24h 区间数据，暂不建仓（等下一轮）")
+            return False
+        if pos > pos_max:
+            self._warn_once(f"grid_wait:{sym}",
+                            f"GRID {sym}: 现价在 24h 区间 {pos*100:.0f}% 位置"
+                            f"（门槛 {pos_max*100:.0f}%，越低越好）→ 等待回落再建仓")
+            return False
+
+        # 档距直接从已算出的档位反推（相邻档位的价格间距）
+        band = d_min = 0.0
+        if len(pts) >= 2 and pts[0] > 0:
+            band = (pts[-1] / pts[0]) ** (1.0 / (len(pts) - 1)) - 1.0
+        d_min = float(cfg.get("entry_min_discount", 0.004) or 0.004)
+        if band <= d_min:
+            band = d_min
+        d = d_min + (band - d_min) * min(1.0, pos / pos_max)
+        entry_px = max(pts[0], price * (1 - d))
+        entry_px = self.client.round_price(sym, entry_px, "futures")
+        if entry_px <= 0 or entry_px >= price:
+            return False
+
+        # 首单：最小可下金额（把第一笔风险压到最小）
+        a0 = self.client.min_amount(sym, entry_px, "futures")
+        if a0 <= 0:
+            self._warn_once(f"grid_noentry:{sym}",
+                            f"GRID {sym}: 单格资金买不起「一手」，无法挂建仓单")
+            return False
+        idx0 = min(range(len(pts)), key=lambda i: abs(pts[i] - entry_px))
+        self.db.insert_grid_level(sym, idx0, entry_px, "buy", a0)
+
+        # 其余买档：低于建仓价的标准档位，按常规单格金额挂
+        for i, p in enumerate(pts):
+            if i == idx0 or p >= entry_px * 0.999:
+                continue
+            rp = self.client.round_price(sym, p, "futures")
+            a = self.client.amount_for_notional(sym, size_usdt, rp, "futures")
+            if a > 0:
+                self.db.insert_grid_level(sym, i, rp, "buy", a)
+
+        prev = self.db.get_grid_state(sym) or {}
+        self.db.upsert_grid_state(sym, lower=lower, upper=upper, grids=len(pts),
+                                  size_usdt=size_usdt, base_qty=0.0, total_cost=0.0,
+                                  realized_pnl=float(prev.get("realized_pnl", 0) or 0),
+                                  buy_count=int(prev.get("buy_count", 0) or 0),
+                                  sell_count=int(prev.get("sell_count", 0) or 0))
+        log.info(f"GRID {sym}: 挂限价建仓单 {a0:.0f} 张 @ {entry_px:.6g}"
+                 f"（现价 {price:.6g}，24h 区间 {pos*100:.0f}% 位置，折价 {d*100:.2f}%）")
+        return True
+
     async def _maybe_trail_tp(self, sym: str, st: dict, price: float, spec: dict) -> bool:
         """移动止盈：浮盈冲高后回撤 → 卖出剩余仓位，把利润落袋。
 
@@ -562,11 +632,31 @@ class GridStrategy:
             for lv in self.db.get_grid_levels(sym):
                 if lv["status"] == "pending" and lv.get("order_id"):
                     await self.client.cancel_order(lv["order_id"], sym, "futures")
+
+        half = max(1, grids // 2)
+        below = [p for p in pts if p < price][-half:]      # 现价下方最近的 half 档
+        above = [p for p in pts if p > price][:half]       # 现价上方最近的 half 档
+
+        # 不设止损：若已持仓，卖价永不低于持仓均价（决不亏损卖出）
+        ex_qty0, ex_entry0 = (await self._current_entry(sym)) if not self.client.dry_run else (0.0, 0.0)
+        min_tp = float(self.cfg.get("min_tp_ratio", 0.002) or 0)
+        min_sell = (ex_entry0 * (1 + min_tp)) if (ex_qty0 > 0 and ex_entry0 > 0) else 0.0
+
+        # ---- 空仓首次建仓：不市价买底仓，改为挂限价买单等回落 ----
+        # （市价买 = 在"现价"这个未知高低的点位上砸进最大一笔，是亏损之源）
+        lq0, _ = self.db.lots_qty_cost(sym)
+        if ex_qty0 <= 1e-12 and lq0 <= 1e-12 and not draining:
+            if self.cfg.get("entry_limit_only", True):
+                await self._place_entry_orders(sym, pts, price, size_usdt, lower, upper)
+                return
+            # 关掉择时开关时，退回旧的「市价买底仓」行为（见下方 sells/base 逻辑）
+
+        # ---- 已持仓 / draining：重建档位 ----
         # 先清空旧档位；但**保留已实现盈亏与买卖计数**——重建网格（如动态跟随）
         # 不能把历史收益抹掉。
         prev = self.db.get_grid_state(sym) or {}
         self.db.replace_grid_levels(sym, [])
-        # 持仓以账本为准（不要在这里硬写 0.0 —— 万一后面提前返回，持仓记录会
+        # 持仓以账本为准（不要硬写 0.0 —— 万一后面提前返回，持仓记录会
         # 与交易所脱节，卖单覆盖也随之失效）。
         _lq, _lc = self.db.lots_qty_cost(sym)
         self.db.upsert_grid_state(sym, lower=lower, upper=upper, grids=grids,
@@ -574,17 +664,6 @@ class GridStrategy:
                                   realized_pnl=float(prev.get("realized_pnl", 0) or 0),
                                   buy_count=int(prev.get("buy_count", 0) or 0),
                                   sell_count=int(prev.get("sell_count", 0) or 0))
-
-        half = max(1, grids // 2)
-        below = [p for p in pts if p < price][-half:]      # 现价下方最近的 half 档
-        above = [p for p in pts if p > price][:half]       # 现价上方最近的 half 档
-
-        # 先算好卖单（离现价最近的排最后，便于补量）
-        # 不设止损：若已持仓，卖价永不低于持仓均价（决不亏损卖出）
-        ex_qty0, ex_entry0 = (await self._current_entry(sym)) if not self.client.dry_run else (0.0, 0.0)
-        # 卖价下限 = 持仓均价 × (1 + 最小止盈率)，确保每笔卖出都真的盈利
-        min_tp = float(self.cfg.get("min_tp_ratio", 0.002) or 0)
-        min_sell = (ex_entry0 * (1 + min_tp)) if (ex_qty0 > 0 and ex_entry0 > 0) else 0.0
 
         sells = []   # [[level_idx, price, amount], ...]
         for i, p in enumerate(pts):
