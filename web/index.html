@@ -153,6 +153,12 @@ tr:hover td{background:var(--hover)}
 .lot .lq{color:var(--t3);min-width:52px}
 .lot .lr{margin-left:auto;text-align:right}
 .lot .ln{color:var(--t3);font-size:10px;min-width:64px;text-align:right}
+/* 空头腿：与多头网格并存，单独一块展示，避免与多单数据混淆 */
+.gc-short{margin-top:8px;border-top:1px dashed rgba(255,71,87,.4);padding-top:7px;
+  font-family:var(--mono);font-size:11px;color:var(--t2)}
+.gc-short .hd{color:var(--error);font-size:10.5px;margin-bottom:5px}
+.gc-short .row{display:flex;gap:14px;flex-wrap:wrap}
+.gc-short b{color:var(--t1);font-weight:600}
 .gc-liq{margin-top:9px;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.03);
   border:1px solid var(--bd);font-family:var(--mono);font-size:11px;color:var(--t3)}
 .gc-liq.danger{background:rgba(255,71,87,.12);border-color:rgba(255,71,87,.4);color:var(--error);font-weight:600}
@@ -344,6 +350,22 @@ async function loadGrid(){
             + '<span class="ln">'+esc(l.note||'')+'</span>'
           + '</div>').join('')
         + '</div>' : '';
+    // 空头腿（与多头网格并存）：单独一块，不和多单数据混在一起
+    const sh = s.short;
+    const shortHtml = sh
+      ? '<div class="gc-short">'
+        + '<div class="hd">空头腿 · ' + esc(sh.state)
+        + (sh.stop_on_exchange ? ' · 交易所止损已挂' : (sh.qty>0 ? ' · ⚠ 止损未挂(软件兜底)' : ''))
+        + '</div>'
+        + '<div class="row">'
+        + '<span>数量 <b>' + nf(sh.qty,0) + '</b> 张</span>'
+        + (sh.entry>0 ? '<span>入场 <b>' + nfpx(sh.entry) + '</b></span>' : '')
+        + (sh.stop>0 ? '<span>止损 <b>' + nfpx(sh.stop) + '</b></span>' : '')
+        + (sh.tp>0 ? '<span>止盈 <b>' + nfpx(sh.tp) + '</b></span>' : '')
+        + (sh.liq_price>0 ? '<span>强平 <b>' + nfpx(sh.liq_price) + '</b></span>' : '')
+        + (sh.qty>0 ? '<span>浮盈 <b class="'+(sh.unrealized>=0?'pos':'neg')+'">'+nfP(sh.unrealized,4)
+            + '</b> U (<span class="'+(sh.unrealized>=0?'pos':'neg')+'">'+nfR(sh.upnl_rate)+'</span>)</span>' : '')
+        + '</div></div>' : '';
     const liqDist = Math.abs(s.liq_distance||0);
     const liqCls = s.margin_mode!=='isolated' ? 'danger' : (liqDist < 0.25 ? 'danger' : (liqDist < 0.4 ? 'warn' : ''));
     const liqHtml = s.liq_price
@@ -421,6 +443,7 @@ async function loadGrid(){
       + axisHtml
       + ordHtml
       + lotsHtml
+      + shortHtml
       + liqHtml
       + '</div>';
   }

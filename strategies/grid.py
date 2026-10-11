@@ -1198,13 +1198,17 @@ class GridStrategy:
             positions = await self.client.get_positions()
         except Exception:
             return True
-        total = 0.0
+        # 同一标的的多空腿先对冲，再按标的绝对值求和。
+        # 否则多空并存时会把敞口算成两倍，凭空把自己卡住。
+        net: dict[str, float] = {}
         for p in positions:
             us = self.client.user_symbol(p.get("symbol", ""))
             mk = float(p.get("markPrice", 0) or p.get("entryPrice", 0) or 0)
             c = float(p.get("contracts", 0) or 0)
             cs = float(self.client.market_info(us, "futures").get("contractSize", 1) or 1)
-            total += mk * c * cs
+            sign = -1.0 if p.get("side") == "short" else 1.0
+            net[us] = net.get(us, 0.0) + sign * mk * c * cs
+        total = sum(abs(v) for v in net.values())
         if total / equity >= ratio:
             self._warn_once(f"grid_cap:{sym}",
                             f"GRID 敞口闸门：总名义 {total:.1f}U / 权益 {equity:.1f}U ≥ {ratio:.0f}倍，暂停买入")
@@ -1217,6 +1221,36 @@ class GridStrategy:
         if s is not None:
             log.warning(msg + s)
 
+    def _short_view(self, sym: str, price: float):
+        """空头腿的展示数据；该币从未参与空单则返回 None。
+
+        多单卡片只读多头腿的数据，空头腿单独走这里 —— 否则同币多空并存时
+        两边的强平价/浮盈会互相覆盖。
+        """
+        cfg = self.cfg
+        m = (getattr(self, "_meta_short", {}) or {}).get(sym) or {}
+        state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
+        done = self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0
+        qty = float(m.get("contracts", 0) or 0)
+        if qty <= 0 and state == 0 and not done:
+            return None
+        entry = float(m.get("entry", 0) or 0)
+        sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)
+        tp = float(cfg.get("short_tp_pct", 0.03) or 0.03)
+        return {
+            "qty": qty,
+            "entry": round(entry, 8),
+            "stop": round(entry * (1 + sl), 8) if entry > 0 else 0,
+            "tp": round(entry * (1 - tp), 8) if entry > 0 else 0,
+            "liq_price": float(m.get("liq_price", 0) or 0),
+            "unrealized": round(float(m.get("unrealized", 0) or 0), 4),
+            # 空头：价格跌才赚，所以盈利率 = (入场价 − 现价)/入场价
+            "upnl_rate": round((entry - price) / entry, 6) if entry > 0 else 0,
+            "stop_on_exchange": bool(self.db.get_runtime_stat(f"short_stop_oid:{sym}", 0)),
+            "state": "持仓中" if qty > 0 else ("挂单中" if state == 1 else "已平(不再开)"),
+            "done": done,
+        }
+
     def _retire(self, sym: str):
         """draining 且已卖光 → 从管理清单移除。"""
         self.db.replace_grid_levels(sym, [])
@@ -1228,20 +1262,26 @@ class GridStrategy:
 
     # ===== 前端状态 =====
     async def status(self) -> dict:
-        # 读取交易所持仓元数据（强平价 / 杠杆 / 保证金模式）—— 安全信息，必须可见
-        meta = {}
+        # 读取交易所持仓元数据（强平价 / 杠杆 / 保证金模式）—— 安全信息，必须可见。
+        # 多空腿分开存：同一个币可以同时有多单和空单，只按币种做键会互相覆盖。
+        metaL, metaS = {}, {}
         try:
             for p in await self.client.get_positions():
                 us = self.client.user_symbol(p.get("symbol", ""))
-                meta[us] = {
+                d = {
                     "liq_price": float(p.get("liquidationPrice", 0) or 0),
                     "leverage": p.get("leverage") or self.cfg.get("leverage"),
                     "margin_mode": p.get("marginMode") or "",
                     "unrealized": float(p.get("unrealizedPnl", 0) or 0),
                     "mark": float(p.get("markPrice", 0) or 0),
+                    "entry": float(p.get("entryPrice", 0) or 0),
+                    "contracts": float(p.get("contracts", 0) or 0),
                 }
+                (metaS if p.get("side") == "short" else metaL)[us] = d
         except Exception as e:
             log.warning(f"读取持仓元数据失败: {e}")
+        meta = metaL                  # 多单卡片只看多头腿
+        self._meta_short = metaS      # 空头腿单独给 _short_view 用
 
         out = []
         for st in self.db.get_grid_state(None) or []:
@@ -1288,6 +1328,8 @@ class GridStrategy:
                      if l["price"] > 0 else 0}
                     for l in self.db.get_lots(sym)
                 ],
+                # 空头腿（与多单并存；高位试空，单次/最小仓/带止损）
+                "short": self._short_view(sym, price),
             })
         cfg = self.cfg
         n = int(cfg.get("max_symbols", 0) or 0)          # 0 = 按资金自动
