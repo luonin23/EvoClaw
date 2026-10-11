@@ -77,7 +77,8 @@ DEFAULT_CONFIG = {
         # 同时跑几个标的：0/留空 = 按资金自动推导（推荐）——单标的占用 ≈ 档数×单格金额，
         # 并发数 = max_exposure_ratio×权益 / 单标的（夹 1~10）；>0 = 固定个数。
         "max_symbols": 0,
-        "refresh_hours": 6,            # 选币刷新周期
+        "refresh_min": 10,             # 选币刷新周期（分钟）；设为 0 则回落到 refresh_hours
+        "refresh_hours": 6,            # 旧字段（向后兼容，refresh_min>0 时不生效）
         "min_quote_volume": 100000000, # 24h 成交额下限（1 亿 U）
         "min_daily_range": 0.02,       # 24h 振幅下限 2%
         "max_daily_range": 0.20,       # 24h 振幅上限 20%

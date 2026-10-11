@@ -77,21 +77,27 @@ class GridStrategy:
         return max(1, min(10, int((equity * ratio) / per)))
 
     async def _refresh_selection(self, equity: float = 0.0):
-        """按配置周期重新选币（默认 6 小时一次）。
+        """按配置周期重新选币（默认每 10 分钟一次）。
 
         引擎每 tick 会新建策略实例，因此选币结果与时间戳必须落库，
         否则会在每个 tick 重扫全市场（拉取全部 ticker，代价很高）。
         max_symbols=0 表示自动：按资金推导上限，而非无限（否则会为
         买不起的标的反复建空壳网格）。
+
+        **粘性**：刷新很快时，排名每轮都会有几个名次的抖动；若每次都以新排名
+        为准，正在跑的网格会被反复踢成「只卖不买」，刚要积累的仓位被抖散。
+        所以已选中的标的只要**仍然合格**就原样保留，新选出的只用来补足名额。
         """
         cfg = self.cfg
-        interval = float(cfg.get("refresh_hours", 6) or 6) * 3600
+        interval = float(cfg.get("refresh_min", 0) or 0) * 60
+        if interval <= 0:
+            interval = float(cfg.get("refresh_hours", 6) or 6) * 3600
         now = time.time()
         n = int(cfg.get("max_symbols", 0) or 0)
         ts = float(self.db.get_runtime_stat("grid_selection_ts", 0) or 0)
         if ts and (now - ts) < interval:
             # 沿用已落库的选币结果，但按当前上限截断
-            # （改了 max_symbols / 资金变化不必等 6 小时才生效）
+            # （改了 max_symbols / 资金变化不必等一个周期才生效）
             saved = list(self.config.get("grid_selection") or [])
             limit = n if n > 0 else self._auto_symbol_cap(equity, saved)
             saved = saved[:limit] if limit > 0 else []
@@ -99,15 +105,26 @@ class GridStrategy:
                 self._selection = saved
                 self._sel_ts = ts
                 return
+
         size = float(cfg.get("size_usdt", 0) or 0)
         picks = await select_grid_symbols(
             self.client, cfg, size, n if n > 0 else 999)
-        if picks and n <= 0:
-            cap = self._auto_symbol_cap(equity, picks)
-            if len(picks) > cap:
-                log.info(f"选币：{len(picks)} 个合格，按资金自动取前 {cap} 个"
-                         f"（敞口上限 {self.cfg.get('max_exposure_ratio')}× 权益 {equity:.1f}U）")
-                picks = picks[:cap]
+        if not picks:
+            return
+        limit = max(1, n if n > 0 else self._auto_symbol_cap(equity, picks))
+
+        # 选币器返回的是**全部合格标的**（按分数排序），所以「仍在榜上」=
+        # 「仍然合格」。已在跑且仍合格的，优先保留。
+        prev_syms = [s.get("symbol") for s in (self.config.get("grid_selection") or [])
+                     if s.get("symbol")]
+        by_sym = {p["symbol"]: p for p in picks}
+        keep = [by_sym[s] for s in prev_syms if s in by_sym][:limit]
+        keepset = {k["symbol"] for k in keep}
+        merged = keep + [p for p in picks if p["symbol"] not in keepset]
+        if len(merged) > limit:
+            log.info(f"选币：{len(merged)} 个可用（其中 {len(keep)} 个为在跑标的保留），"
+                     f"按名额取前 {limit} 个")
+        picks = merged[:limit]
         if picks:
             self._selection = picks
             self._sel_ts = now
@@ -536,10 +553,9 @@ class GridStrategy:
             return                                   # 该币的空单额度已用完
         st = self.db.get_grid_state(sym) or {}
         if (st.get("status") or "active") == "draining":
-            return
-        if float(st.get("base_qty", 0) or 0) > 1e-12:
-            return                                   # 有多单 → 不反向（单币单向）
+            return                                   # 正在退出，不再新开任何仓位
 
+        # 允许多空同时存在（对冲模式）：做多网格与高位试空互不干扰，各管各的。
         sq, entry = await self._current_short(sym)
         state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
 
