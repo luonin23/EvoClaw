@@ -323,6 +323,12 @@ class GridStrategy:
                 draining = (st.get("status") or "active") == "draining"
             await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
+            # 高位试空（单币单向：有多单时 _maybe_short 内部自动跳过）
+            if not draining:
+                try:
+                    await self._maybe_short(sym, price)
+                except Exception as e:
+                    log.error(f"GRID {sym} 空单逻辑异常: {e}")
 
     async def _cancel_buy_orders(self, sym: str):
         """撤销该标的所有待成交买单（交易所挂单 + DB 档位），卖单不动。
@@ -504,6 +510,126 @@ class GridStrategy:
         log.info(f"GRID {sym}: 挂限价建仓单 {a0:.0f} 张 @ {entry_px:.6g}"
                  f"（现价 {price:.6g}，24h 区间 {pos*100:.0f}% 位置，折价 {d*100:.2f}%）")
         return True
+
+    # ===== 高位试空（单次 / 最小仓 / 必带止损 / 不加仓 / 平掉后不再开）=====
+    async def _current_short(self, sym: str):
+        """返回 (空头张数, 开仓均价)。"""
+        try:
+            for p in await self.client.get_positions():
+                if self.client.user_symbol(p.get("symbol", "")) == sym and p.get("side") == "short":
+                    return float(p.get("contracts", 0) or 0), float(p.get("entryPrice", 0) or 0)
+        except Exception as e:
+            log.warning(f"GRID {sym}: 读取空头持仓失败: {e}")
+        return 0.0, 0.0
+
+    async def _maybe_short(self, sym: str, price: float):
+        """价格到当日区间顶部时的单次试空。
+
+        用户定的规则：挂单开空、数量最小、只做一单、必带止损、不加仓，
+        平掉之后该币不再开空。与多单互斥（同一个币同时只能一个方向）。
+        默认关闭（short_enabled=false），需要先用最小仓在实盘验证一次。
+        """
+        cfg = self.cfg
+        if not cfg.get("short_enabled", False):
+            return
+        if self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0:
+            return                                   # 该币的空单额度已用完
+        st = self.db.get_grid_state(sym) or {}
+        if (st.get("status") or "active") == "draining":
+            return
+        if float(st.get("base_qty", 0) or 0) > 1e-12:
+            return                                   # 有多单 → 不反向（单币单向）
+
+        sq, entry = await self._current_short(sym)
+        state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
+
+        if state >= 2 and sq <= 1e-12:
+            # 空头已平（止损/止盈/交易所触发）→ 一次性用完，永不再开
+            await self._cancel_short_stop(sym)       # 清掉可能残留的止损单
+            self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
+            self.db.set_runtime_stat(f"short_state:{sym}", 0)
+            self.db.set_runtime_stat(f"short_done:{sym}", 1)
+            log.info(f"GRID {sym}: 空单已平仓 → 该币不再开空")
+            return
+        if sq > 1e-12:
+            await self._manage_short(sym, sq, entry or price, price)
+            return
+        if state == 1:
+            return                                   # 开空单还挂着，等它成交
+
+        # ---- state 0：判断要不要开空 ----
+        pos = self.client.range_pos(sym)
+        pos_min = float(cfg.get("short_pos_min", 0.85) or 0.85)
+        if pos is None or pos < pos_min:
+            return
+        # 要有"回落确认"：已经离开当日最高点一定幅度，而不是还在往上冲
+        hl = self.client._hl.get(sym)
+        confirm = float(cfg.get("short_confirm", 0.01) or 0.01)
+        if not hl or price > hl[0] * (1 - confirm):
+            self._warn_once(f"short_wait:{sym}",
+                            f"GRID {sym}: 现价在 24h 区间 {pos*100:.0f}%（高位）但尚未回落确认，等确认再试空")
+            return
+
+        offset = float(cfg.get("short_entry_offset", 0.002) or 0.002)
+        entry_px = self.client.round_price(sym, price * (1 + offset), "futures")
+        amt = self.client.min_amount(sym, entry_px, "futures")     # 数量最小
+        if amt <= 0:
+            return
+        if not await self._exposure_ok(sym, await self._equity()):
+            return
+        res = await self.client.create_limit_order(sym, "sell", amt, entry_px, "futures",
+                                                   position_side="SHORT")
+        if not res:
+            self._warn_once(f"short_fail:{sym}", f"GRID {sym}: 挂空单失败，下轮重试")
+            return
+        self.db.set_runtime_stat(f"short_state:{sym}", 1)
+        log.warning(f"GRID {sym}: 高位试空 —— 挂空单 {amt:.0f} 张 @ {entry_px:.6g}"
+                    f"（24h 区间 {pos*100:.0f}%，单次·最小仓·带止损·不加仓）")
+
+    async def _cancel_short_stop(self, sym: str):
+        """撤掉该标的上的条件单（空单的止损单），按类型识别，不依赖记录单号。"""
+        try:
+            for o in await self.client.fetch_open_orders(sym, "futures"):
+                t = str(o.get("type") or "").upper()
+                if o.get("side") == "buy" and "STOP" in t:
+                    await self.client.cancel_order(str(o.get("id")), sym, "futures")
+        except Exception as e:
+            log.warning(f"GRID {sym}: 撤止损单失败: {e}")
+
+    async def _manage_short(self, sym: str, qty: float, entry: float, price: float):
+        """空头持仓管理：止盈用软件平；止损优先挂交易所条件单，挂不上则软件兜底。"""
+        cfg = self.cfg
+        sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)
+        tp = float(cfg.get("short_tp_pct", 0.03) or 0.03)
+        stop_px = entry * (1 + sl)
+        tp_px = entry * (1 - tp)
+        placed = float(self.db.get_runtime_stat(f"short_stop_oid:{sym}", 0) or 0) > 0
+
+        # 止盈：软件平。先撤掉交易所止损单 —— 否则平完仓后它一旦触发会反手开多。
+        if price <= tp_px:
+            log.warning(f"GRID {sym}: 空单止盈（现价 {price:.6g} ≤ {tp_px:.6g}）→ 市价平空")
+            await self._cancel_short_stop(sym)
+            await self.client.create_market_order(sym, "buy", qty, "futures", position_side="SHORT")
+            self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
+            self.db.set_runtime_stat(f"short_state:{sym}", 0)
+            self.db.set_runtime_stat(f"short_done:{sym}", 1)
+            return
+
+        # 止损：交易所条件单挂上了就靠它；没挂上则软件兜底
+        if not placed:
+            if price >= stop_px:
+                log.warning(f"GRID {sym}: 空单止损（现价 {price:.6g} ≥ {stop_px:.6g}）→ 市价平空")
+                await self.client.create_market_order(sym, "buy", qty, "futures", position_side="SHORT")
+                self.db.set_runtime_stat(f"short_state:{sym}", 0)
+                self.db.set_runtime_stat(f"short_done:{sym}", 1)
+                return
+            res = await self.client.create_stop_order(sym, "buy", qty, stop_px, position_side="SHORT")
+            if res:
+                self.db.set_runtime_stat(f"short_stop_oid:{sym}", 1)
+                log.info(f"GRID {sym}: 空单交易所止损单已挂（触发价 {stop_px:.6g}）")
+            else:
+                self._warn_once(f"short_nostop:{sym}",
+                                f"GRID {sym}: 交易所止损单挂不上 → 改用软件止损（{stop_px:.6g}）")
 
     async def _maybe_trail_tp(self, sym: str, st: dict, price: float, spec: dict) -> bool:
         """移动止盈：浮盈冲高后回撤 → 卖出剩余仓位，把利润落袋。

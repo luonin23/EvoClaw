@@ -369,6 +369,28 @@ class ExchangeClient:
                 log.warning(f"Market order failed {user_symbol} {side} {amount}: {e}{s}")
             return None
 
+    async def create_stop_order(self, user_symbol: str, side: str, amount: float,
+                                stop_price: float, position_side: str = "SHORT",
+                                kind: str = "futures") -> dict | None:
+        """条件市价单（止损/止盈触发）。ccxt 会把 stopLossPrice 映射成 STOP_MARKET。
+
+        返回 None 表示不支持或下单失败 —— 调用方必须自行准备软件兜底，不能假设
+        交易所一定挂上了止损。
+        """
+        if self.dry_run:
+            return {"order_id": f"dry-stop-{int(time.time()*1000)}", "dry_run": True}
+        try:
+            o = await self._safe_call(self.futures.create_order(
+                self.to_ccxt(user_symbol, "futures"), "market", side, amount, None,
+                {"stopLossPrice": stop_price, "positionSide": position_side.upper()}), timeout=20)
+            return {"order_id": str(o.get("id", "")), "dry_run": False}
+        except Exception as e:
+            code = _extract_code(str(e))
+            s = _throttle.emit(f"stop_err:{user_symbol}:{code}")
+            if s is not None:
+                log.warning(f"Stop order failed {user_symbol} {side} {amount}@{stop_price}: {e}{s}")
+            return None
+
     async def cancel_order(self, order_id: str, user_symbol: str, kind: str = "futures") -> bool:
         if self.dry_run or not order_id or order_id.startswith("dry-"):
             return True
