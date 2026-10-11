@@ -87,8 +87,6 @@ tr:hover td{background:var(--hover)}
   .gc-ord{gap:6px;font-size:10.5px}
   .gc-ord span{padding:2px 7px}
   /* 手机上轴太窄：空头只留虚线不留标签（数字在下方「空头腿」块里） */
-  .gbar2 .mark.sl span{display:none}
-  .gbar2.has-short{margin-top:26px}
   .lot{font-size:10px}
   .lot .lp{min-width:56px}
   .lot .lq{min-width:32px}
@@ -114,15 +112,8 @@ tr:hover td{background:var(--hover)}
   font-size:10px;white-space:nowrap;padding:1px 6px;border-radius:4px;line-height:1.5}
 .gbar2 .mark.cost span{top:-20px;background:rgba(96,165,250,.18);border:1px solid rgba(96,165,250,.45);color:#60a5fa}
 .gbar2 .mark.price span{bottom:-20px;background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.5);color:var(--warn)}
-/* 空头腿标记：虚线，分垂直行避免与成本/现价标注打架。
-   只有存在空仓时轴才加高（.has-short），平时不留空档 */
-.gbar2.has-short{margin-top:64px}
+/* 空头腿标记：红色虚线 */
 .gbar2 .mark.sl{background:repeating-linear-gradient(180deg,var(--error) 0 4px,transparent 4px 8px)}
-.gbar2 .mark.sl span{font-size:8.5px;padding:1px 3px;letter-spacing:-.2px;
-  background:rgba(255,71,87,.16);border:1px solid rgba(255,71,87,.5);color:#ff8b96}
-.gbar2 .mark.sl.entry span{top:-38px}
-.gbar2 .mark.sl.stop span{top:-56px}
-.gbar2 .mark.sl.takep span{top:-38px;background:rgba(255,71,87,.10);border-style:dashed}
 .gbar2 .edge{position:absolute;bottom:-17px;transform:translateX(-50%);font-family:var(--mono);
   font-size:9px;color:var(--t3);opacity:.7}
 /* 成交汇总栏 */
@@ -286,6 +277,35 @@ const nfR = (v,d=2)=>{const n=Number(v);return Number.isFinite(n)?(n>=0?'+':'')+
 const nfpx = v=>{const n=Number(v);if(!Number.isFinite(n))return '—';
   const a=Math.abs(n),d=a>=1000?2:a>=1?4:a>=0.01?5:6;
   return n.toFixed(d).replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'');};
+
+// 空头腿的价格轴：和多头网格同款（成本线 / 现价线 / 档位 / 盈亏实心填充）
+// 空头视角：价格跌才赚 → 现价低于入场画绿色，反之红色
+function shortBar(sh, px){
+  const vals=[sh.entry, sh.stop, sh.tp, px].filter(v=>v>0);
+  if(!vals.length) return '';
+  const lo0=Math.min(...vals), hi0=Math.max(...vals);
+  const pad=(hi0-lo0)*0.10 || (hi0*0.002) || 0.001;
+  const lo=lo0-pad, hi=hi0+pad;
+  const P=v=>Math.max(0,Math.min(100,(v-lo)/(hi-lo)*100));
+  let fill='';
+  if(sh.entry>0){
+    const a=Math.min(P(px),P(sh.entry)), b=Math.max(P(px),P(sh.entry));
+    fill='<div class="fill '+(px<=sh.entry?'g':'r')+'" style="left:'+a.toFixed(2)+'%;width:'
+        +Math.max(0.5,b-a).toFixed(2)+'%"></div>';
+  }
+  const lvl=(v,cls,txt)=> v>0
+    ? '<div class="lvlz '+cls+'" style="left:'+P(v).toFixed(2)+'%"><span>'+txt+nfpx(v)+'</span></div>' : '';
+  const cost = sh.entry>0
+    ? '<div class="mark cost" style="left:'+P(sh.entry).toFixed(2)+'%"><span>空头成本 '+nfpx(sh.entry)+'</span></div>' : '';
+  // 不画两端边界数字：现价贴着下沿时会和它挤在一起，而短轴的价位
+  // 已经由「止盈/止损/空头成本/现价」四个标注说清楚了
+  return '<div class="gbar2">'
+    + fill
+    + lvl(sh.tp,'buy','止盈') + lvl(sh.stop,'sell','止损')
+    + cost
+    + '<div class="mark price" style="left:'+P(px).toFixed(2)+'%"><span>现价 '+nfpx(px)+'</span></div>'
+    + '</div>';
+}
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 function authHeaders(){return PWD?{'X-Web-Password':PWD}:{};}
 async function api(p,opt){try{const r=await fetch(p,opt);return await r.json();}catch(e){return null;}}
@@ -362,16 +382,19 @@ async function loadGrid(){
             + '<span class="ln">'+esc(l.note||'')+'</span>'
           + '</div>').join('')
         + '</div>' : '';
-    // 空头腿（与多头网格并存）：单独一块，不和多单数据混在一起
+    // 空头腿：与多头网格同款的一张卡片 —— 自己的价格轴 + 自己的数据行，
+    // 放在多单下面。空头就是另一个方向的网格，不需要挤进多头的轴里。
     const sh = s.short;
     const shortHtml = sh
       ? '<div class="gc-short">'
         + '<div class="hd">空头腿 · ' + esc(sh.state)
         + (sh.stop_on_exchange ? ' · 交易所止损已挂' : (sh.qty>0 ? ' · ⚠ 止损未挂(软件兜底)' : ''))
         + '</div>'
+        + shortBar(sh, px)
         + '<div class="row">'
         + '<span>数量 <b>' + nf(sh.qty,0) + '</b> 张</span>'
-        + (sh.entry>0 ? '<span>入场 <b>' + nfpx(sh.entry) + '</b></span>' : '')
+        + '<span>市值 <b>' + nf(sh.qty*px,4) + '</b> U</span>'
+        + (sh.entry>0 ? '<span>空头成本 <b>' + nfpx(sh.entry) + '</b></span>' : '')
         + (sh.stop>0 ? '<span>止损 <b>' + nfpx(sh.stop) + '</b></span>' : '')
         + (sh.tp>0 ? '<span>止盈 <b>' + nfpx(sh.tp) + '</b></span>' : '')
         + (sh.liq_price>0 ? '<span>强平 <b>' + nfpx(sh.liq_price) + '</b></span>' : '')
@@ -390,8 +413,6 @@ async function loadGrid(){
     // ---- 价格轴：以「区间∪成本∪现价」为显示范围，保证三个标记都在视野内 ----
     const vals = [lo, up, px].filter(v=>v>0);
     if (hasPos && s.avg_price > 0) vals.push(s.avg_price);
-    // 空头腿的入场/止损/止盈也要进轴范围，否则画不出来（sh 在上面已取）
-    if (sh && sh.qty > 0) [sh.entry, sh.stop, sh.tp].forEach(v=>{ if(v>0) vals.push(v); });
     const dLo0 = Math.min(...vals), dHi0 = Math.max(...vals);
     const padD = (dHi0 - dLo0) * 0.06 || 0.001;
     const dLo = dLo0 - padD, dHi = dHi0 + padD;
@@ -430,16 +451,10 @@ async function loadGrid(){
     }).join('');
     const costMark = costPct !== null
       ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nfpx(s.avg_price)+'</span></div>' : '';
-    // 空头腿标记（虚线）：入场 / 止损 / 止盈，分垂直行放标签，互不遮挡
-    const slMark = (t,cls,v) => (v>0)
-      ? '<div class="mark sl '+cls+'" style="left:'+pctOf(v).toFixed(2)+'%"><span>'+t+nfpx(v)+'</span></div>' : '';
-    const shMarks = (sh && sh.qty>0)
-      ? (slMark('空','entry',sh.entry) + slMark('止损','stop',sh.stop) + slMark('止盈','takep',sh.tp))
-      : '';
-    const axisHtml = '<div class="gbar2'+(shMarks?' has-short':'')+'">'
+    const axisHtml = '<div class="gbar2">'
       + '<div class="edge" style="left:2%">'+nfpx(dLo)+'</div>'
       + '<div class="edge" style="left:98%">'+nfpx(dHi)+'</div>'
-      + fillHtml + lvlHtml + costMark + shMarks
+      + fillHtml + lvlHtml + costMark
       + '<div class="mark price" style="left:'+pxPct.toFixed(2)+'%"><span>现价 '+nfpx(px)+'</span></div>'
       + '</div>';
 
