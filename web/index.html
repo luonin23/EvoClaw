@@ -577,16 +577,28 @@ async function loadOrders(){
   }).join('');
 }
 
+let _pendingAction = null;      // 解锁成功后要继续的动作（如「取消并重新筛选」）
+
 async function unlock(){
   const p = $('pwd').value.trim(); if(!p) return;
   const r = await fetch('/api/auth-check',{method:'POST',headers:{'X-Web-Password':p}});
-  if(r.ok){ PWD=p; $('lockBox').style.display='none'; $('cfgBox').style.display=''; $('lockErr').textContent=''; loadConfig(); }
+  if(r.ok){
+    PWD=p; $('lockBox').style.display='none'; $('lockErr').textContent='';
+    if(_pendingAction){ const act=_pendingAction; _pendingAction=null; act(); }
+    else { $('cfgBox').style.display=''; loadConfig(); }
+  }
   else { $('lockErr').textContent='密码错误'; $('pwd').value=''; }
 }
 
 // 空仓待机时「取消并重新筛选」：撤掉该币全部挂单 + 强制下一轮重新选币
 async function cancelAndReselect(sym){
-  if(!PWD){ toast('请先解锁'); return; }
+  if(!PWD){
+    // 未解锁：直接弹出密码框，解锁成功后自动继续本次操作
+    _pendingAction = () => cancelAndReselect(sym);
+    $('cfgBox').style.display='none'; $('lockBox').style.display='';
+    $('pwd').focus();
+    return;
+  }
   if(!confirm('取消 '+sym+' 的全部挂单，并重新筛选交易标的？')) return;
   const btn = event && event.target; if(btn) btn.disabled = true;
   const r = await fetch('/api/grid/cancel',{method:'POST',
