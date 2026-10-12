@@ -276,12 +276,17 @@ class GridStrategy:
             flat = (st is None) or float(st.get("base_qty", 0) or 0) <= 1e-12
             if flat and not await self._reentry_ok(sym, price):
                 if st is None:
-                    return            # 无任何状态可维护，直接等下一轮
+                    # 空仓、且不建多头网格 —— 但空单仍要判断，不能在这里 return 掉
+                    await self._maybe_short(sym, price)
+                    return
                 need_init = False     # 保留旧网格（下方买单仍在），继续正常维护
-            else:
+            if need_init:
                 await self._init_grid(sym, lower, upper, grids, size_usdt, price)
                 st = self.db.get_grid_state(sym)
                 if not st:
+                    # 这次没建成多头网格（位置太高 / 冷却期内）—— 位置高恰恰是
+                    # 该考虑开空的时候，绝不能在这里 return，否则空单永远没机会
+                    await self._maybe_short(sym, price)
                     return
 
         # 与交易所对账持仓：交易所为准。
@@ -592,6 +597,8 @@ class GridStrategy:
         cfg = self.cfg
         if not cfg.get("short_enabled", False):
             return
+        if self.client.dry_run:
+            return                                   # 空单只做实盘：dry_run 无真实持仓可依
         if self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0:
             return                                   # 该币的空单额度已用完
         st = self.db.get_grid_state(sym) or {}
@@ -611,10 +618,22 @@ class GridStrategy:
             log.info(f"GRID {sym}: 空单已平仓 → 该币不再开空")
             return
         if sq > 1e-12:
+            # 成交了 → 状态推进到「持仓中」。不推进的话，后面的平仓检测
+            # （要求 state>=2）永远不会触发，整个空单会卡死在「挂单中」。
+            if state < 2:
+                self.db.set_runtime_stat(f"short_state:{sym}", 2)
             await self._manage_short(sym, sq, entry or price, price)
             return
         if state == 1:
-            return                                   # 开空单还挂着，等它成交
+            if await self._short_entry_open(sym):
+                return                               # 开空单还挂着，等它成交
+            # 挂单已不在交易所（被撤/过期/或已成交后平掉）→ 这轮空单结束
+            log.info(f"GRID {sym}: 开空挂单已不在交易所 → 判定该轮空单结束（该币不再开空）")
+            await self._cancel_short_stop(sym)
+            self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
+            self.db.set_runtime_stat(f"short_state:{sym}", 0)
+            self.db.set_runtime_stat(f"short_done:{sym}", 1)
+            return
 
         # ---- state 0：判断要不要开空 ----
         pos = self.client.range_pos(sym)
@@ -657,6 +676,22 @@ class GridStrategy:
                 log.info(f"GRID {sym}: 已撤销 {n} 条交易所条件单")
         except Exception as e:
             log.warning(f"GRID {sym}: 撤止损单失败: {e}")
+
+    async def _short_entry_open(self, sym: str) -> bool:
+        """开空的那张限价卖单是否还挂在交易所。
+
+        必须按 positionSide=SHORT 区分 —— 多头网格的卖档也是 sell，但它们
+        属于 LONG 腿，不能混为一谈。
+        """
+        try:
+            for o in await self.client.fetch_open_orders(sym, "futures"):
+                ps = str((o.get("info") or {}).get("positionSide") or "").upper()
+                if o.get("side") == "sell" and ps == "SHORT":
+                    return True
+        except Exception as e:
+            log.warning(f"GRID {sym}: 查询开空挂单失败: {e}")
+            return True                              # 查不到就当作还挂着，别误判结束
+        return False
 
     async def _manage_short(self, sym: str, qty: float, entry: float, price: float):
         """空头持仓管理：止盈用软件平；止损优先挂交易所条件单，挂不上则软件兜底。"""
