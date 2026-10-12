@@ -96,12 +96,13 @@ class GridStrategy:
         n = int(cfg.get("max_symbols", 0) or 0)
         ts = float(self.db.get_runtime_stat("grid_selection_ts", 0) or 0)
         if ts and (now - ts) < interval:
-            # 沿用已落库的选币结果，但按当前上限截断
-            # （改了 max_symbols / 资金变化不必等一个周期才生效）
+            # 沿用已落库的选币结果，但按当前上限截断。
+            # 名额出现空位（上调了 max_symbols / 有标的被顶掉）时**不要**提前
+            # 返回 —— 立即走完整选币把空位补上，否则调大名额要干等下一个周期。
             saved = list(self.config.get("grid_selection") or [])
             limit = n if n > 0 else self._auto_symbol_cap(equity, saved)
             saved = saved[:limit] if limit > 0 else []
-            if saved:
+            if saved and len(saved) >= limit:
                 self._selection = saved
                 self._sel_ts = ts
                 return
@@ -127,7 +128,10 @@ class GridStrategy:
             if s not in by_sym:
                 continue                      # 不再合格 → 让位（draining 机制收尾）
             st = self.db.get_grid_state(s)
-            if st and float(st.get("base_qty", 0) or 0) > 1e-12:
+            has_long = st and float(st.get("base_qty", 0) or 0) > 1e-12
+            # 有空单（挂单中/持仓中）也不能顶掉 —— 否则空单失去管理（止盈没人做）
+            has_short = int(self.db.get_runtime_stat(f"short_state:{s}", 0) or 0) in (1, 2)
+            if has_long or has_short:
                 keep.append(by_sym[s])        # 有仓在身 → 粘住
         keepset = {k["symbol"] for k in keep}
         merged = keep + [p for p in picks if p["symbol"] not in keepset]
@@ -663,8 +667,7 @@ class GridStrategy:
         if self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0:
             return                                   # 该币的空单额度已用完
         st = self.db.get_grid_state(sym) or {}
-        if (st.get("status") or "active") == "draining":
-            return                                   # 正在退出，不再新开任何仓位
+        draining = (st.get("status") or "active") == "draining"
 
         # 允许多空同时存在（对冲模式）：做多网格与高位试空互不干扰，各管各的。
         sq, entry = await self._current_short(sym)
@@ -705,6 +708,8 @@ class GridStrategy:
             return
 
         # ---- state 0：判断要不要开空 ----
+        if draining:
+            return                                   # 正在退出：可以管理存量空单，但不新开
         pos = self.client.range_pos(sym)
         pos_min = float(cfg.get("short_pos_min", 0.85) or 0.85)
         if pos is None or pos < pos_min:
