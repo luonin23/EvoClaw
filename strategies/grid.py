@@ -191,6 +191,12 @@ class GridStrategy:
             except Exception as e:
                 log.warning(f"GRID 选币失败，沿用上次结果: {e}")
 
+        # 建仓资金严格按排名分配：高排名想挂没挂上时，低排名的建仓单撤单让位
+        try:
+            await self._enforce_ladder_priority()
+        except Exception as e:
+            log.warning(f"GRID 挂单优先级调度失败: {e}")
+
         specs = self._specs()
         active = {s["symbol"] for s in specs if s.get("symbol")}
 
@@ -223,6 +229,55 @@ class GridStrategy:
                 await self._step_symbol(spec, equity)
             except Exception as e:
                 log.error(f"GRID {sym} 执行异常: {e}")
+
+    async def _enforce_ladder_priority(self):
+        """建仓资金严格按排名分配（top1 → top5 逐个查）：
+
+        · 有持仓 / 空单在跑：自管理，跳过
+        · 交易所已有建仓挂单：已就座，跳过
+        · 完全没挂单：要么在等回落（位置/锚门），要么是刚选上还没初始化 —— 跳过
+        · **有建仓单想挂但没挂上（DB 里有档、交易所没单号）= 排到它了但资金不足**
+          → 从它往后，所有「无持仓」标的已挂出的建仓单全部撤销让位，
+          下一 tick 它自然按排名先挂上。保证「资金不足只苦排名靠后的」。
+        """
+        ranked = [s.get("symbol") for s in (self._selection or []) if s.get("symbol")]
+        if len(ranked) < 2:
+            return
+        deficit = None
+        for sym in ranked:
+            st = self.db.get_grid_state(sym)
+            if st and float(st.get("base_qty", 0) or 0) > 1e-12:
+                continue                       # 有多仓：自管理
+            if int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0) in (1, 2):
+                continue                       # 有空单：自管理
+            levels = self.db.get_grid_levels(sym)
+            if any(l["status"] == "pending" and l.get("order_id") for l in levels):
+                continue                       # 已挂单：就座
+            if any(l["status"] == "pending" and not l.get("order_id") for l in levels):
+                deficit = sym                  # 想挂但没挂上 = 排到它了但资金不足
+                break
+            # 完全没档位：等回落 / 待初始化，不构成资金抢占
+        if not deficit:
+            return
+        di = ranked.index(deficit)
+        for sym in ranked[di + 1:]:
+            st = self.db.get_grid_state(sym)
+            if st and float(st.get("base_qty", 0) or 0) > 1e-12:
+                continue
+            if int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0) in (1, 2):
+                continue
+            levels = [l for l in self.db.get_grid_levels(sym)
+                      if l["status"] == "pending" and l.get("order_id")]
+            if not levels:
+                continue
+            s = _throttle.emit(f"prio_cancel:{sym}")
+            if s is not None:
+                log.warning(f"GRID {sym}: 排名靠后让位（{deficit} 排在前面还没挂上资金）"
+                            f"→ 撤销 {len(levels)} 条建仓挂单{s}")
+            for l in levels:
+                await self.client.cancel_order(l["order_id"], sym, "futures")
+                self.db.conn.execute("UPDATE grid_levels SET order_id='' WHERE id=?", (l["id"],))
+            self.db.conn.commit()
 
     async def _equity(self) -> float:
         try:
@@ -1548,7 +1603,8 @@ class GridStrategy:
                 "buy_count": st.get("buy_count", 0), "sell_count": st.get("sell_count", 0),
                 "levels": [
                     {"idx": l["level_idx"], "price": l["price"], "side": l["side"],
-                     "amount": l["amount"], "status": l["status"]}
+                     "amount": l["amount"], "status": l["status"],
+                     "placed": bool(l.get("order_id"))}
                     for l in lv if l["status"] == "pending"
                 ],
                 # 逐笔持仓账本：每一笔未卖出的买入，各自成本与浮盈（前端可展开）
