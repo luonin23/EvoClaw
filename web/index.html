@@ -375,7 +375,8 @@ async function loadGrid(){
     const pnl = s.unrealized_pnl||0;
     // 有仓：盈利绿 / 亏损红；无仓：灰（空仓待机）
     const cardCls = !hasPos ? 'empty' : (pnl >= 0 ? 'profit' : 'lose');
-    const stateTxt = s.status==='draining' ? '只卖不买' : (hasPos ? '持仓中' : '空仓待机');
+    const stateTxt = s.status==='draining' ? '只卖不买'
+      : (s.status==='waiting' ? '等待建仓' : (hasPos ? '持仓中' : '空仓待机'));
     const stateCls = s.status==='draining' ? 'drain' : (hasPos ? 'hold' : '');
     const buys  = (s.levels||[]).filter(l=>l.side==='buy');
     const sells = (s.levels||[]).filter(l=>l.side==='sell');
@@ -421,6 +422,10 @@ async function loadGrid(){
       ? '<div class="gc-day">24h 振幅区间 <b>'+nfpx(s.day_low)+'</b> ~ <b>'+nfpx(s.day_high)+'</b>'
         + ' · 现价在 <b class="'+posCls+'">'+Math.round(dpos*100)+'%</b> 位置'
         + (dpos >= 0.6 ? '（偏高，不宜建多仓）' : (dpos <= 0.4 ? '（偏低，适合建仓）' : ''))
+        + (s.status === 'waiting'
+            ? ' · <b class="hi">等待建仓</b>：需回落到 '
+              + Math.round((s.entry_pos_max||0.6)*100) + '% 以下'
+            : '')
         + '</div>' : '';
     const liqDist = Math.abs(s.liq_distance||0);
     const liqCls = s.margin_mode!=='isolated' ? 'danger' : (liqDist < 0.25 ? 'danger' : (liqDist < 0.4 ? 'warn' : ''));
@@ -567,7 +572,10 @@ async function loadOrders(){
   $('ordersBody').innerHTML = rows.map(o=>{
     const isSell = o.side==='sell';
     const pnl = Number(o.pnl||0);
-    const pnlCell = isSell
+    // 有没有盈亏看「类型」而不是「方向」——空单平仓是「买」，但它确实有盈亏
+    const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close'];
+    const hasPnl = CLOSING.indexOf(o.type) >= 0;
+    const pnlCell = hasPnl
       ? '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</td>'
         + '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfR(o.pnl_rate)+'</td>'
       : '<td>—</td><td>—</td>';

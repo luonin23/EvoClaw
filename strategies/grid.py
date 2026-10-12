@@ -418,13 +418,14 @@ class GridStrategy:
         免得误清仓位。刻意**不设静置期**：重选到它就照常挂单，选到别的也一样。
         """
         st = self.db.get_grid_state(sym)
-        if st is None:
-            return False, "该标的当前不在管理清单里"
-        if (st.get("status") or "active") == "draining":
+        # st 为 None = 选上了但还没建仓（入场闸门在等回落）→ 同样允许取消重选
+        if st is not None and (st.get("status") or "active") == "draining":
             return False, "该标的正在退出（只卖不买），不能取消重选"
         lq, _ = self.db.lots_qty_cost(sym)
-        if float(st.get("base_qty", 0) or 0) > 1e-12 or lq > 1e-12:
+        if (st is not None and float(st.get("base_qty", 0) or 0) > 1e-12) or lq > 1e-12:
             return False, "该标的有持仓，不能取消重选（请先平仓）"
+        if int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0) in (1, 2):
+            return False, "该标的有空单在跑，不能取消重选"
         if not self.client.dry_run:
             ex_qty, _ = await self._current_entry(sym)
             if ex_qty > 1e-12:
@@ -579,15 +580,18 @@ class GridStrategy:
         cfg = self.cfg
         if not cfg.get("entry_limit_only", True):
             return False
-        # 刚被手工平过仓的标的先冷静一会儿再考虑建仓 —— 否则你手动平了它，
-        # 下一个 tick 系统又给你买回来，很费解。
+        # 手工平仓冷静期：只对「已掉出筛选清单」的标的生效。
+        # 还在名单里的不冷静 —— 不追高锚点已经挡住了追高，时间惩罚是双重管束
+        # （用户反馈：写得太死）；掉出名单后在冷静期内被重新选中时才需要等。
         cool = float(cfg.get("ext_close_cooldown_min", 30) or 0) * 60
         last = float(self.db.get_runtime_stat(f"grid_ext_close:{sym}", 0) or 0)
         if cool > 0 and last and (time.time() - last) < cool:
-            self._warn_once(f"grid_extcool:{sym}",
-                            f"GRID {sym}: 该标的刚被手工平仓，{(cool-(time.time()-last))/60:.0f} "
-                            f"分钟内暂不重新建仓")
-            return False
+            in_sel = any(s.get("symbol") == sym for s in (self._selection or []))
+            if not in_sel and cfg.get("auto_select", False):
+                self._warn_once(f"grid_extcool:{sym}",
+                                f"GRID {sym}: 手工平仓且已掉出筛选清单，"
+                                f"{(cool-(time.time()-last))/60:.0f} 分钟内暂不重新建仓")
+                return False
         pos = self.client.range_pos(sym)
         pos_max = float(cfg.get("entry_pos_max", 0.6) or 0.6)
         if pos is None:
@@ -1538,6 +1542,37 @@ class GridStrategy:
                 # 空头腿（与多单并存；高位试空，单次/最小仓/带止损）
                 "short": self._short_view(sym, price),
             })
+        # 选中但还没建仓的标的（入场闸门在等回落）也要出卡片 —— 否则它会「隐形」：
+        # 挂在选币清单里、空单也可能在跑，用户却在页面上找不到这个币。
+        seen = {o["symbol"] for o in out}
+        entry_max = float(self.cfg.get("entry_pos_max", 0.6) or 0.6)
+        for s in (self._selection or (self.config.get("grid_selection") or [])):
+            sym = s.get("symbol")
+            if not sym or sym in seen:
+                continue
+            try:
+                price = self.client.last_price(sym) or await self.client.ensure_price(sym)
+            except Exception:
+                price = 0.0
+            hl = self.client._hl.get(sym) or (0.0, 0.0)
+            day_high, day_low = float(hl[0]), float(hl[1])
+            day_pos = (max(0.0, min(1.0, (price - day_low) / (day_high - day_low)))
+                       if day_high > day_low > 0 and price > 0 else 0.0)
+            out.append({
+                "symbol": sym, "status": "waiting",
+                "lower": 0, "upper": 0, "grids": 0,
+                "size_usdt": float(self.cfg.get("size_usdt", 0) or 0),
+                "price": price, "base_qty": 0, "avg_price": 0,
+                "position_value": 0, "cost_value": 0,
+                "unrealized_pnl": 0, "unrealized_pnl_rate": 0,
+                "realized_pnl": 0, "realized_pnl_rate": 0,
+                "leverage": None, "margin_mode": "", "liq_price": 0, "liq_distance": None,
+                "buy_count": 0, "sell_count": 0, "levels": [], "lots": [],
+                "short": self._short_view(sym, price),
+                "day_high": round(day_high, 10), "day_low": round(day_low, 10),
+                "day_pos": round(day_pos, 4), "entry_pos_max": entry_max,
+            })
+
         cfg = self.cfg
         n = int(cfg.get("max_symbols", 0) or 0)          # 0 = 按资金自动
         sel_all = list(self._selection or (self.config.get("grid_selection") or []))
