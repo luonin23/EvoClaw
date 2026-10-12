@@ -1475,8 +1475,16 @@ class GridStrategy:
             cost = float(st.get("total_cost", 0) or 0)
             avg = cost / qty if qty > 0 else 0
             lv = self.db.get_grid_levels(sym)
+            # 24h 振幅区间：现价落在当日高低的哪个位置（0=最低 1=最高）——
+            # 选币时只给了振幅百分比，看不出「现在是在高点还是低点」。
+            hl = self.client._hl.get(sym) or (0.0, 0.0)
+            day_high, day_low = float(hl[0]), float(hl[1])
+            day_pos = (max(0.0, min(1.0, (price - day_low) / (day_high - day_low)))
+                       if day_high > day_low > 0 and price > 0 else 0.0)
             out.append({
                 "symbol": sym,
+                "day_high": round(day_high, 10), "day_low": round(day_low, 10),
+                "day_pos": round(day_pos, 4),
                 "lower": st["lower"], "upper": st["upper"], "grids": st["grids"],
                 "size_usdt": st["size_usdt"], "price": price,
                 "base_qty": qty, "avg_price": round(avg, 6),

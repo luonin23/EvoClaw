@@ -72,6 +72,13 @@ tr:hover td{background:var(--hover)}
 /* 价格轴：成本线 / 现价线 / 买卖档 / 盈亏实心填充 */
 .gbar2{position:relative;height:52px;background:var(--surface);border:1px solid var(--bd);
   border-radius:6px;margin:26px 0 24px}
+/* 24h 振幅区间：在轴上画成一条浅色带，一眼看出现价在当日高低中的位置 */
+.gbar2 .dayband{position:absolute;top:0;bottom:0;background:rgba(148,163,184,.14);
+  border-left:1px dashed rgba(148,163,184,.6);border-right:1px dashed rgba(148,163,184,.6)}
+.gc-day{font-family:var(--mono);font-size:11px;color:var(--t3);margin:4px 0 0}
+.gc-day b{color:var(--t1);font-weight:600}
+.gc-day .hi{color:var(--warn)}
+.gc-day .lo{color:var(--accent)}
 .gbar2 .fill{position:absolute;top:0;bottom:0}
 .gbar2 .fill.g{background:linear-gradient(90deg,rgba(0,208,132,.30),rgba(0,208,132,.62));
   border-left:1px solid rgba(0,208,132,.8);border-right:1px solid rgba(0,208,132,.8)}
@@ -407,6 +414,14 @@ async function loadGrid(){
         + (sh.qty>0 ? '<span>浮盈 <b class="'+(sh.unrealized>=0?'pos':'neg')+'">'+nfP(sh.unrealized,4)
             + '</b> U (<span class="'+(sh.unrealized>=0?'pos':'neg')+'">'+nfR(sh.upnl_rate)+'</span>)</span>' : '')
         + '</div></div>' : '';
+    // 24h 振幅区间说明：显性告诉你现价在当日高低中的位置
+    const dpos = Number(s.day_pos||0);
+    const posCls = dpos >= 0.6 ? 'hi' : (dpos <= 0.4 ? 'lo' : '');
+    const dayHtml = (s.day_low > 0 && s.day_high > s.day_low)
+      ? '<div class="gc-day">24h 振幅区间 <b>'+nfpx(s.day_low)+'</b> ~ <b>'+nfpx(s.day_high)+'</b>'
+        + ' · 现价在 <b class="'+posCls+'">'+Math.round(dpos*100)+'%</b> 位置'
+        + (dpos >= 0.6 ? '（偏高，不宜建多仓）' : (dpos <= 0.4 ? '（偏低，适合建仓）' : ''))
+        + '</div>' : '';
     const liqDist = Math.abs(s.liq_distance||0);
     const liqCls = s.margin_mode!=='isolated' ? 'danger' : (liqDist < 0.25 ? 'danger' : (liqDist < 0.4 ? 'warn' : ''));
     const liqHtml = s.liq_price
@@ -419,6 +434,8 @@ async function loadGrid(){
     // ---- 价格轴：以「区间∪成本∪现价」为显示范围，保证三个标记都在视野内 ----
     const vals = [lo, up, px].filter(v=>v>0);
     if (hasPos && s.avg_price > 0) vals.push(s.avg_price);
+    // 24h 振幅区间也纳入轴范围，保证这条带子完整可见
+    if (s.day_low > 0 && s.day_high > s.day_low) vals.push(s.day_low, s.day_high);
     const dLo0 = Math.min(...vals), dHi0 = Math.max(...vals);
     const padD = (dHi0 - dLo0) * 0.06 || 0.001;
     const dLo = dLo0 - padD, dHi = dHi0 + padD;
@@ -457,10 +474,16 @@ async function loadGrid(){
     }).join('');
     const costMark = costPct !== null
       ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nfpx(s.avg_price)+'</span></div>' : '';
+    // 24h 振幅区间色带（放在最底层，盈亏填充/档位/标记都压在它上面）
+    const dayBand = (s.day_low > 0 && s.day_high > s.day_low)
+      ? (() => { const a = pctOf(s.day_low), b = pctOf(s.day_high);
+          return '<div class="dayband" style="left:'+Math.min(a,b).toFixed(2)
+               + '%;width:'+Math.max(0.6, Math.abs(b-a)).toFixed(2)+'%"></div>'; })()
+      : '';
     const axisHtml = '<div class="gbar2">'
       + '<div class="edge" style="left:2%">'+nfpx(dLo)+'</div>'
       + '<div class="edge" style="left:98%">'+nfpx(dHi)+'</div>'
-      + fillHtml + lvlHtml + costMark
+      + dayBand + fillHtml + lvlHtml + costMark
       + '<div class="mark price" style="left:'+pxPct.toFixed(2)+'%"><span>现价 '+nfpx(px)+'</span></div>'
       + '</div>';
 
@@ -485,6 +508,7 @@ async function loadGrid(){
         + '<span>成交 买'+s.buy_count+'/卖'+s.sell_count+'</span>'
       + '</div>'
       + axisHtml
+      + dayHtml
       + ordHtml
       + lotsHtml
       + shortHtml
