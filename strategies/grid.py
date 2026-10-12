@@ -135,9 +135,13 @@ class GridStrategy:
                 keep.append(by_sym[s])        # 有仓在身 → 粘住
         keepset = {k["symbol"] for k in keep}
         merged = keep + [p for p in picks if p["symbol"] not in keepset]
+        # 必须按分数重排：keep 是在跑的（有仓的）会插到前面，若直接取前 N，
+        # 低分的持仓币会占掉高分新币的名额 → 资金先喂了排名靠后的。
+        # 用户明确要求：按排名来，top1 没挂上就不该让 top5 抢到资金。
+        merged.sort(key=lambda x: -(x.get("score") or 0))
         if len(merged) > limit:
             log.info(f"选币：{len(merged)} 个可用（其中 {len(keep)} 个为在跑标的保留），"
-                     f"按名额取前 {limit} 个")
+                     f"按分数取前 {limit} 个")
         picks = merged[:limit]
         if picks:
             self._selection = picks
@@ -326,7 +330,8 @@ class GridStrategy:
                     # 交易所已经没持仓、本地却记着有 → 被外部平掉了（手工平仓/强平）。
                     # 必须清空本地并撤掉失效挂单，同时**把这笔平仓补记进成交记录**，
                     # 否则成交记录里凭空少一笔、已实现盈亏也对不上。
-                    exit_px = await self._recent_exit_price(sym, db_qty) or price
+                    exit_px, ours = await self._recent_exit(sym, db_qty)
+                    exit_px = exit_px or price
                     consumed = self.db.consume_lots(sym, exit_px, db_qty)
                     taken = sum(t for _, t in consumed)
                     pnl = sum((exit_px - lp) * t for lp, t in consumed)
@@ -334,12 +339,14 @@ class GridStrategy:
                         pnl += (exit_px - db_avg) * (db_qty - taken)
                     self.db.insert_order({
                         "mode": "grid", "symbol": sym, "side": "sell",
-                        "type": "grid_external", "price": exit_px, "amount": db_qty,
+                        "type": "grid_sell" if ours else "grid_external",
+                        "price": exit_px, "amount": db_qty,
                         "cost": round(exit_px * db_qty, 6),
                         "fee": round(exit_px * db_qty * 0.0005, 6),
                         "pnl": round(pnl, 6),
                         "pnl_rate": round(pnl / (db_avg * db_qty), 8) if db_avg > 0 else 0,
-                        "dry_run": False, "note": "手工平仓（外部成交）"})
+                        "dry_run": False,
+                        "note": "网格卖出（挂单成交·对账补记）" if ours else "手工平仓（外部成交）"})
                     self.db.upsert_grid_state(
                         sym, base_qty=0.0, total_cost=0.0,
                         realized_pnl=float(st.get("realized_pnl", 0) or 0) + pnl,
@@ -682,7 +689,8 @@ class GridStrategy:
             q0 = float(self.db.get_runtime_stat(f"short_qty:{sym}", 0) or 0)
             e0 = float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
             if q0 > 0 and e0 > 0:
-                exit_px = await self._recent_exit_price(sym, q0, side="buy") or price
+                exit_px, _ = await self._recent_exit(sym, q0, side="buy")
+                exit_px = exit_px or price
                 self._record_short_close(sym, q0, e0, exit_px, "外部/止损触发")
             await self._cancel_short_stop(sym)       # 清掉可能残留的止损单
             self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
@@ -696,6 +704,16 @@ class GridStrategy:
             # （要求 state>=2）永远不会触发，整个空单会卡死在「挂单中」。
             if state < 2:
                 self.db.set_runtime_stat(f"short_state:{sym}", 2)
+                # 开仓成交才记一笔（挂单时只是挂着，不算成交）——否则成交记录里
+                # 只有平仓没有开仓，看起来像"没下单就直接平了"
+                self.db.insert_order({
+                    "mode": "grid", "symbol": sym, "side": "sell", "type": "short_open",
+                    "price": entry or price, "amount": sq,
+                    "cost": round((entry or price) * sq, 6),
+                    "fee": round((entry or price) * sq * 0.0005, 6),
+                    "pnl": 0, "pnl_rate": 0,
+                    "dry_run": self.client.dry_run, "note": "空单开仓（高位试空）"})
+                log.info(f"GRID {sym}: 空单开仓已记账 —— {sq:.0f} 张 @ {entry or price:.6g}")
             self.db.set_runtime_stat(f"short_entry:{sym}", entry or price)
             self.db.set_runtime_stat(f"short_qty:{sym}", sq)
             await self._manage_short(sym, sq, entry or price, price)
@@ -755,18 +773,18 @@ class GridStrategy:
         except Exception as e:
             log.warning(f"GRID {sym}: 撤止损单失败: {e}")
 
-    async def _recent_exit_price(self, sym: str, qty: float, side: str = "sell"):
-        """从交易所成交明细里还原「最近这批平仓」的真实成交均价。
+    async def _recent_exit(self, sym: str, qty: float, side: str = "sell"):
+        """还原「最近这批平仓」的真实成交均价，并判断是不是我们挂的单成交的。
 
-        外部平仓（手工/强平）不是我们下的单，本地没有价格；拿检测时的市价凑
-        会偏（最多差一个 tick 周期）。这里按时间倒序取该方向的最新成交，
-        累计到 qty 为止做加权平均。拿不到就返回 None，由调用方兜底。
+        返回 (均价 or None, 是否我们自己的单)。判断依据是成交明细里的
+        clientOrderId 前缀 —— 本程序下的单都带 `ec` 前缀，手工平仓没有。
+        这样对账时才能正确区分「挂单成交」和「人工平仓」，而不是一律当成手工。
         """
         since = int((time.time() - 3600) * 1000)
         trades = await self.client.fetch_my_trades(sym, since, 100)
         if not trades:
-            return None
-        left, num, den = float(qty), 0.0, 0.0
+            return None, False
+        left, num, den, ours = float(qty), 0.0, 0.0, False
         for t in sorted(trades, key=lambda x: x.get("timestamp") or 0, reverse=True):
             if str(t.get("side")) != side:
                 continue
@@ -774,13 +792,16 @@ class GridStrategy:
             p = float(t.get("price") or 0)
             if a <= 0 or p <= 0:
                 continue
+            coid = str((t.get("info") or {}).get("clientOrderId") or "")
+            if coid.startswith("ec"):
+                ours = True
             take = min(a, left)
             num += p * take
             den += take
             left -= take
             if left <= 1e-9:
                 break
-        return (num / den) if den > 0 else None
+        return ((num / den) if den > 0 else None), ours
 
     async def _short_entry_open(self, sym: str) -> bool:
         """开空的那张限价卖单是否还挂在交易所。

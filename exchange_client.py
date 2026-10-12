@@ -48,6 +48,19 @@ class LogThrottle:
 
 _throttle = LogThrottle(cooldown=300)
 
+_oid_seq = 0
+
+
+def _client_oid() -> str:
+    """给本程序下的普通单打一个可识别的 clientOrderId 前缀。
+
+    币安成交明细里带 clientOrderId —— 有了它，对账时就能区分
+    「我们挂的单成交了」和「用户在 App 里手工平的」，不会再把两者搞混。
+    """
+    global _oid_seq
+    _oid_seq += 1
+    return f"ec{int(time.time() * 1000) % 10**9}{_oid_seq % 1000:03d}"
+
 
 class ExchangeClient:
     def __init__(self, config: dict):
@@ -325,6 +338,7 @@ class ExchangeClient:
         params = {}
         if kind == "futures":
             params["positionSide"] = position_side.upper()
+            params["newClientOrderId"] = _client_oid()      # 标记「这单是本程序下的」
         if kind == "futures" and reduce_only:
             params["reduceOnly"] = True
         try:
@@ -351,7 +365,8 @@ class ExchangeClient:
             return {"order_id": f"dry-{int(time.time()*1000)}", "price": px,
                     "amount": amount, "dry_run": True}
         ex = self.futures if kind == "futures" else self._spot
-        params = {"positionSide": position_side.upper()} if kind == "futures" else {}
+        params = ({"positionSide": position_side.upper(),
+                   "newClientOrderId": _client_oid()} if kind == "futures" else {})
         try:
             # 注意 ccxt 签名：create_order(symbol, type, side, amount, price, params)
             # 市价单 price 必须传 None，否则 params 会被当成 price 丢弃 → -4061

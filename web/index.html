@@ -546,12 +546,20 @@ async function loadDca(){
   $('dcaBody').innerHTML = html;
 }
 
-// 订单类型 → 中文。区分「谁发起的」：
-//   挂单被动成交 = 网格买入/卖出；程序主动 = 移动止盈/底仓；人工 = 手工平仓
+// 订单类型 → 「谁发起·市场·角色·动作」四段式
+//   谁发起：自动（本程序）/ 手动（人工在 App 操作）
+//   市场  ：合约 / 现货      角色：底仓 / 网格 / 空单 / 定投
+//   动作  ：开仓 / 平仓（方向列另给 多/空）
 const TYPE_CN = {
-  grid_base:'底仓买入', grid_buy:'网格买入', grid_sell:'网格卖出',
-  grid_trail:'移动止盈', grid_external:'手工平仓', short_close:'空单平仓',
-  dca_buy:'定投买入', close:'平仓'
+  grid_base:'自动·合约·底仓·开仓',
+  grid_buy:'自动·合约·网格·开仓',
+  grid_sell:'自动·合约·网格·平仓',
+  grid_trail:'自动·合约·网格·平仓',
+  grid_external:'手动·合约·网格·平仓',
+  short_open:'自动·合约·空单·开仓',
+  short_close:'自动·合约·空单·平仓',
+  dca_buy:'自动·现货·定投·开仓',
+  close:'手动·合约·网格·平仓'
 };
 
 async function loadOrders(){
@@ -571,6 +579,8 @@ async function loadOrders(){
   if(!rows.length){ $('ordersBody').innerHTML='<tr><td colspan="11" class="empty">暂无成交</td></tr>'; return; }
   $('ordersBody').innerHTML = rows.map(o=>{
     const isSell = o.side==='sell';
+    // 方向看「腿」：空单开仓是卖、平仓是买，但在仓位上都属于「空」腿
+    const leg = (o.type==='short_open' || o.type==='short_close') ? '空' : '多';
     const pnl = Number(o.pnl||0);
     // 有没有盈亏看「类型」而不是「方向」——空单平仓是「买」，但它确实有盈亏
     const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close'];
@@ -582,7 +592,7 @@ async function loadOrders(){
     return '<tr>'
       + '<td>'+esc((o.ts||'').replace('T',' ').slice(5,19))+'</td>'
       + '<td class="num">'+esc(o.symbol)+'</td>'
-      + '<td class="'+(isSell?'neg':'pos')+'">'+(isSell?'卖':'买')+'</td>'
+      + '<td class="'+(leg==='空'?'neg':'pos')+'"><b>'+leg+'</b></td>'
       + '<td title="'+esc(o.note||'')+'">'+(TYPE_CN[o.type]||esc(o.type))+'</td>'
       + '<td>'+nf(o.price,6)+'</td><td>'+nf(o.amount,4)+'</td><td>'+nf(o.cost,2)+'</td>'
       + '<td>'+nf(o.fee,4)+'</td>'
