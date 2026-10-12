@@ -396,6 +396,39 @@ class GridStrategy:
                 except Exception as e:
                     log.error(f"GRID {sym} 空单逻辑异常: {e}")
 
+    async def cancel_waiting(self, sym: str) -> tuple[bool, str]:
+        """「取消并重新筛选」：撤掉该标的全部挂单、清掉它的网格状态，把它移出
+        本轮选币清单，并强制下一轮重新选币。
+
+        只对**空仓待机**（已挂单、未成交）的标的生效 —— 有持仓的直接拒绝，
+        免得误清仓位。刻意**不设静置期**：重选到它就照常挂单，选到别的也一样。
+        """
+        st = self.db.get_grid_state(sym)
+        if st is None:
+            return False, "该标的当前不在管理清单里"
+        if (st.get("status") or "active") == "draining":
+            return False, "该标的正在退出（只卖不买），不能取消重选"
+        lq, _ = self.db.lots_qty_cost(sym)
+        if float(st.get("base_qty", 0) or 0) > 1e-12 or lq > 1e-12:
+            return False, "该标的有持仓，不能取消重选（请先平仓）"
+        if not self.client.dry_run:
+            ex_qty, _ = await self._current_entry(sym)
+            if ex_qty > 1e-12:
+                return False, "交易所有持仓，不能取消重选"
+        await self._cancel_level_orders(sym)
+        await self._cancel_short_stop(sym)
+        self.db.replace_grid_levels(sym, [])
+        self.db.clear_lots(sym)
+        self.db.conn.execute("DELETE FROM grid_state WHERE symbol=?", (sym,))
+        self.db.conn.commit()
+        fresh = self.db.load_config()
+        fresh["grid_selection"] = [s for s in (fresh.get("grid_selection") or [])
+                                   if s.get("symbol") != sym]
+        self.db.save_config(fresh)
+        self.db.set_runtime_stat("grid_selection_ts", 0)   # 强制下一轮重新选币
+        log.info(f"GRID {sym}: 已取消全部挂单并移出清单 → 下一轮重新选币")
+        return True, "已取消挂单，正在重新选币"
+
     async def _cancel_level_orders(self, sym: str):
         """撤掉该标的在交易所上所有挂着的档位单（DB 档位由调用方清）。"""
         if self.client.dry_run:
@@ -1381,7 +1414,9 @@ class GridStrategy:
         state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
         done = self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0
         qty = float(m.get("contracts", 0) or 0)
-        if qty <= 0 and state == 0 and not done:
+        if qty <= 0 and state != 1:
+            # 既没持仓、也没有在挂的开空单 → 不显示这一块
+            # （含"已平/不再开"的收尾状态：卡片上留一块空壳只是噪音）
             return None
         entry = float(m.get("entry", 0) or 0)
         sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)

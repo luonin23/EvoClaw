@@ -39,6 +39,7 @@ class WebServer:
         r.add_get("/intro.html", self.page_intro)
         r.add_get("/api/state", self.api_state)
         r.add_get("/api/grid", self.api_grid)
+        r.add_post("/api/grid/cancel", self.api_grid_cancel)
         r.add_get("/api/dca", self.api_dca)
         r.add_get("/api/orders", self.api_orders)
         r.add_get("/api/config", self.api_config_get)
@@ -116,6 +117,27 @@ class WebServer:
             return web.json_response(await s.status())
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_grid_cancel(self, request):
+        """「取消并重新筛选」：撤掉某标的的全部挂单并强制重选（仅空仓待机可用）。"""
+        if not self._auth_ok(request):
+            return await self._deny(request)
+        from strategies.grid import GridStrategy
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        sym = str((body or {}).get("symbol") or "").strip().upper()
+        if not sym:
+            return web.json_response({"status": "error", "message": "缺少 symbol"}, status=400)
+        cfg = self.db.load_config()
+        s = GridStrategy(self.client, self.db, cfg)
+        try:
+            ok, msg = await s.cancel_waiting(sym)
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+        return web.json_response({"status": "ok" if ok else "error", "message": msg},
+                                 status=200 if ok else 400)
 
     async def api_dca(self, request):
         from strategies.dca import DCAStrategy

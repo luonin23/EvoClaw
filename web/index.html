@@ -137,6 +137,12 @@ tr:hover td{background:var(--hover)}
 .gc-state.hold{border-color:rgba(0,208,132,.4);color:var(--accent);background:rgba(0,208,132,.08)}
 .gc-state.drain{border-color:rgba(245,158,11,.4);color:var(--warn);background:rgba(245,158,11,.08)}
 .gc-pnl{margin-left:auto;font-family:var(--mono);font-weight:700;font-size:17px;letter-spacing:-.02em}
+/* 取消并重新筛选（仅空仓待机可用）：撤掉该币全部挂单 + 强制重选 */
+.gc-btn{font-size:10.5px;padding:2px 9px;border-radius:5px;cursor:pointer;
+  background:transparent;border:1px solid rgba(255,71,87,.45);color:#ff8b96;
+  font-family:var(--mono);line-height:1.6}
+.gc-btn:hover{background:rgba(255,71,87,.12)}
+.gc-btn:disabled{opacity:.5;cursor:default}
 .gc-meta{font-family:var(--mono);font-size:11px;color:var(--t3);line-height:1.8;margin-bottom:4px}
 .gc-row{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;margin:6px 0}
 .gc-row b{font-weight:600}
@@ -462,6 +468,9 @@ async function loadGrid(){
       + '<div class="gc-head">'
         + '<span class="gc-sym">'+esc(s.symbol)+'</span>'
         + '<span class="gc-state '+stateCls+'">'+stateTxt+'</span>'
+        + ((!hasPos && s.status!=='draining')
+            ? '<button class="gc-btn" onclick="cancelAndReselect(\''+esc(s.symbol)+'\')">取消并重新筛选</button>'
+            : '')
         + '<span class="gc-pnl '+(hasPos ? (pnl>=0?'pos':'neg') : '')+'">'
         + (hasPos ? nfR(s.unrealized_pnl_rate) : '—') + '</span>'
       + '</div>'
@@ -549,6 +558,21 @@ async function unlock(){
   const r = await fetch('/api/auth-check',{method:'POST',headers:{'X-Web-Password':p}});
   if(r.ok){ PWD=p; $('lockBox').style.display='none'; $('cfgBox').style.display=''; $('lockErr').textContent=''; loadConfig(); }
   else { $('lockErr').textContent='密码错误'; $('pwd').value=''; }
+}
+
+// 空仓待机时「取消并重新筛选」：撤掉该币全部挂单 + 强制下一轮重新选币
+async function cancelAndReselect(sym){
+  if(!PWD){ toast('请先解锁'); return; }
+  if(!confirm('取消 '+sym+' 的全部挂单，并重新筛选交易标的？')) return;
+  const btn = event && event.target; if(btn) btn.disabled = true;
+  const r = await fetch('/api/grid/cancel',{method:'POST',
+    headers:{'Content-Type':'application/json',...authHeaders()},
+    body:JSON.stringify({symbol:sym})});
+  const d = await r.json().catch(()=>({}));
+  if(r.status===401){ toast('未授权，请重新解锁'); PWD=''; }
+  else toast(d.message || (r.ok ? '已取消' : '操作失败'));
+  if(btn) btn.disabled = false;
+  if(r.ok){ await loadGrid(); await loadState(); }
 }
 
 async function loadConfig(){
