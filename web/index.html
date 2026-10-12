@@ -551,15 +551,15 @@ async function loadDca(){
 //   市场  ：合约 / 现货      角色：底仓 / 网格 / 空单 / 定投
 //   动作  ：开仓 / 平仓（方向列另给 多/空）
 const TYPE_CN = {
-  grid_base:'自动·合约·底仓·开仓',
-  grid_buy:'自动·合约·网格·开仓',
-  grid_sell:'自动·合约·网格·平仓',
-  grid_trail:'自动·合约·网格·平仓',
-  grid_external:'手动·合约·网格·平仓',
+  grid_base:'自动·合约·多单·开仓',
+  grid_buy:'自动·合约·多单·开仓',
+  grid_sell:'自动·合约·多单·平仓',
+  grid_trail:'自动·合约·多单·平仓',
+  grid_external:'手动·合约·多单·平仓',
   short_open:'自动·合约·空单·开仓',
   short_close:'自动·合约·空单·平仓',
   dca_buy:'自动·现货·定投·开仓',
-  close:'手动·合约·网格·平仓'
+  close:'手动·合约·多单·平仓'
 };
 
 async function loadOrders(){
