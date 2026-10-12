@@ -541,7 +541,13 @@ async function loadDca(){
   $('dcaBody').innerHTML = html;
 }
 
-const TYPE_CN = {grid_base:'底仓买入', grid_buy:'网格买入', grid_sell:'网格卖出', dca_buy:'定投买入', close:'平仓'};
+// 订单类型 → 中文。区分「谁发起的」：
+//   挂单被动成交 = 网格买入/卖出；程序主动 = 移动止盈/底仓；人工 = 手工平仓
+const TYPE_CN = {
+  grid_base:'底仓买入', grid_buy:'网格买入', grid_sell:'网格卖出',
+  grid_trail:'移动止盈', grid_external:'手工平仓', short_close:'空单平仓',
+  dca_buy:'定投买入', close:'平仓'
+};
 
 async function loadOrders(){
   const d = await api('/api/orders?limit=80'); if(!d||!d.orders) return;
@@ -569,7 +575,7 @@ async function loadOrders(){
       + '<td>'+esc((o.ts||'').replace('T',' ').slice(5,19))+'</td>'
       + '<td class="num">'+esc(o.symbol)+'</td>'
       + '<td class="'+(isSell?'neg':'pos')+'">'+(isSell?'卖':'买')+'</td>'
-      + '<td>'+(TYPE_CN[o.type]||esc(o.type))+'</td>'
+      + '<td title="'+esc(o.note||'')+'">'+(TYPE_CN[o.type]||esc(o.type))+'</td>'
       + '<td>'+nf(o.price,6)+'</td><td>'+nf(o.amount,4)+'</td><td>'+nf(o.cost,2)+'</td>'
       + '<td>'+nf(o.fee,4)+'</td>'
       + pnlCell
