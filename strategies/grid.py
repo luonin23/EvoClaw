@@ -284,25 +284,51 @@ class GridStrategy:
                 if not st:
                     return
 
-        # 与交易所对账持仓数量与成本：交易所为准。
-        # 若数量明显不符，说明漏记了成交（如外部干预/离线成交），按交易所均价重置，
-        # 否则 base_qty 与 total_cost 不一致会算出错误的均价与盈亏。
+        # 与交易所对账持仓：交易所为准。
         if not self.client.dry_run:
-            ex_qty, ex_entry = await self._current_entry(sym)
-            db_qty = float(st.get("base_qty", 0) or 0)
-            db_cost = float(st.get("total_cost", 0) or 0)
-            db_avg = (db_cost / db_qty) if db_qty > 0 else 0
-            # 触发条件：数量不符，或均价与交易所偏差超过 0.5%
-            qty_bad = ex_qty > 0 and abs(ex_qty - db_qty) >= 1
-            avg_bad = (ex_qty > 0 and ex_entry > 0 and db_qty > 0
-                       and abs(db_avg - ex_entry) / ex_entry > 0.005)
-            if qty_bad or avg_bad:
-                self.db.upsert_grid_state(sym, base_qty=ex_qty, total_cost=ex_qty * ex_entry)
-                # 账本以交易所为准重建（对账差异说明账本已不可信）
-                self.db.reset_lots(sym, ex_qty, ex_entry, "对账重建")
-                st = self.db.get_grid_state(sym)
-                log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
-                            f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
+            try:
+                positions = await self.client.get_positions()
+            except Exception as e:
+                # 读不到 ≠ 没有持仓。绝不把"查不到"当成"已平仓"，否则一次接口抖动
+                # 就会把仓位记录误清空。本轮直接跳过对账。
+                positions = None
+                log.warning(f"GRID {sym}: 读取持仓失败，本轮跳过对账: {e}")
+            if positions is not None:
+                ex_qty, ex_entry = 0.0, 0.0
+                for p in positions:
+                    if (self.client.user_symbol(p.get("symbol", "")) == sym
+                            and p.get("side") == "long"):
+                        ex_qty = float(p.get("contracts", 0) or 0)
+                        ex_entry = float(p.get("entryPrice", 0) or 0)
+                db_qty = float(st.get("base_qty", 0) or 0)
+                db_cost = float(st.get("total_cost", 0) or 0)
+                db_avg = (db_cost / db_qty) if db_qty > 0 else 0
+                if ex_qty <= 1e-12 and db_qty > 1e-12:
+                    # 交易所已经没持仓、本地却记着有 → 被外部平掉了（手工平仓/强平）。
+                    # 必须清空本地并撤掉失效挂单：这些卖单已无仓可卖，留着只会报错，
+                    # 而且会挡住后续重新建仓。
+                    log.warning(f"GRID {sym}: 交易所已无持仓（本地记 {db_qty:.0f} 张）→ "
+                                f"判定为外部平仓：清空本地持仓、撤掉失效挂单")
+                    await self._cancel_level_orders(sym)
+                    self.db.replace_grid_levels(sym, [])
+                    self.db.clear_lots(sym)
+                    self.db.upsert_grid_state(sym, base_qty=0.0, total_cost=0.0)
+                    self.db.set_runtime_stat(f"grid_exit:{sym}", price)
+                    self.db.set_runtime_stat(f"tp_high:{sym}", 0)
+                    self.db.set_runtime_stat(f"grid_ext_close:{sym}", time.time())
+                    st = self.db.get_grid_state(sym) or st
+                else:
+                    # 数量不符，或均价与交易所偏差超过 0.5% → 按交易所重建
+                    qty_bad = ex_qty > 0 and abs(ex_qty - db_qty) >= 1
+                    avg_bad = (ex_qty > 0 and ex_entry > 0 and db_qty > 0
+                               and abs(db_avg - ex_entry) / ex_entry > 0.005)
+                    if qty_bad or avg_bad:
+                        self.db.upsert_grid_state(sym, base_qty=ex_qty, total_cost=ex_qty * ex_entry)
+                        # 账本以交易所为准重建（对账差异说明账本已不可信）
+                        self.db.reset_lots(sym, ex_qty, ex_entry, "对账重建")
+                        st = self.db.get_grid_state(sym)
+                        log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
+                                    f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
 
         if not self.client.dry_run:
             await self._ensure_sell_coverage(sym, st)
@@ -346,6 +372,14 @@ class GridStrategy:
                     await self._maybe_short(sym, price)
                 except Exception as e:
                     log.error(f"GRID {sym} 空单逻辑异常: {e}")
+
+    async def _cancel_level_orders(self, sym: str):
+        """撤掉该标的在交易所上所有挂着的档位单（DB 档位由调用方清）。"""
+        if self.client.dry_run:
+            return
+        for lv in self.db.get_grid_levels(sym):
+            if lv["status"] == "pending" and lv.get("order_id"):
+                await self.client.cancel_order(lv["order_id"], sym, "futures")
 
     async def _cancel_buy_orders(self, sym: str):
         """撤销该标的所有待成交买单（交易所挂单 + DB 档位），卖单不动。
@@ -474,6 +508,15 @@ class GridStrategy:
         """
         cfg = self.cfg
         if not cfg.get("entry_limit_only", True):
+            return False
+        # 刚被手工平过仓的标的先冷静一会儿再考虑建仓 —— 否则你手动平了它，
+        # 下一个 tick 系统又给你买回来，很费解。
+        cool = float(cfg.get("ext_close_cooldown_min", 30) or 0) * 60
+        last = float(self.db.get_runtime_stat(f"grid_ext_close:{sym}", 0) or 0)
+        if cool > 0 and last and (time.time() - last) < cool:
+            self._warn_once(f"grid_extcool:{sym}",
+                            f"GRID {sym}: 该标的刚被手工平仓，{(cool-(time.time()-last))/60:.0f} "
+                            f"分钟内暂不重新建仓")
             return False
         pos = self.client.range_pos(sym)
         pos_max = float(cfg.get("entry_pos_max", 0.6) or 0.6)
@@ -773,10 +816,7 @@ class GridStrategy:
             await self.client.set_margin_mode(sym, "isolated")
             await self.client.set_leverage(sym, int(self.cfg.get("leverage", 3) or 3))
         # 实盘：重建前先撤掉交易所上的旧挂单，避免留下孤儿单
-        if not self.client.dry_run:
-            for lv in self.db.get_grid_levels(sym):
-                if lv["status"] == "pending" and lv.get("order_id"):
-                    await self.client.cancel_order(lv["order_id"], sym, "futures")
+        await self._cancel_level_orders(sym)
 
         half = max(1, grids // 2)
         below = [p for p in pts if p < price][-half:]      # 现价下方最近的 half 档
