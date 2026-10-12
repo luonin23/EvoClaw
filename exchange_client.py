@@ -391,6 +391,16 @@ class ExchangeClient:
                 log.warning(f"Stop order failed {user_symbol} {side} {amount}@{stop_price}: {e}{s}")
             return None
 
+    async def fetch_my_trades(self, user_symbol: str, since_ms: int = None,
+                              limit: int = 100) -> list[dict]:
+        """该标的的成交明细（用于还原外部/手工平仓的真实成交价）。"""
+        try:
+            return await self._safe_call(self.futures.fetch_my_trades(
+                self.to_ccxt(user_symbol, "futures"), since_ms, limit), timeout=20)
+        except Exception as e:
+            log.warning(f"fetch_my_trades {user_symbol} failed: {e}")
+            return []
+
     async def fetch_open_algo_orders(self, user_symbol: str) -> list[dict]:
         """条件单（止损/止盈）走的是币安「算法单」接口，**不在** fetch_open_orders 里。"""
         if self.dry_run:
