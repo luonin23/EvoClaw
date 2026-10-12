@@ -113,12 +113,22 @@ class GridStrategy:
             return
         limit = max(1, n if n > 0 else self._auto_symbol_cap(equity, picks))
 
-        # 选币器返回的是**全部合格标的**（按分数排序），所以「仍在榜上」=
-        # 「仍然合格」。已在跑且仍合格的，优先保留。
+        # 选币器返回的是**全部合格标的**（按分数排序）。
+        # 粘性只保护「有持仓」的标的 —— 持仓网格被踢来踢去会抖散；
+        # 空仓待机的没有沉没成本，按分数公平竞争，否则名额只有 1 个时
+        # 先来的币会永远占位，新的好机会永远进不来（实测发生过）。
         prev_syms = [s.get("symbol") for s in (self.config.get("grid_selection") or [])
                      if s.get("symbol")]
         by_sym = {p["symbol"]: p for p in picks}
-        keep = [by_sym[s] for s in prev_syms if s in by_sym][:limit]
+        keep = []
+        for s in prev_syms:
+            if len(keep) >= limit:
+                break
+            if s not in by_sym:
+                continue                      # 不再合格 → 让位（draining 机制收尾）
+            st = self.db.get_grid_state(s)
+            if st and float(st.get("base_qty", 0) or 0) > 1e-12:
+                keep.append(by_sym[s])        # 有仓在身 → 粘住
         keepset = {k["symbol"] for k in keep}
         merged = keep + [p for p in picks if p["symbol"] not in keepset]
         if len(merged) > limit:
