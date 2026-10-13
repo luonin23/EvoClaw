@@ -189,6 +189,11 @@ class Database:
         row = self.conn.execute("SELECT value FROM runtime_stats WHERE key=?", (key,)).fetchone()
         return row[0] if row else default
 
+    def runtime_keys(self, prefix: str = "") -> list[str]:
+        rows = self.conn.execute("SELECT key FROM runtime_stats WHERE key LIKE ?",
+                                 (prefix + "%",)).fetchall()
+        return [r[0] for r in rows]
+
     def set_runtime_stat(self, key: str, value: float):
         self.conn.execute(
             "INSERT INTO runtime_stats (key, value, updated_at) VALUES (?, ?, ?) "
@@ -218,16 +223,19 @@ class Database:
         self.conn.commit()
 
     def get_orders(self, limit: int = 100, mode: str = None) -> list[dict]:
+        # 按成交时间排，而不是自增 id —— 补记/回填的记录 id 更大但时间更早，
+        # 按 id 排会让它们跑到最前面，看起来像"时间乱了"
         if mode:
             rows = self.conn.execute(
                 """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
                           order_id, status, dry_run, note, pnl, pnl_rate
-                   FROM orders WHERE mode=? ORDER BY id DESC LIMIT ?""", (mode, limit)).fetchall()
+                   FROM orders WHERE mode=? ORDER BY ts DESC, id DESC LIMIT ?""",
+                (mode, limit)).fetchall()
         else:
             rows = self.conn.execute(
                 """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
                           order_id, status, dry_run, note, pnl, pnl_rate
-                   FROM orders ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+                   FROM orders ORDER BY ts DESC, id DESC LIMIT ?""", (limit,)).fetchall()
         cols = ["id", "ts", "mode", "symbol", "side", "type", "price", "amount",
                 "cost", "fee", "order_id", "status", "dry_run", "note", "pnl", "pnl_rate"]
         return [dict(zip(cols, r)) for r in rows]

@@ -586,6 +586,15 @@ async function loadOrders(){
     // 有没有盈亏看「类型」而不是「方向」——空单平仓是「买」，但它确实有盈亏
     const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close'];
     const hasPnl = CLOSING.indexOf(o.type) >= 0;
+    // 平仓原因（止盈/止损/手工）直接跟在校验后面显示 —— 这是判断这笔交易性质的关键
+    const note = String(o.note||'');
+    const reason = !hasPnl ? ''
+      : (note.indexOf('止损') >= 0 ? '止损'
+        : note.indexOf('止盈') >= 0 ? '止盈'
+        : o.type === 'grid_external' ? '手工' : '');
+    const reasonHtml = reason
+      ? '·<span class="'+(reason==='止损'?'neg':(reason==='止盈'?'pos':''))+'">'+reason+'</span>'
+      : '';
     const pnlCell = hasPnl
       ? '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</td>'
         + '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfR(o.pnl_rate)+'</td>'
@@ -594,7 +603,7 @@ async function loadOrders(){
       + '<td>'+esc((o.ts||'').replace('T',' ').slice(5,19))+'</td>'
       + '<td class="num">'+esc(o.symbol)+'</td>'
       + '<td class="'+(leg==='空'?'neg':'pos')+'"><b>'+leg+'</b></td>'
-      + '<td title="'+esc(o.note||'')+'">'+(TYPE_CN[o.type]||esc(o.type))+'</td>'
+      + '<td title="'+esc(o.note||'')+'">'+(TYPE_CN[o.type]||esc(o.type))+reasonHtml+'</td>'
       + '<td>'+nf(o.price,6)+'</td><td>'+nf(o.amount,4)+'</td><td>'+nf(o.cost,2)+'</td>'
       + '<td>'+nf(o.fee,4)+'</td>'
       + pnlCell
