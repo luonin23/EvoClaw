@@ -102,6 +102,11 @@ tr:hover td{background:var(--hover)}
 }
 .gbar2 .lvlz.buy{background:rgba(0,208,132,.85)}
 .gbar2 .lvlz.sell{background:rgba(255,71,87,.85)}
+/* 待挂：档位还没真正挂上交易所 —— 虚线杆 + 半透明，与实挂一眼区分 */
+.gbar2 .lvlz.wait{width:0;background:repeating-linear-gradient(180deg,currentColor 0 3px,transparent 3px 7px)}
+.gbar2 .lvlz.buy.wait{color:rgba(0,208,132,.6)}
+.gbar2 .lvlz.sell.wait{color:rgba(255,71,87,.6)}
+.gbar2 .lvlz.wait span{opacity:.6;border-style:dashed}
 .gbar2 .lvlz span{position:absolute;top:50%;transform:translateY(-50%);
   font-family:var(--mono);font-size:9px;white-space:nowrap;padding:1px 5px;border-radius:3px;
   line-height:1.4;z-index:4}
@@ -475,8 +480,10 @@ async function loadGrid(){
       }
       if (lane < 0) lane = laneRight.indexOf(Math.min(...laneRight));  // 都放不下 → 选最空的一条
       laneRight[lane] = Math.max(laneRight[lane], R);
-      return '<div class="lvlz '+(isSell?'sell':'buy')+(flip?' flip':'')+'" style="left:'+p.toFixed(2)+'%">'
-        + '<span style="top:'+LANES[lane]+'px">'+esc(txt)+'</span></div>';
+      const wait = l.placed === false;
+      return '<div class="lvlz '+(isSell?'sell':'buy')+(flip?' flip':'')+(wait?' wait':'')
+        + '" style="left:'+p.toFixed(2)+'%">'
+        + '<span style="top:'+LANES[lane]+'px">'+esc(txt)+(wait?' 待挂':'')+'</span></div>';
     }).join('');
     const costMark = costPct !== null
       ? '<div class="mark cost" style="left:'+costPct.toFixed(2)+'%"><span>成本 '+nfpx(s.avg_price)+'</span></div>' : '';
