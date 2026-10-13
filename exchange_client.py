@@ -85,6 +85,7 @@ class ExchangeClient:
         self._prices: dict = {}           # user symbol -> last price
         self._price_ts: dict = {}         # user symbol -> monotonic ts
         self._hl: dict = {}               # user symbol -> (24h high, 24h low)
+        self._oo_cache: dict = {}         # (symbol, kind) -> (orders, monotonic ts)
         self._closed = False
         self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
         self.notional_safety = float(config.get("order_notional_safety", 1.02) or 1.02)
@@ -469,9 +470,18 @@ class ExchangeClient:
             return "unknown"
 
     async def fetch_open_orders(self, user_symbol: str, kind: str = "futures") -> list[dict]:
+        # 短 TTL 缓存：引擎 tick 和 Web status() 都会拉挂单，8 秒内共享一次请求，
+        # 让「已挂/待挂」的展示以交易所为准而不至于打爆限频。
+        key = (user_symbol, kind)
+        now = time.monotonic()
+        hit = self._oo_cache.get(key)
+        if hit and (now - hit[1]) < 8.0:
+            return hit[0]
         ex = self.futures if kind == "futures" else self._spot
         try:
-            return await self._safe_call(ex.fetch_open_orders(self.to_ccxt(user_symbol, kind)), timeout=15)
+            rows = await self._safe_call(ex.fetch_open_orders(self.to_ccxt(user_symbol, kind)), timeout=15)
         except Exception as e:
             log.warning(f"fetch_open_orders {user_symbol} failed: {e}")
-            return []
+            return hit[0] if hit else []
+        self._oo_cache[key] = (rows, now)
+        return rows

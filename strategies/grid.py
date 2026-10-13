@@ -453,6 +453,7 @@ class GridStrategy:
                                     f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
 
         if not self.client.dry_run:
+            await self._trim_sell_excess(sym, st)
             await self._ensure_sell_coverage(sym, st)
 
         # 账本兜底：有持仓但账本为空（首次引入该机制时的历史仓位）→ 按均价补记一笔，
@@ -555,47 +556,101 @@ class GridStrategy:
         self.db.conn.commit()
         log.info(f"GRID {sym}: 只卖不买 → 已撤销 {len(levels)} 条买单（卖单保留）")
 
-    async def _ensure_sell_coverage(self, sym: str, st: dict):
-        """确保卖单总量覆盖当前持仓。
+    async def _trim_sell_excess(self, sym: str, st: dict):
+        """卖单总量不得超过持仓量 —— 超出的部分在交易所必然被拒（-4118），
+        还会永远重试刷屏。对账补记/部分成交/手动改单都可能造成「卖单 > 持仓」。
 
-        多头的每一张货都必须有卖单，否则永远卖不掉（会一直沉淀）。
-        加仓后卖档不够、或历史遗留的欠覆盖，都在这里自动补齐。
+        从最高价往下保留，累计到持仓量为止；超出的档位：已挂的撤单，
+        然后把边界档位缩到剩余额度，完全放不下的直接删除。
         """
         qty = float(st.get("base_qty", 0) or 0)
         if qty <= 0:
             return
-        levels = self.db.get_grid_levels(sym)
-        sells = [l for l in levels if l["status"] == "pending" and l["side"] == "sell"]
-        covered = sum(float(l["amount"]) for l in sells)
+        sells = sorted([l for l in self.db.get_grid_levels(sym)
+                        if l["status"] == "pending" and l["side"] == "sell"],
+                       key=lambda l: -float(l["price"]))
+        total = sum(float(l["amount"]) for l in sells)
+        if total <= qty + 1e-9:
+            return
+        excess = total - qty
+        s = _throttle.emit(f"grid_trim:{sym}")
+        if s is not None:
+            log.warning(f"GRID {sym}: 卖单总量 {total:.0f} > 持仓 {qty:.0f} → 裁掉 {excess:.0f} 张{s}")
+        remain = qty
+        for lv in sells:
+            a = float(lv["amount"])
+            if remain >= a - 1e-9:
+                remain -= a
+                continue
+            # 这一档超出额度：缩量或删除
+            new_a = max(0.0, remain)
+            remain = 0.0
+            if lv.get("order_id") and not self.client.dry_run:
+                await self.client.cancel_order(lv["order_id"], sym, "futures")
+            if new_a < 1e-9:
+                self.db.conn.execute("DELETE FROM grid_levels WHERE id=?", (lv["id"],))
+            else:
+                # 缩量后需要重新挂（撤过了）；置空单号交给 _place_live 重挂
+                self.db.conn.execute(
+                    "UPDATE grid_levels SET amount=?, order_id='' WHERE id=?",
+                    (new_a, lv["id"]))
+            self.db.conn.commit()
+        # 注意：删除/缩量后卖单覆盖可能 < 持仓？不会 —— 裁剪只发生在 total>qty 时，
+        # 保留部分正好等于 qty，覆盖不变量仍成立。
+
+    async def _ensure_sell_coverage(self, sym: str, st: dict):
+        """确保卖单覆盖持仓 —— **以交易所实况为准**，不是 DB 账面。
+
+        部分成交、用户手动改单/撤单都会让 DB 与交易所偏离（实测 1087→97、86→6），
+        按账面算覆盖永远对不上。每次直接对账：
+          covered = 交易所当前卖单总量（含用户手动挂的）
+          short   = 持仓 - covered
+        补挂方式：并入价格最高的卖档 —— 撤掉该档的交易所余量重挂（余量+short）；
+        撤不掉（不是我们的单）就只挂 short。一条卖档都没有则在区间上沿挂。
+        """
+        qty = float(st.get("base_qty", 0) or 0)
+        if qty <= 0:
+            return
+        try:
+            live = await self.client.fetch_open_orders(sym, "futures")
+        except Exception:
+            return
+        live_sells = [o for o in live if o.get("side") == "sell"]
+        covered = sum(float(o.get("amount") or 0) for o in live_sells)
         if covered >= qty - 1e-9:
             return
         short = qty - covered
         s = _throttle.emit(f"grid_cover:{sym}")
         if s is not None:
-            log.warning(f"GRID {sym}: 卖单仅覆盖 {covered:.0f}/{qty:.0f} 张 → 补挂 {short:.0f} 张{s}")
-        if sells:
-            top = max(sells, key=lambda l: float(l["price"]))
-            merged = float(top["amount"]) + short
-            if not self.client.dry_run and top.get("order_id"):
-                await self.client.cancel_order(top["order_id"], sym, "futures")
-                res = await self.client.create_limit_order(
-                    sym, "sell", merged, float(top["price"]), "futures", position_side="LONG")
-                oid = res["order_id"] if res else ""
-                self.db.conn.execute("UPDATE grid_levels SET amount=?, order_id=? WHERE id=?",
-                                     (merged, oid, top["id"]))
-            else:
-                self.db.conn.execute("UPDATE grid_levels SET amount=? WHERE id=?", (merged, top["id"]))
+            log.warning(f"GRID {sym}: 交易所卖单仅覆盖 {covered:.0f}/{qty:.0f} 张 → 补 {short:.0f} 张{s}")
+        rows = sorted([l for l in self.db.get_grid_levels(sym)
+                       if l["status"] == "pending" and l["side"] == "sell"],
+                      key=lambda l: -float(l["price"]))
+        if rows:
+            top = rows[0]
+            tp = float(top["price"])
+            top_live = sum(float(o.get("amount") or 0) for o in live_sells
+                           if abs(float(o.get("price") or 0) - tp) <= tp * 1e-6)
+            cancelled = True
+            if top.get("order_id") and not self.client.dry_run:
+                cancelled = await self.client.cancel_order(top["order_id"], sym, "futures")
+            new_amt = short + (top_live if cancelled else 0.0)
+            rp = self.client.round_price(sym, tp, "futures")
+            res = await self.client.create_limit_order(
+                sym, "sell", new_amt, rp, "futures", position_side="LONG")
+            oid = res["order_id"] if res else ""
+            self.db.conn.execute("UPDATE grid_levels SET amount=?, order_id=? WHERE id=?",
+                                 (new_amt, oid, top["id"]))
             self.db.conn.commit()
         else:
-            # 一条卖单都没有：在区间上沿挂一条覆盖全部持仓
             upper = float(st.get("upper", 0) or 0)
             if upper <= 0:
                 return
             rp = self.client.round_price(sym, upper, "futures")
-            res = await self.client.create_limit_order(sym, "sell", qty, rp, "futures",
+            res = await self.client.create_limit_order(sym, "sell", short, rp, "futures",
                                                        position_side="LONG")
             oid = res["order_id"] if (res and not res.get("dry_run")) else ""
-            self.db.insert_grid_level(sym, len(levels), rp, "sell", qty)
+            self.db.insert_grid_level(sym, len(self.db.get_grid_levels(sym)), rp, "sell", short)
             if oid:
                 self.db.conn.execute(
                     "UPDATE grid_levels SET order_id=? WHERE symbol=? AND side='sell' AND status='pending'",
@@ -1403,6 +1458,26 @@ class GridStrategy:
                 self.db.conn.commit()
                 log.info(f"GRID {sym}: 认领交易所已有挂单 {lv['side']} {o.get('amount')}@{o.get('price')}")
                 continue
+            st_lv = self.db.get_grid_state(sym) or {}
+            if lv["side"] == "sell":
+                # 卖出受持仓容量约束：持仓减去交易所上已占用的卖单量。
+                # 用户手动改单/部分成交都会让"账面量"与"可卖量"有差，
+                # 不夹住就会 -4118 无限重试。
+                try:
+                    occupied = sum(float(o.get("amount") or 0) for o in
+                                   (await self.client.fetch_open_orders(sym, "futures"))
+                                   if o.get("side") == "sell")
+                except Exception:
+                    occupied = 0
+                capacity = float(st_lv.get("base_qty", 0) or 0) - occupied
+                amt_eff = min(float(lv["amount"]), max(0.0, capacity))
+                if amt_eff < float(lv["amount"]) - 1e-9:
+                    if amt_eff < 1e-9:
+                        continue          # 没有容量了：留给下一轮裁剪/对账处理
+                    self.db.conn.execute("UPDATE grid_levels SET amount=? WHERE id=?",
+                                         (amt_eff, lv["id"]))
+                    self.db.conn.commit()
+                    lv = dict(lv, amount=amt_eff)
             if lv["side"] == "buy":
                 if draining:
                     continue          # 收缩中：不挂买单
@@ -1577,6 +1652,7 @@ class GridStrategy:
         # 读取交易所持仓元数据（强平价 / 杠杆 / 保证金模式）—— 安全信息，必须可见。
         # 多空腿分开存：同一个币可以同时有多单和空单，只按币种做键会互相覆盖。
         metaL, metaS = {}, {}
+        live_ids: dict = {}      # symbol -> set(交易所当前挂单 id)，用于「已挂/待挂」的实况判定
         try:
             for p in await self.client.get_positions():
                 us = self.client.user_symbol(p.get("symbol", ""))
@@ -1603,6 +1679,13 @@ class GridStrategy:
             cost = float(st.get("total_cost", 0) or 0)
             avg = cost / qty if qty > 0 else 0
             lv = self.db.get_grid_levels(sym)
+            # 「已挂/待挂」以交易所为准：单号存在于交易所当前挂单里才算已挂。
+            # DB 里存的单号可能已被成交/撤销/手动改单 —— 不能只信本地账。
+            try:
+                live_ids[sym] = {str(o.get("id")) for o in
+                                 await self.client.fetch_open_orders(sym, "futures")}
+            except Exception:
+                live_ids[sym] = set()
             # 24h 振幅区间：现价落在当日高低的哪个位置（0=最低 1=最高）——
             # 选币时只给了振幅百分比，看不出「现在是在高点还是低点」。
             hl = self.client._hl.get(sym) or (0.0, 0.0)
@@ -1637,7 +1720,8 @@ class GridStrategy:
                 "levels": [
                     {"idx": l["level_idx"], "price": l["price"], "side": l["side"],
                      "amount": l["amount"], "status": l["status"],
-                     "placed": bool(l.get("order_id"))}
+                     "placed": bool(l.get("order_id"))
+                               and l["order_id"] in live_ids.get(sym, set())}
                     for l in lv if l["status"] == "pending"
                 ],
                 # 逐笔持仓账本：每一笔未卖出的买入，各自成本与浮盈（前端可展开）
