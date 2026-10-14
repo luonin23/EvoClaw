@@ -842,10 +842,7 @@ class GridStrategy:
                 why = "止损" if exit_px >= e0 else "止盈"
                 self._record_short_close(sym, q0, e0, exit_px, why, pnl_override=ex_pnl)
             await self._cancel_short_stop(sym)       # 清掉可能残留的止损单
-            self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
-            self.db.set_runtime_stat(f"short_state:{sym}", 0)
-            self.db.set_runtime_stat(f"short_done:{sym}", 1)
-            self.db.set_runtime_stat(f"short_qty:{sym}", 0)
+            self._finalize_short(sym)
             log.info(f"GRID {sym}: 空单已平仓 → 该币不再开空")
             return
         if sq > 1e-12:
@@ -873,9 +870,7 @@ class GridStrategy:
             # 挂单已不在交易所（被撤/过期/或已成交后平掉）→ 这轮空单结束
             log.info(f"GRID {sym}: 开空挂单已不在交易所 → 判定该轮空单结束（该币不再开空）")
             await self._cancel_short_stop(sym)
-            self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
-            self.db.set_runtime_stat(f"short_state:{sym}", 0)
-            self.db.set_runtime_stat(f"short_done:{sym}", 1)
+            self._finalize_short(sym)
             return
 
         # ---- state 0：判断要不要开空 ----
@@ -908,6 +903,19 @@ class GridStrategy:
         self.db.set_runtime_stat(f"short_state:{sym}", 1)
         log.warning(f"GRID {sym}: 高位试空 —— 挂空单 {amt:.0f} 张 @ {entry_px:.6g}"
                     f"（24h 区间 {pos*100:.0f}%，单次·最小仓·带止损·不加仓）")
+
+    def _finalize_short(self, sym: str):
+        """空单收尾：统一重置全部状态位。
+
+        任何空单平仓路径（检测到已平/软件止盈/软件止损/挂单消失）都必须调它，
+        别各自手动清零 —— 之前只清 short_state/done、漏掉 short_qty，
+        导致已平空单的旧数量被 _short_view 回退逻辑显示成「还在持仓」。
+        """
+        self.db.set_runtime_stat(f"short_state:{sym}", 0)
+        self.db.set_runtime_stat(f"short_done:{sym}", 1)
+        self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
+        self.db.set_runtime_stat(f"short_qty:{sym}", 0)
+        self.db.set_runtime_stat(f"short_entry:{sym}", 0)
 
     async def _cancel_short_stop(self, sym: str):
         """撤掉空单的止损单。
@@ -992,9 +1000,7 @@ class GridStrategy:
             res = await self.client.create_market_order(sym, "buy", qty, "futures",
                                                         position_side="SHORT")
             self._record_short_close(sym, qty, entry, float((res or {}).get("price") or price), "止盈")
-            self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
-            self.db.set_runtime_stat(f"short_state:{sym}", 0)
-            self.db.set_runtime_stat(f"short_done:{sym}", 1)
+            self._finalize_short(sym)
             return
 
         # 止损：交易所条件单挂上了就靠它；没挂上则软件兜底
@@ -1005,8 +1011,7 @@ class GridStrategy:
                                                             position_side="SHORT")
                 self._record_short_close(sym, qty, entry,
                                          float((res or {}).get("price") or price), "止损")
-                self.db.set_runtime_stat(f"short_state:{sym}", 0)
-                self.db.set_runtime_stat(f"short_done:{sym}", 1)
+                self._finalize_short(sym)
                 return
             res = await self.client.create_stop_order(sym, "buy", qty, stop_px, position_side="SHORT")
             if res:
@@ -1630,16 +1635,19 @@ class GridStrategy:
         m = (getattr(self, "_meta_short", {}) or {}).get(sym) or {}
         state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
         done = self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0
-        # 数量/入场价优先取交易所元数据，取不到回退到本地持久化值
-        # （每次 tick 都在记 short_qty/short_entry —— 持仓接口抖动也不至于显示丢失）
-        qty = float(m.get("contracts", 0) or 0) or \
-            float(self.db.get_runtime_stat(f"short_qty:{sym}", 0) or 0)
+        # 数量/入场价优先取交易所元数据；只有 state 活跃(1挂单中/2持仓中)时才
+        # 回退到本地持久化值 —— state=0（已平）时绝不回退，否则已平空单的残留
+        # short_qty 会被当成「还在持仓」显示（BATUSDT 实测：空单早平了却显示持仓中）。
+        qty = float(m.get("contracts", 0) or 0)
+        if state in (1, 2) and qty <= 0:
+            qty = float(self.db.get_runtime_stat(f"short_qty:{sym}", 0) or 0)
         if qty <= 0 and state != 1:
             # 既没持仓、也没有在挂的开空单 → 不显示这一块
             # （含"已平/不再开"的收尾状态：卡片上留一块空壳只是噪音）
             return None
-        entry = float(m.get("entry", 0) or 0) or \
-            float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
+        entry = float(m.get("entry", 0) or 0)
+        if state in (1, 2) and entry <= 0:
+            entry = float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
         sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)
         tp = float(cfg.get("short_tp_pct", 0.03) or 0.03)
         return {
