@@ -385,7 +385,8 @@ async function loadGrid(){
     const cardCls = !hasPos
       ? (shortActive ? (sh.unrealized>=0 ? 'profit' : 'lose') : 'empty')
       : (pnl >= 0 ? 'profit' : 'lose');
-    const stateTxt = s.status==='draining' ? '只卖不买'
+    const stateTxt = s.status==='draining'
+      ? (shortActive ? '只卖不买·空单持仓' : '只卖不买')
       : (shortActive ? (s.status==='waiting' ? '空单持仓·等待建仓' : '空单持仓')
       : (s.status==='waiting' ? '等待建仓' : (hasPos ? '持仓中' : '空仓待机')));
     const stateCls = s.status==='draining' ? 'drain' : ((hasPos||shortActive) ? 'hold' : '');
@@ -517,7 +518,9 @@ async function loadGrid(){
           : (shortActive ? nfR(sh.upnl_rate) : '—')) + '</span>'
       + '</div>'
       + '<div class="gc-meta">现价 '+nf(px,6)+(hasPos?(' · 均价 '+nf(s.avg_price,6)):'')+'</div>'
-      + '<div class="gc-row">'
+      // 纯空单卡片（无多头）不渲染多头数据行 —— 底仓0/浮盈0 的噪音会让人
+      // 误读成「没有持仓」（1000PEPE 教训）
+      + (s.status==='short_only' ? '' : '<div class="gc-row">'
         + '<span>底仓 <b>'+nf(s.base_qty,4)+'</b> 张</span>'
         + '<span>市值 <b>'+nf(s.position_value,4)+'</b> U</span>'
         + '<span>浮盈 <b class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</b> U '
@@ -525,7 +528,7 @@ async function loadGrid(){
         + '<span>已实现 <b class="'+(s.realized_pnl>=0?'pos':'neg')+'">'+nfP(s.realized_pnl,4)+'</b> U '
         + '<span class="'+(s.realized_pnl>=0?'pos':'neg')+'">('+nfR(s.realized_pnl_rate)+')</span></span>'
         + '<span>成交 买'+s.buy_count+'/卖'+s.sell_count+'</span>'
-      + '</div>'
+      + '</div>')
       + axisHtml
       + dayHtml
       + ordHtml

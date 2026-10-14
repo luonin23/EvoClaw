@@ -241,14 +241,20 @@ class Database:
         return [dict(zip(cols, r)) for r in rows]
 
     def get_order_summary(self) -> dict:
-        """成交汇总：总盈亏、总手续费、买卖笔数、平仓胜负数。"""
-        row = self.conn.execute("""
+        """成交汇总：总盈亏、总手续费、买卖笔数、平仓胜负数。
+
+        「平仓」按类型判定而不是按方向 —— 空单平仓是 buy，但同样是平仓、
+        同样有盈亏；按方向算会把它排除在胜率之外，与前端盈亏列口径打架。
+        """
+        closing = ("type IN ('grid_sell','grid_trail','grid_external',"
+                   "'short_close','close')")
+        row = self.conn.execute(f"""
             SELECT COALESCE(SUM(pnl), 0), COALESCE(SUM(fee), 0),
                    COUNT(CASE WHEN side='sell' THEN 1 END),
                    COUNT(CASE WHEN side='buy' THEN 1 END),
-                   COUNT(CASE WHEN side='sell' AND pnl > 0 THEN 1 END),
-                   COUNT(CASE WHEN side='sell' AND pnl <= 0 THEN 1 END),
-                   COALESCE(SUM(CASE WHEN side='sell' THEN cost END), 0)
+                   COUNT(CASE WHEN {closing} AND pnl > 0 THEN 1 END),
+                   COUNT(CASE WHEN {closing} AND pnl <= 0 THEN 1 END),
+                   COALESCE(SUM(CASE WHEN {closing} THEN cost END), 0)
             FROM orders""").fetchone()
         sell_cost = row[6] or 0
         return {

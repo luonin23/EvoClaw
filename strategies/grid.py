@@ -445,12 +445,26 @@ class GridStrategy:
                     avg_bad = (ex_qty > 0 and ex_entry > 0 and db_qty > 0
                                and abs(db_avg - ex_entry) / ex_entry > 0.005)
                     if qty_bad or avg_bad:
+                        # 差额也要进成交记录 —— 部分成交/漏记成交时，只改持仓不记账
+                        # 会让「成交记录 ↔ 持仓变化」对不上（PUMP 1087→97 的根源）。
+                        delta = ex_qty - db_qty
+                        if abs(delta) >= 1:
+                            self.db.insert_order({
+                                "mode": "grid", "symbol": sym,
+                                "side": "buy" if delta > 0 else "sell",
+                                "type": "grid_buy" if delta > 0 else "grid_sell",
+                                "price": ex_entry or price, "amount": abs(delta),
+                                "cost": round((ex_entry or price) * abs(delta), 6),
+                                "fee": round((ex_entry or price) * abs(delta) * 0.0005, 6),
+                                "pnl": 0, "pnl_rate": 0, "dry_run": False,
+                                "note": "对账补记·漏记成交"})
                         self.db.upsert_grid_state(sym, base_qty=ex_qty, total_cost=ex_qty * ex_entry)
                         # 账本以交易所为准重建（对账差异说明账本已不可信）
                         self.db.reset_lots(sym, ex_qty, ex_entry, "对账重建")
                         st = self.db.get_grid_state(sym)
                         log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
-                                    f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
+                                    f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算"
+                                    + (f"，差额 {delta:+.0f} 张已补记" if abs(delta) >= 1 else ""))
 
         if not self.client.dry_run:
             await self._trim_sell_excess(sym, st)
