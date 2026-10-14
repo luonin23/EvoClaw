@@ -508,7 +508,7 @@ async function loadGrid(){
       + '<div class="gc-head">'
         + '<span class="gc-sym">'+esc(s.symbol)+'</span>'
         + '<span class="gc-state '+stateCls+'">'+stateTxt+'</span>'
-        + ((!hasPos && s.status!=='draining')
+        + ((!hasPos && !shortActive && s.status!=='draining' && s.status!=='short_only')
             ? '<button class="gc-btn" onclick="cancelAndReselect(\''+esc(s.symbol)+'\')">取消并重新筛选</button>'
             : '')
         + '<span class="gc-pnl '+(hasPos ? (pnl>=0?'pos':'neg')

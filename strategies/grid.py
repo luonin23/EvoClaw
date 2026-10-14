@@ -1616,12 +1616,16 @@ class GridStrategy:
         m = (getattr(self, "_meta_short", {}) or {}).get(sym) or {}
         state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
         done = self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0
-        qty = float(m.get("contracts", 0) or 0)
+        # 数量/入场价优先取交易所元数据，取不到回退到本地持久化值
+        # （每次 tick 都在记 short_qty/short_entry —— 持仓接口抖动也不至于显示丢失）
+        qty = float(m.get("contracts", 0) or 0) or \
+            float(self.db.get_runtime_stat(f"short_qty:{sym}", 0) or 0)
         if qty <= 0 and state != 1:
             # 既没持仓、也没有在挂的开空单 → 不显示这一块
             # （含"已平/不再开"的收尾状态：卡片上留一块空壳只是噪音）
             return None
-        entry = float(m.get("entry", 0) or 0)
+        entry = float(m.get("entry", 0) or 0) or \
+            float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
         sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)
         tp = float(cfg.get("short_tp_pct", 0.03) or 0.03)
         return {
@@ -1754,6 +1758,38 @@ class GridStrategy:
                        if day_high > day_low > 0 and price > 0 else 0.0)
             out.append({
                 "symbol": sym, "status": "waiting",
+                "lower": 0, "upper": 0, "grids": 0,
+                "size_usdt": float(self.cfg.get("size_usdt", 0) or 0),
+                "price": price, "base_qty": 0, "avg_price": 0,
+                "position_value": 0, "cost_value": 0,
+                "unrealized_pnl": 0, "unrealized_pnl_rate": 0,
+                "realized_pnl": 0, "realized_pnl_rate": 0,
+                "leverage": None, "margin_mode": "", "liq_price": 0, "liq_distance": None,
+                "buy_count": 0, "sell_count": 0, "levels": [], "lots": [],
+                "short": self._short_view(sym, price),
+                "day_high": round(day_high, 10), "day_low": round(day_low, 10),
+                "day_pos": round(day_pos, 4), "entry_pos_max": entry_max,
+            })
+
+        # 第三来源：**有活跃空单**但不在清单、也没有网格状态的标的（孤儿空单）。
+        # 只修「管理」不修「显示」的话，它掉出清单的那一刻就会从页面上消失，
+        # 用户无从知道手里还压着一笔空单（1000PEPE 实测发生两次）。
+        for k in self.db.runtime_keys("short_state:"):
+            sym = k.split(":", 1)[1]
+            if sym in seen:
+                continue
+            if int(self.db.get_runtime_stat(k, 0) or 0) not in (1, 2):
+                continue
+            try:
+                price = self.client.last_price(sym) or await self.client.ensure_price(sym)
+            except Exception:
+                price = 0.0
+            hl = self.client._hl.get(sym) or (0.0, 0.0)
+            day_high, day_low = float(hl[0]), float(hl[1])
+            day_pos = (max(0.0, min(1.0, (price - day_low) / (day_high - day_low)))
+                       if day_high > day_low > 0 and price > 0 else 0.0)
+            out.append({
+                "symbol": sym, "status": "short_only",
                 "lower": 0, "upper": 0, "grids": 0,
                 "size_usdt": float(self.cfg.get("size_usdt", 0) or 0),
                 "price": price, "base_qty": 0, "avg_price": 0,
