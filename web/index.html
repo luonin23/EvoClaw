@@ -572,7 +572,7 @@ const TYPE_CN = {
   grid_buy:'自动·合约·多单·开仓',
   grid_sell:'自动·合约·多单·平仓',
   grid_trail:'自动·合约·多单·平仓',
-  grid_external:'手动·合约·多单·平仓',
+  grid_external:'外部·合约·多单·平仓',
   short_open:'自动·合约·空单·开仓',
   short_close:'自动·合约·空单·平仓',
   dca_buy:'自动·现货·定投·开仓',
@@ -602,12 +602,12 @@ async function loadOrders(){
     // 有没有盈亏看「类型」而不是「方向」——空单平仓是「买」，但它确实有盈亏
     const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close'];
     const hasPnl = CLOSING.indexOf(o.type) >= 0;
-    // 平仓原因（止盈/止损/手工）直接跟在校验后面显示 —— 这是判断这笔交易性质的关键
+    // 平仓原因（止盈/止损/外部）直接跟在校验后面显示 —— 这是判断这笔交易性质的关键
     const note = String(o.note||'');
     const reason = !hasPnl ? ''
       : (note.indexOf('止损') >= 0 ? '止损'
         : note.indexOf('止盈') >= 0 ? '止盈'
-        : o.type === 'grid_external' ? '手工' : '');
+        : o.type === 'grid_external' ? '外部' : '');
     const reasonHtml = reason
       ? '·<span class="'+(reason==='止损'?'neg':(reason==='止盈'?'pos':''))+'">'+reason+'</span>'
       : '';

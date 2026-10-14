@@ -383,6 +383,31 @@ class GridStrategy:
                     await self._maybe_short(sym, price)
                     return
 
+
+        if not self.client.dry_run:
+            await self._trim_sell_excess(sym, st)
+            await self._ensure_sell_coverage(sym, st)
+
+        # 账本兜底：有持仓但账本为空（首次引入该机制时的历史仓位）→ 按均价补记一笔，
+        # 否则卖出时无从配对、单笔盈亏会退化成均价口径。
+        lq, _ = self.db.lots_qty_cost(sym)
+        if lq <= 1e-12 and float(st.get("base_qty", 0) or 0) > 0:
+            bq = float(st["base_qty"])
+            self.db.reset_lots(sym, bq, float(st.get("total_cost", 0) or 0) / bq, "账本初始补记")
+            log.info(f"GRID {sym}: 账本为空，按持仓均价 {float(st.get('total_cost',0) or 0)/bq:.6g} "
+                     f"补记 {bq:.0f} 张")
+
+        draining = (st.get("status") or "active") == "draining"
+        if draining:
+            # 只卖不买：撤掉全部买单（交易所 + DB），只保留覆盖持仓的卖单。
+            # 幂等 —— 没有买单时零开销。若不撤，交易所上的买单在价格下跌时
+            # 仍会真实成交加仓，与「只卖不买」的语义相悖。
+            await self._cancel_buy_orders(sym)
+        await self._check_fills(sym, price, draining)
+
+        # 对账必须放在**成交检测之后** —— 先把已知成交落账，再对余额。
+        # 反过来的话：对账先把本地持仓拉平到交易所，紧接着 _check_fills
+        # 又把同一笔成交记一次 → 本地数量翻倍、下个 tick 再补一条幽灵平仓。
         # 与交易所对账持仓：交易所为准。
         if not self.client.dry_run:
             try:
@@ -406,7 +431,10 @@ class GridStrategy:
                     # 交易所已经没持仓、本地却记着有 → 被外部平掉了（手工平仓/强平）。
                     # 必须清空本地并撤掉失效挂单，同时**把这笔平仓补记进成交记录**，
                     # 否则成交记录里凭空少一笔、已实现盈亏也对不上。
-                    exit_px, ours, ex_pnl = await self._recent_exit(sym, db_qty)
+                    ref = [float(l["price"]) for l in self.db.get_grid_levels(sym)
+                           if l["side"] == "sell"]
+                    exit_px, ours, ex_pnl = await self._recent_exit(
+                        sym, db_qty, "sell", ref, position_side="LONG")
                     exit_px = exit_px or price
                     consumed = self.db.consume_lots(sym, exit_px, db_qty)
                     taken = sum(t for _, t in consumed)
@@ -424,7 +452,7 @@ class GridStrategy:
                         "pnl": round(pnl, 6),
                         "pnl_rate": round(pnl / (db_avg * db_qty), 8) if db_avg > 0 else 0,
                         "dry_run": False,
-                        "note": "网格卖出（挂单成交·对账补记）" if ours else "手工平仓（外部成交）"})
+                        "note": "网格卖出（挂单成交·对账补记）" if ours else "外部平仓（非本程序发起）"})
                     self.db.upsert_grid_state(
                         sym, base_qty=0.0, total_cost=0.0,
                         realized_pnl=float(st.get("realized_pnl", 0) or 0) + pnl,
@@ -445,47 +473,19 @@ class GridStrategy:
                     avg_bad = (ex_qty > 0 and ex_entry > 0 and db_qty > 0
                                and abs(db_avg - ex_entry) / ex_entry > 0.005)
                     if qty_bad or avg_bad:
-                        # 差额也要进成交记录 —— 部分成交/漏记成交时，只改持仓不记账
-                        # 会让「成交记录 ↔ 持仓变化」对不上（PUMP 1087→97 的根源）。
-                        delta = ex_qty - db_qty
-                        if abs(delta) >= 1:
-                            self.db.insert_order({
-                                "mode": "grid", "symbol": sym,
-                                "side": "buy" if delta > 0 else "sell",
-                                "type": "grid_buy" if delta > 0 else "grid_sell",
-                                "price": ex_entry or price, "amount": abs(delta),
-                                "cost": round((ex_entry or price) * abs(delta), 6),
-                                "fee": round((ex_entry or price) * abs(delta) * 0.0005, 6),
-                                "pnl": 0, "pnl_rate": 0, "dry_run": False,
-                                "note": "对账补记·漏记成交"})
+                        # 只做持仓校正，**不在这里记账**。
+                        # 曾试过按数量差补一条成交记录，结果与 _check_fills /
+                        # _reconcile_orders 双重记账：本 tick 对账补 +N，紧接着
+                        # _check_fills 又记一次 +N → 下个 tick 对账发现本地多出一倍，
+                        # 再补一条 -N 的「平仓」（pnl 恒为 0）。实测产生 14 条幽灵记录。
+                        # 真实成交由 _reconcile_orders（查已撤/已成订单）用账本核销，
+                        # 那条路径 PnL 才是对的。
                         self.db.upsert_grid_state(sym, base_qty=ex_qty, total_cost=ex_qty * ex_entry)
                         # 账本以交易所为准重建（对账差异说明账本已不可信）
                         self.db.reset_lots(sym, ex_qty, ex_entry, "对账重建")
                         st = self.db.get_grid_state(sym)
                         log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
-                                    f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算"
-                                    + (f"，差额 {delta:+.0f} 张已补记" if abs(delta) >= 1 else ""))
-
-        if not self.client.dry_run:
-            await self._trim_sell_excess(sym, st)
-            await self._ensure_sell_coverage(sym, st)
-
-        # 账本兜底：有持仓但账本为空（首次引入该机制时的历史仓位）→ 按均价补记一笔，
-        # 否则卖出时无从配对、单笔盈亏会退化成均价口径。
-        lq, _ = self.db.lots_qty_cost(sym)
-        if lq <= 1e-12 and float(st.get("base_qty", 0) or 0) > 0:
-            bq = float(st["base_qty"])
-            self.db.reset_lots(sym, bq, float(st.get("total_cost", 0) or 0) / bq, "账本初始补记")
-            log.info(f"GRID {sym}: 账本为空，按持仓均价 {float(st.get('total_cost',0) or 0)/bq:.6g} "
-                     f"补记 {bq:.0f} 张")
-
-        draining = (st.get("status") or "active") == "draining"
-        if draining:
-            # 只卖不买：撤掉全部买单（交易所 + DB），只保留覆盖持仓的卖单。
-            # 幂等 —— 没有买单时零开销。若不撤，交易所上的买单在价格下跌时
-            # 仍会真实成交加仓，与「只卖不买」的语义相悖。
-            await self._cancel_buy_orders(sym)
-        await self._check_fills(sym, price, draining)
+                                    f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
         if draining:
             st2 = self.db.get_grid_state(sym) or {}
             if float(st2.get("base_qty", 0) or 0) <= 1e-12:
@@ -836,7 +836,8 @@ class GridStrategy:
             q0 = float(self.db.get_runtime_stat(f"short_qty:{sym}", 0) or 0)
             e0 = float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
             if q0 > 0 and e0 > 0:
-                exit_px, _, ex_pnl = await self._recent_exit(sym, q0, side="buy")
+                exit_px, _, ex_pnl = await self._recent_exit(sym, q0, side="buy",
+                                                             position_side="SHORT")
                 exit_px = exit_px or price
                 # 空头：出场价高于入场 = 亏损 = 止损；低于 = 盈利 = 止盈
                 why = "止损" if exit_px >= e0 else "止盈"
@@ -930,12 +931,16 @@ class GridStrategy:
         except Exception as e:
             log.warning(f"GRID {sym}: 撤止损单失败: {e}")
 
-    async def _recent_exit(self, sym: str, qty: float, side: str = "sell"):
+    async def _recent_exit(self, sym: str, qty: float, side: str = "sell",
+                           ref_prices: list = None, position_side: str = "LONG"):
         """还原「最近这批平仓」的真实成交均价，并判断是不是我们挂的单成交的。
 
-        返回 (均价 or None, 是否我们自己的单)。判断依据是成交明细里的
-        clientOrderId 前缀 —— 本程序下的单都带 `ec` 前缀，手工平仓没有。
-        这样对账时才能正确区分「挂单成交」和「人工平仓」，而不是一律当成手工。
+        判断「是不是我们自己的单」有两条依据（任一命中即可）：
+          1. 成交明细里的 clientOrderId 带 `ec` 前缀（本程序下的单都会带）；
+          2. 成交价精确命中我们挂过的档位价（ref_prices）—— 老单没有前缀时用这条，
+             手工市价平仓不会刚好落在挂单价上。
+        两条都不命中才归为「外部平仓」（可能是人工、强平或交易所触发）。
+        返回 (均价 or None, 是否我们自己的单, 交易所权威盈亏 or None)。
         """
         # 放宽到 24 小时：孤儿空单的平仓可能很久以后才被发现，窗口太小就
         # 找不到那笔成交，只能拿当前市价凑（实测差了 1%）。
@@ -947,6 +952,12 @@ class GridStrategy:
         for t in sorted(trades, key=lambda x: x.get("timestamp") or 0, reverse=True):
             if str(t.get("side")) != side:
                 continue
+            # 对冲模式下必须再看 positionSide：sell 既可能是「多头平仓」，
+            # 也可能是「空单开仓」。不区分就会拿空单开仓价当多头平仓价
+            # （BATUSDT 实测：把 05:40 的空单开仓 0.20161 当成了多头平仓价）。
+            ps = str((t.get("info") or {}).get("positionSide") or "").upper()
+            if ps and ps != position_side.upper():
+                continue
             a = float(t.get("amount") or 0)
             p = float(t.get("price") or 0)
             if a <= 0 or p <= 0:
@@ -954,6 +965,11 @@ class GridStrategy:
             coid = str((t.get("info") or {}).get("clientOrderId") or "")
             if coid.startswith("ec"):
                 ours = True
+            elif ref_prices:
+                for rp0 in ref_prices:
+                    if rp0 and abs(p - float(rp0)) <= float(rp0) * 0.0015:
+                        ours = True          # 成交价命中我方挂单档位
+                        break
             rp = (t.get("info") or {}).get("realizedPnl")   # 交易所权威盈亏
             if rp not in (None, ""):
                 try:
