@@ -110,8 +110,12 @@ def verify_and_repair_db(log):
     import shutil, glob as _glob
 
     def _ok(path):
+        # 只读打开：若这个探测连接是「最后一个连接」，普通读写连接在 close()
+        # 时会 checkpoint 并**删掉 -wal/-shm**；万一还有别的实例活着，它的
+        # 连接就被抽走了底下的 WAL（实测事故：库文件报 malformed，而运行中的
+        # 进程却毫无察觉）。只读连接不写、不 checkpoint，不会产生副作用。
         try:
-            c = sqlite3.connect(path)
+            c = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             r = c.execute("PRAGMA integrity_check").fetchone()[0]
             c.close()
             return r == "ok"
@@ -144,6 +148,7 @@ async def main():
 
     verify_and_repair_db(log)
     db = Database(DB_PATH)
+    log.info(f"数据库: {DB_PATH} (WAL={'存在' if os.path.exists(DB_PATH + '-wal') else '无'})")
     if db.seed_config(DEFAULT_CONFIG):
         log.info("已用默认配置初始化数据库")
 

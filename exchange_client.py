@@ -469,9 +469,12 @@ class ExchangeClient:
         except Exception:
             return "unknown"
 
-    async def fetch_open_orders(self, user_symbol: str, kind: str = "futures") -> list[dict]:
+    async def fetch_open_orders(self, user_symbol: str, kind: str = "futures",
+                                strict: bool = False) -> list[dict]:
         # 短 TTL 缓存：引擎 tick 和 Web status() 都会拉挂单，8 秒内共享一次请求，
         # 让「已挂/待挂」的展示以交易所为准而不至于打爆限频。
+        # strict=True：接口失败时**抛出**而不是返回空表 —— 对账场景下「查不到」
+        # 绝不能被当成「交易所上一条挂单都没有」，否则会误判全部挂单消失。
         key = (user_symbol, kind)
         now = time.monotonic()
         hit = self._oo_cache.get(key)
@@ -482,6 +485,8 @@ class ExchangeClient:
             rows = await self._safe_call(ex.fetch_open_orders(self.to_ccxt(user_symbol, kind)), timeout=15)
         except Exception as e:
             log.warning(f"fetch_open_orders {user_symbol} failed: {e}")
+            if strict:
+                raise
             return hit[0] if hit else []
         self._oo_cache[key] = (rows, now)
         return rows

@@ -11,6 +11,7 @@
 import logging
 import math
 import time
+from datetime import datetime, timezone
 
 from exchange_client import _throttle
 from selector import select_grid_symbols, qualify_symbol
@@ -486,6 +487,9 @@ class GridStrategy:
                         st = self.db.get_grid_state(sym)
                         log.warning(f"GRID {sym}: 持仓对账 数量 {db_qty:.0f}→{ex_qty:.0f} / "
                                     f"均价 {db_avg:.6f}→{ex_entry:.6f}，成本已按交易所重算")
+                        # 数量对不上 = 必有一笔成交没落到 orders 表（孤儿单成交 /
+                        # 刚成交就被误清单号）。补录（幂等）→ 成交记录与盈亏才完整。
+                        await self._backfill_trades(sym)
         if draining:
             st2 = self.db.get_grid_state(sym) or {}
             if float(st2.get("base_qty", 0) or 0) <= 1e-12:
@@ -1015,7 +1019,10 @@ class GridStrategy:
             await self._cancel_short_stop(sym)
             res = await self.client.create_market_order(sym, "buy", qty, "futures",
                                                         position_side="SHORT")
-            self._record_short_close(sym, qty, entry, float((res or {}).get("price") or price), "止盈")
+            if not res:
+                log.error(f"GRID {sym}: 空单止盈市价平仓失败，状态保留，下一轮重试")
+                return
+            await self._record_short_fill(sym, qty, entry, res, price, "止盈")
             self._finalize_short(sym)
             return
 
@@ -1025,8 +1032,10 @@ class GridStrategy:
                 log.warning(f"GRID {sym}: 空单止损（现价 {price:.6g} ≥ {stop_px:.6g}）→ 市价平空")
                 res = await self.client.create_market_order(sym, "buy", qty, "futures",
                                                             position_side="SHORT")
-                self._record_short_close(sym, qty, entry,
-                                         float((res or {}).get("price") or price), "止损")
+                if not res:
+                    log.error(f"GRID {sym}: 空单止损市价平仓失败，状态保留，下一轮重试")
+                    return
+                await self._record_short_fill(sym, qty, entry, res, price, "止损")
                 self._finalize_short(sym)
                 return
             res = await self.client.create_stop_order(sym, "buy", qty, stop_px, position_side="SHORT")
@@ -1094,7 +1103,10 @@ class GridStrategy:
         if not res:
             log.error(f"GRID {sym}: 移动止盈卖出失败，状态保留，下一轮重试")
             return False
-        fill = float(res.get("price") or price)
+        # 市价单返回的 price 常是下单瞬间的行情快照，不是成交价（PONSUSDT 实测
+        # 记成 0.3 而真实成交 0.2981）。取交易所成交明细里的真实均价。
+        fill, _, _ = await self._recent_exit(sym, qty, side="sell", position_side="LONG")
+        fill = fill or float(res.get("price") or price)
         # 按账本核销全部批次，逐笔加总真实盈亏（与 _on_fill 同一口径）
         consumed = self.db.consume_lots(sym, fill, qty)
         taken = sum(t for _, t in consumed)
@@ -1452,7 +1464,9 @@ class GridStrategy:
         if not levels:
             return
         try:
-            open_orders = await self.client.fetch_open_orders(sym, "futures")
+            # strict：拉不到挂单列表就整轮跳过。若把失败当成「空列表」，
+            # 下面会把该标的所有挂单都判成「已消失」→ 集体误清 + 重复挂单。
+            open_orders = await self.client.fetch_open_orders(sym, "futures", strict=True)
         except Exception:
             return
         live = {str(o.get("id")) for o in open_orders}
@@ -1463,12 +1477,137 @@ class GridStrategy:
             if st == "closed":
                 # 已成交（可能是离线期间成交的）→ 补记成交
                 await self._on_fill(sym, lv, lv["side"], float(lv["price"]), price, False)
+                continue
+            if st in ("canceled", "expired"):
+                # 交易所明确说「撤了/过期了」→ 确实没成交，清掉单号重挂
+                self.db.clear_grid_order_id(lv["id"])
+                s = _throttle.emit(f"grid_stale:{sym}")
+                if s is not None:
+                    log.warning(f"GRID {sym}: 挂单 {lv['order_id']} 已被撤/过期"
+                                f"(状态={st}) → 清空并重新挂单{s}")
+                continue
+            # 状态既非「已成」也非「已撤」，但已不在挂单列表 —— 实测这是
+            # 「刚成交、状态接口还没翻页」的竞态（日志里 18 次全部如此）。
+            # 旧逻辑直接清空单号，而 _check_fills 只在「有 order_id」时才认成交，
+            # 于是这一档的成交被永久吞掉（ENA/OP/PONS/FIL 实测各丢一笔）。
+            # 改为：先拿交易所成交明细核实并补录（幂等），核实到才算成交。
+            got = await self._backfill_trades(sym, lv)
+            if got:
+                self.db.fill_grid_level(lv["id"])
+                log.warning(f"GRID {sym}: 挂单 {lv['order_id']} 已不在列表且状态={st}"
+                            f" → 按成交明细核实为「已成交」，已补录")
             else:
+                self.db.clear_grid_order_id(lv["id"])
                 s = _throttle.emit(f"grid_stale:{sym}")
                 if s is not None:
                     log.warning(f"GRID {sym}: 挂单 {lv['order_id']} 已不在交易所"
-                                f"(状态={st}) → 清空并重新挂单{s}")
-                self.db.clear_grid_order_id(lv["id"])
+                                f"(状态={st}) 且无对应成交 → 清空并重新挂单{s}")
+
+    # ===== 成交补录（交易所为准，幂等）=====
+    async def _backfill_trades(self, sym: str, only_level: dict = None) -> int:
+        """用交易所成交明细补录本地漏掉的成交。
+
+        触发点：
+          · 持仓对账发现本地数量与交易所不符（说明有成交没落账）；
+          · _reconcile_orders 发现挂单莫名消失、状态又非「已撤」。
+
+        幂等靠交易所的成交 id（seen_trades 表）。只补 **orders 表**（成交记录）
+        与已实现盈亏；持仓数量/成本一律交给对账，绝不在这里加减 ——
+        上一版在持仓对账里按差额记账，与 _check_fills 双重记账，产生了 14 条
+        幽灵记录（详见 28b9a83 的修复说明）。
+
+        返回补录/确认的成交笔数。
+        """
+        try:
+            since = int((time.time() - 48 * 3600) * 1000)
+            trades = await self.client.fetch_my_trades(sym, since, 200)
+        except Exception as e:
+            log.warning(f"GRID {sym}: 拉取成交明细失败，跳过补录: {e}")
+            return 0
+        if not trades:
+            return 0
+        # 本地已有、但还没绑定交易所成交号的记录 —— 用于识别「_check_fills 已经记过」
+        # 的那些成交，避免二次记账。按时间就近 + 数量匹配（同价同量的重复单靠
+        # used 集合逐一消费，不会一笔交易匹配到两条记录）。
+        local = [o for o in self.db.get_orders(400, mode="grid")
+                 if o["symbol"] == sym and float(o["amount"] or 0) > 0
+                 and o["type"] in ("grid_buy", "grid_base", "dca_buy", "grid_sell",
+                                   "grid_trail", "grid_external", "close",
+                                   "short_open", "short_close")]
+        used, got = set(), 0
+        for t in sorted(trades, key=lambda x: x.get("timestamp") or 0):
+            tid = str(t.get("id") or "")
+            if not tid or self.db.trade_seen(sym, tid):
+                continue
+            info = t.get("info") or {}
+            ps = str(info.get("positionSide") or "LONG").upper()
+            side = str(t.get("side") or "")
+            amt = float(t.get("amount") or 0)
+            px = float(t.get("price") or 0)
+            tms = int(t.get("timestamp") or 0)
+            if amt <= 0 or px <= 0:
+                continue
+            if only_level is not None:
+                # 只核实「这一档」是否成交
+                if (side != only_level["side"]
+                        or abs(amt - float(only_level["amount"])) > max(1e-9, float(only_level["amount"]) * 0.02)
+                        or abs(tms / 1000 - time.time()) > 48 * 3600):
+                    continue
+            # 1) 已被 _check_fills / 其他路径记过 → 只打标记
+            hit = None
+            for o in local:
+                if o["id"] in used:
+                    continue
+                want = ("buy" if o["type"] in ("grid_buy", "grid_base", "dca_buy", "short_close")
+                        else "sell")
+                if want != side:
+                    continue
+                if abs(float(o["amount"]) - amt) > max(1e-9, amt * 0.02):
+                    continue
+                try:
+                    ots = datetime.fromisoformat(o["ts"]).timestamp() * 1000
+                except Exception:
+                    continue
+                if abs(ots - tms) > 300000:
+                    continue
+                hit = o
+                break
+            if hit is not None:
+                used.add(hit["id"])
+                self.db.mark_trade_seen(sym, tid, str(tms))
+                got += 1
+                continue
+            # 2) 真·漏记 → 补一条成交记录
+            ex_pnl = info.get("realizedPnl")
+            try:
+                ex_pnl = float(ex_pnl) if ex_pnl not in (None, "") else None
+            except (TypeError, ValueError):
+                ex_pnl = None
+            if ps == "SHORT":
+                ptype = "short_open" if side == "sell" else "short_close"
+                note = "空单开仓（成交明细补录）" if side == "sell" else "空单平仓（成交明细补录）"
+                pnl = 0.0 if side == "sell" else (ex_pnl or 0.0)
+            elif side == "buy":
+                ptype, note, pnl = "grid_buy", "网格买入（成交明细补录）", 0.0
+            else:
+                ptype, note = "grid_sell", "网格卖出（成交明细补录）"
+                pnl = ex_pnl or 0.0          # 交易所已实现盈亏最权威
+            ts = datetime.fromtimestamp(tms / 1000, timezone.utc).isoformat() if tms else None
+            self.db.insert_order({
+                "mode": "grid", "symbol": sym, "side": side, "type": ptype,
+                "ts": ts, "price": px, "amount": amt, "cost": round(px * amt, 6),
+                "fee": round(float(info.get("commission") or 0) or px * amt * 0.0005, 6),
+                "pnl": round(pnl, 6), "pnl_rate": 0,
+                "dry_run": False, "note": note})
+            if pnl:
+                st = self.db.get_grid_state(sym) or {}
+                self.db.upsert_grid_state(
+                    sym, realized_pnl=float(st.get("realized_pnl", 0) or 0) + pnl)
+            self.db.mark_trade_seen(sym, tid, str(tms))
+            got += 1
+            log.warning(f"GRID {sym}: 成交明细补录 —— {side} {amt:.0f} @ {px:.6g} "
+                        f"({ptype}, 盈亏 {pnl:+.4f}U, tradeId={tid})")
+        return got
 
     # ===== 实盘挂单 =====
     async def _place_live(self, sym: str, equity: float, draining: bool = False):
@@ -1624,6 +1763,18 @@ class GridStrategy:
         s = _throttle.emit(key)
         if s is not None:
             log.warning(msg + s)
+
+    async def _record_short_fill(self, sym: str, qty: float, entry: float,
+                                 res: dict, price: float, why: str):
+        """市价平空后记账：价格/盈亏一律以**交易所真实成交**为准。
+
+        不能用市价单返回的 price —— 它常是下单瞬间的行情快照（`average` 缺失时
+        回退到 last price），与真实成交价能差 2%。QUSDT 实测：记成 0.054247
+        （盈亏 -0.2373U），交易所真实成交 0.053143（盈亏 -0.1280U），凭空多亏 0.109U。
+        """
+        fill, _, ex_pnl = await self._recent_exit(sym, qty, side="buy", position_side="SHORT")
+        fill = fill or float(res.get("price") or price)
+        self._record_short_close(sym, qty, entry, fill, why, pnl_override=ex_pnl)
 
     def _record_short_close(self, sym: str, qty: float, entry: float,
                             exit_px: float, why: str, pnl_override: float = None):

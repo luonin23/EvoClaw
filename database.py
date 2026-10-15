@@ -22,6 +22,7 @@ class Database:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        self._wal = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
         # 单连接会被事件循环线程与 to_thread 线程池同时使用，必须有锁保护
         # 多语句事务（sqlite3 只保证单条语句原子）。
         self._lk = threading.RLock()
@@ -137,6 +138,12 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_dca_records_ts ON dca_records(ts);
 
             -- 定投累计状态（每 symbol 一行）
+            CREATE TABLE IF NOT EXISTS seen_trades (
+                symbol TEXT NOT NULL,
+                trade_id TEXT NOT NULL,
+                ts TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (symbol, trade_id)
+            );
             CREATE TABLE IF NOT EXISTS dca_state (
                 symbol TEXT PRIMARY KEY,
                 total_cost REAL NOT NULL DEFAULT 0,
@@ -220,6 +227,18 @@ class Database:
 
     def update_order_status(self, order_id: str, status: str):
         self.conn.execute("UPDATE orders SET status=? WHERE order_id=?", (status, order_id))
+        self.conn.commit()
+
+    # ===== 交易所成交明细去重（补录用）=====
+    def trade_seen(self, symbol: str, trade_id: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM seen_trades WHERE symbol=? AND trade_id=?",
+            (symbol, str(trade_id))).fetchone() is not None
+
+    def mark_trade_seen(self, symbol: str, trade_id: str, ts: str = ""):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO seen_trades (symbol, trade_id, ts) VALUES (?, ?, ?)",
+            (symbol, str(trade_id), ts))
         self.conn.commit()
 
     def get_orders(self, limit: int = 100, mode: str = None) -> list[dict]:
@@ -478,6 +497,25 @@ class Database:
         return [dict(zip(cols, r)) for r in rows]
 
     # ===== 备份 / 检查点 =====
+    def health_check(self) -> tuple[bool, str]:
+        """轻量自检：连接是否还能读，以及 WAL 文件是否还在。
+
+        WAL 文件被外部删掉（例如另一个实例启动时的损坏恢复流程）时，本进程
+        持有的连接会与磁盘**脱钩**：写进的是已删除的 inode，磁盘上的库主文件
+        却停在旧状态 —— 表现为「程序自己看着一切正常，新连接却报
+        database disk image is malformed」。实测发生过一次，必须能自查出来。
+        """
+        try:
+            self.conn.execute("SELECT COUNT(*) FROM orders").fetchone()
+        except Exception as e:
+            return False, f"数据库查询失败: {e}"
+        if self._wal:
+            p = self.db_path + "-wal"
+            if not os.path.exists(p):
+                return False, (f"WAL 文件 {p} 已消失 —— 连接与磁盘脱钩，"
+                               f"继续写入会得到不一致的库，必须重启程序")
+        return True, ""
+
     def checkpoint(self):
         try:
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")

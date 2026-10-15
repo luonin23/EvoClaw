@@ -82,6 +82,17 @@ class Engine:
 
                 if self.tick % 60 == 0:
                     self.db.checkpoint()
+                if self.tick % 30 == 0:
+                    # 数据库自检：WAL 被外部删掉时，进程会「看着一切正常、
+                    # 其实已与磁盘脱钩」。宁可停下不交易，也不要在一个
+                    # 不一致的库上继续下单。
+                    try:
+                        ok, why = self.db.health_check()
+                    except Exception as e:
+                        ok, why = False, str(e)
+                    if not ok:
+                        log.error(f"数据库自检失败：{why} → 已暂停交易，请重启程序")
+                        self.paused = True
 
             except asyncio.TimeoutError:
                 self.last_error = "策略执行超时(60s)"
