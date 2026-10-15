@@ -160,7 +160,10 @@ class GridStrategy:
             size = float(cfg.get("size_usdt", 0) or 0)
             fixed = float(cfg.get("auto_range_pct", 0) or 0)
             out = []
-            for s in self._selection:
+            # 兜底：本轮选币失败/还没跑时 _selection 是空的，就沿用落库的清单。
+            # 否则「选中的标的」会瞬间变成 0 个 —— 网格当轮停摆，而且下游那个
+            # 「掉出清单就撤单」的清理会误判成「全都不在清单里」。
+            for s in (self._selection or (self.config.get("grid_selection") or [])):
                 # 区间宽度随标的自身波动率自适应：取 1 倍日振幅，夹在 4%~15%。
                 # 固定区间对高波动币会频繁穿出，对低波动币又几乎不成交。
                 rng = fixed if fixed > 0 else max(0.04, min(0.15, float(s.get("range") or 0.06)))
@@ -200,6 +203,13 @@ class GridStrategy:
 
         specs = self._specs()
         active = {s["symbol"] for s in specs if s.get("symbol")}
+
+        # 掉出清单、又没有仓位的标的 → 立刻撤光它的挂单。必须在 _reconcile_status
+        # 之前跑：这类标的没有存货可卖，"只卖不买"对它没有意义，直接清掉更干净。
+        try:
+            await self._sweep_stray_orders(active)
+        except Exception as e:
+            log.warning(f"GRID 清理掉队挂单失败: {e}")
 
         # 处理「掉出名单」：先标记，再继续维护它们的卖单
         await self._reconcile_status(active)
@@ -251,6 +261,58 @@ class GridStrategy:
                     await self._maybe_short(sym, price)
             except Exception as e:
                 log.error(f"GRID {sym} 空单跟踪异常: {e}")
+
+    async def _sweep_stray_orders(self, active: set):
+        """不在选币清单、又没有仓位的标的 → 撤掉它**全部**挂单并清掉档位。
+
+        用户要的规则：一个币掉出筛选 top5 时，它那些还没成交的建仓单就该取消 ——
+        留着只是白占保证金，把排在前面的标的挤到没钱可挂。而且必须**每轮都查**，
+        不能只在「有人排在前面却挂不上资金」时才顺手撤（那条路只覆盖清单内的标的）。
+
+        为什么需要单独扫一遍：逐标的维护（step 里的 manage 清单）只包含
+        「选中的」+「DB 里有网格状态的」标的。一个只有档位、没有网格状态行的标的
+        两边都漏 —— 它的交易所挂单就此无人回收，一直占着钱。
+
+        有持仓的走 draining（只卖不买，卖光后退役），有活跃空单的交给空单逻辑，
+        这两类不在这里动。
+        """
+        if self.client.dry_run:
+            return
+        if not active:
+            return                              # 选币清单为空 = 读不到 ≠ 全都不在，绝不清理
+        syms = {lv["symbol"] for lv in self.db.get_grid_levels(None)}
+        for sym in sorted(syms):
+            if sym in active:
+                continue
+            st = self.db.get_grid_state(sym)
+            if st and float(st.get("base_qty", 0) or 0) > 1e-12:
+                continue                        # 有货 → draining 收尾
+            if int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0) in (1, 2):
+                continue                        # 有空单 → 空单逻辑管
+            levels = self.db.get_grid_levels(sym)
+            n = 0
+            for lv in levels:
+                if lv.get("order_id"):
+                    await self.client.cancel_order(lv["order_id"], sym, "futures")
+                    n += 1
+            # DB 丢了单号、交易所上却还挂着的，一并撤掉（QUSDT 实测出现过：
+            # 交易所有 3 条买单，本地一条单号都没有）。
+            try:
+                for o in await self.client.fetch_open_orders(sym, "futures"):
+                    info = o.get("info") or {}
+                    if str(info.get("positionSide") or "LONG").upper() != "LONG":
+                        continue                # 空单腿不动
+                    if await self.client.cancel_order(str(o.get("id")), sym, "futures"):
+                        n += 1
+            except Exception as e:
+                log.warning(f"GRID {sym}: 清理残留挂单时查询失败: {e}")
+            self.db.replace_grid_levels(sym, [])
+            if st:
+                self.db.conn.execute("DELETE FROM grid_state WHERE symbol=?", (sym,))
+                self.db.conn.commit()
+            self.db.set_runtime_stat(f"tp_high:{sym}", 0)
+            log.warning(f"GRID {sym}: 已掉出选币清单且无持仓 → 撤销 {n} 条挂单、清空档位"
+                        f"（不再占用建仓资金）")
 
     async def _enforce_ladder_priority(self):
         """建仓资金严格按排名分配（top1 → top5 逐个查）：
