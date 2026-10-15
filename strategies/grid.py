@@ -290,27 +290,50 @@ class GridStrategy:
             if sym in active:
                 continue
             st = self.db.get_grid_state(sym)
-            if st and float(st.get("base_qty", 0) or 0) > 1e-12:
+            # 持仓有两套口径（grid_state.base_qty 与逐笔账本），必须**都**看 ——
+            # 只看一个的话，账面 0 但账本有货的标的会被当成空仓清掉。
+            lq, _ = self.db.lots_qty_cost(sym)
+            if (st and float(st.get("base_qty", 0) or 0) > 1e-12) or lq > 1e-12:
                 continue                        # 有货 → draining 收尾
             if int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0) in (1, 2):
                 continue                        # 有空单 → 空单逻辑管
             levels = self.db.get_grid_levels(sym)
-            n = 0
+            n, failed = 0, 0
             for lv in levels:
-                if lv.get("order_id"):
-                    await self.client.cancel_order(lv["order_id"], sym, "futures")
-                    n += 1
+                if not lv.get("order_id"):
+                    continue
+                try:
+                    okc = await self.client.cancel_order(lv["order_id"], sym, "futures")
+                except Exception as e:
+                    log.warning(f"GRID {sym}: 撤单 {lv['order_id']} 异常: {e}")
+                    okc = False
+                n += 1 if okc else 0
+                failed += 0 if okc else 1
             # DB 丢了单号、交易所上却还挂着的，一并撤掉（QUSDT 实测出现过：
             # 交易所有 3 条买单，本地一条单号都没有）。
             try:
-                for o in await self.client.fetch_open_orders(sym, "futures"):
-                    info = o.get("info") or {}
-                    if str(info.get("positionSide") or "LONG").upper() != "LONG":
-                        continue                # 空单腿不动
-                    if await self.client.cancel_order(str(o.get("id")), sym, "futures"):
-                        n += 1
+                # strict：查询失败不能当成「没有挂单」，否则下面的清档会把
+                # 交易所上撤不掉的单从本地抹掉，从此无人回收。
+                live = await self.client.fetch_open_orders(sym, "futures", strict=True)
             except Exception as e:
-                log.warning(f"GRID {sym}: 清理残留挂单时查询失败: {e}")
+                log.warning(f"GRID {sym}: 清理残留挂单时查询失败，本轮跳过: {e}")
+                continue
+            for o in live:
+                info = o.get("info") or {}
+                if str(info.get("positionSide") or "LONG").upper() != "LONG":
+                    continue                    # 空单腿不动
+                try:
+                    okc = await self.client.cancel_order(str(o.get("id")), sym, "futures")
+                except Exception as e:
+                    okc = False
+                n += 1 if okc else 0
+                failed += 0 if okc else 1
+            if failed:
+                # 还有没撤掉的单 → 本轮不清档位/状态，下一轮继续撤。
+                # 反过来做的话，那张单会连同它的单号一起从本地消失。
+                log.warning(f"GRID {sym}: 已掉出清单但仍有 {failed} 条挂单撤销失败"
+                            f" → 保留档位，下轮重试")
+                continue
             self.db.replace_grid_levels(sym, [])
             if st:
                 self.db.conn.execute("DELETE FROM grid_state WHERE symbol=?", (sym,))
@@ -574,12 +597,13 @@ class GridStrategy:
                 draining = (st.get("status") or "active") == "draining"
             await self._reconcile_orders(sym, price)
             await self._place_live(sym, equity, draining)
-            # 高位试空（单币单向：有多单时 _maybe_short 内部自动跳过）
-            if not draining:
-                try:
-                    await self._maybe_short(sym, price)
-                except Exception as e:
-                    log.error(f"GRID {sym} 空单逻辑异常: {e}")
+            # 高位试空。**draining 也要调**：掉出清单的标的如果还挂着一张没成交的
+            # 开空单（或在持仓中），跳过它就没人撤单、没人管止盈止损了。
+            # 「不开新仓」由 _maybe_short 内部的 draining 判断负责。
+            try:
+                await self._maybe_short(sym, price)
+            except Exception as e:
+                log.error(f"GRID {sym} 空单逻辑异常: {e}")
 
     async def cancel_waiting(self, sym: str) -> tuple[bool, str]:
         """「取消并重新筛选」：撤掉该标的全部挂单、清掉它的网格状态，把它移出
@@ -871,36 +895,50 @@ class GridStrategy:
         return True
 
     # ===== 高位试空（单次 / 最小仓 / 必带止损 / 不加仓 / 平掉后不再开）=====
-    async def _current_short(self, sym: str):
-        """返回 (空头张数, 开仓均价)。"""
+    async def _current_short(self, sym: str) -> tuple[float, float, bool]:
+        """返回 (空头张数, 开仓均价, 是否读到了)。
+
+        第三个值很关键：**接口失败必须与「真的没有持仓」区分开**。
+        把查询失败当成 0 张，会被下面的状态机读成「空头已经平掉了」——
+        于是补记一笔假平仓、撤掉止损单、把管理状态清零，交易所上却还挂着一笔
+        **没有止损保护的裸空头**。空头亏损无上限，这个误判不能出现。
+        """
         try:
             for p in await self.client.get_positions():
                 if self.client.user_symbol(p.get("symbol", "")) == sym and p.get("side") == "short":
-                    return float(p.get("contracts", 0) or 0), float(p.get("entryPrice", 0) or 0)
+                    return float(p.get("contracts", 0) or 0), float(p.get("entryPrice", 0) or 0), True
         except Exception as e:
-            log.warning(f"GRID {sym}: 读取空头持仓失败: {e}")
-        return 0.0, 0.0
+            log.warning(f"GRID {sym}: 读取空头持仓失败（本轮不推进空单状态）: {e}")
+            return 0.0, 0.0, False
+        return 0.0, 0.0, True
 
     async def _maybe_short(self, sym: str, price: float):
         """价格到当日区间顶部时的单次试空。
 
         用户定的规则：挂单开空、数量最小、只做一单、必带止损、不加仓，
         平掉之后该币不再开空。与多单互斥（同一个币同时只能一个方向）。
-        默认关闭（short_enabled=false），需要先用最小仓在实盘验证一次。
+
+        **开关在「交易配置」里（grid.short_enabled）**。关掉之后：
+          · 不再扫描任何开空机会（该币连持仓都不查，整个空单功能不运转）
+          · 「挂着但没成交」的开空单会被撤掉
+          · **已经成交**的空头持仓照常管理止盈/止损，一直管到平掉为止
+            （止损是交易所条件单，止盈是软件触发，两者都不会因为关开关而失效）
         """
-        cfg = self.cfg
-        if not cfg.get("short_enabled", False):
-            return
         if self.client.dry_run:
             return                                   # 空单只做实盘：dry_run 无真实持仓可依
-        if self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0:
-            return                                   # 该币的空单额度已用完
+        cfg = self.cfg
+        enabled = bool(cfg.get("short_enabled", False))
+        state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
+        # 开关关掉、该币又没有空头在途 → 彻底不碰（不查持仓、不扫机会）。
+        if not enabled and state == 0:
+            return
         st = self.db.get_grid_state(sym) or {}
         draining = (st.get("status") or "active") == "draining"
 
         # 允许多空同时存在（对冲模式）：做多网格与高位试空互不干扰，各管各的。
-        sq, entry = await self._current_short(sym)
-        state = int(self.db.get_runtime_stat(f"short_state:{sym}", 0) or 0)
+        sq, entry, ok = await self._current_short(sym)
+        if not ok:
+            return                                       # 仓位读不到 → 本轮什么也不做
 
         if state >= 2 and sq <= 1e-12:
             # 空头已平（多数是交易所止损单触发，或手工平）→ 补记成交 + 一次性用完
@@ -934,9 +972,18 @@ class GridStrategy:
                 log.info(f"GRID {sym}: 空单开仓已记账 —— {sq:.0f} 张 @ {entry or price:.6g}")
             self.db.set_runtime_stat(f"short_entry:{sym}", entry or price)
             self.db.set_runtime_stat(f"short_qty:{sym}", sq)
+            if not enabled:
+                self._warn_once(f"short_off_hold:{sym}",
+                                f"GRID {sym}: 空单开关已关闭，但该币仍持有空头 "
+                                f"{sq:.0f} 张 → 继续挂止盈/止损，直到平掉")
             await self._manage_short(sym, sq, entry or price, price)
             return
         if state == 1:
+            if not enabled:
+                # 关掉开关：只撤「还没成交」的开空挂单。从没成交过 = 这一轮空单
+                # 没发生过，所以不把 short_done 置位（重新打开开关时它还能再试）。
+                await self._cancel_short_entry(sym)
+                return
             if await self._short_entry_open(sym):
                 return                               # 开空单还挂着，等它成交
             # 挂单已不在交易所（被撤/过期/或已成交后平掉）→ 这轮空单结束
@@ -945,7 +992,11 @@ class GridStrategy:
             self._finalize_short(sym)
             return
 
-        # ---- state 0：判断要不要开空 ----
+        # ---- 没有空头持仓、也没有开空挂单 ----
+        if not enabled:
+            return                                   # 开关关闭：不找新机会
+        if self.db.get_runtime_stat(f"short_done:{sym}", 0) > 0:
+            return                                   # 该币的空单额度已用完
         if draining:
             return                                   # 正在退出：可以管理存量空单，但不新开
         pos = self.client.range_pos(sym)
@@ -1001,6 +1052,53 @@ class GridStrategy:
                 log.info(f"GRID {sym}: 已撤销 {n} 条交易所条件单")
         except Exception as e:
             log.warning(f"GRID {sym}: 撤止损单失败: {e}")
+
+    async def _cancel_short_entry(self, sym: str) -> int:
+        """撤掉「挂着但还没成交」的开空单，并清掉这轮空单的挂单状态。
+
+        只撤 positionSide=SHORT 的卖单 —— 多头网格的卖档同是 sell，但属于 LONG
+        腿，不能误伤。没有成交过就不置 short_done：这一轮空单等于没发生，
+        重新打开开关时该币还能再试一次。
+        """
+        n = 0
+        try:
+            # strict：拉不到挂单列表时**抛出**而不是返回空表。若把失败当成「没有
+            # 挂单」，下面会把状态清零 → 交易所上那张单再没人认领，一旦成交就是
+            # 一笔没有止损的裸空头。宁可本轮不动、下轮重试。
+            orders = await self.client.fetch_open_orders(sym, "futures", strict=True)
+        except Exception as e:
+            log.warning(f"GRID {sym}: 查询开空挂单失败，本轮不撤、状态保持，下轮重试: {e}")
+            return 0
+        targets = []
+        for o in orders:
+            info = o.get("info") or {}
+            if (o.get("side") == "sell"
+                    and str(info.get("positionSide") or "").upper() == "SHORT"):
+                targets.append(o)
+        failed = 0
+        for o in targets:
+            try:
+                okc = await self.client.cancel_order(str(o.get("id")), sym, "futures")
+            except Exception as e:
+                log.warning(f"GRID {sym}: 撤销开空挂单 {o.get('id')} 异常: {e}")
+                okc = False
+            if okc:
+                n += 1
+            else:
+                failed += 1
+        if failed:
+            # 还有没撤掉的单 → 保留状态，下一轮继续撤。绝不能在"单还在交易所上"
+            # 的时候把状态清零，否则这张单就永远没人管了。
+            log.warning(f"GRID {sym}: {failed} 条开空挂单撤销失败 → 状态保持，下轮重试")
+            return n
+        # 顺带清掉可能残留的止损条件单：没有持仓时它一旦触发会反手开多。
+        await self._cancel_short_stop(sym)
+        self.db.set_runtime_stat(f"short_state:{sym}", 0)
+        self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
+        self.db.set_runtime_stat(f"short_qty:{sym}", 0)
+        self.db.set_runtime_stat(f"short_entry:{sym}", 0)
+        log.warning(f"GRID {sym}: 空单开关已关闭 → 撤销 {n} 条未成交的开空挂单")
+        return n
 
     async def _recent_exit(self, sym: str, qty: float, side: str = "sell",
                            ref_prices: list = None, position_side: str = "LONG"):
@@ -1616,9 +1714,19 @@ class GridStrategy:
                 continue
             if only_level is not None:
                 # 只核实「这一档」是否成交
-                if (side != only_level["side"]
-                        or abs(amt - float(only_level["amount"])) > max(1e-9, float(only_level["amount"]) * 0.02)
-                        or abs(tms / 1000 - time.time()) > 48 * 3600):
+                lvp = float(only_level["price"])
+                if side != only_level["side"]:
+                    continue
+                if abs(amt - float(only_level["amount"])) > max(1e-9, float(only_level["amount"]) * 0.02):
+                    continue
+                # 同标的同方向的等量挂单很常见（网格里多档金额一样），只按数量匹配
+                # 会把别的档位的成交算到这一档头上。补两条判据：
+                #   价格 —— 买成交不会高于挂单价、卖成交不会低于挂单价；
+                #   时效 —— 挂单刚刚才消失，成交不会发生在很久以前。
+                if lvp > 0 and ((side == "buy" and px > lvp * 1.001)
+                                or (side == "sell" and px < lvp * 0.999)):
+                    continue
+                if abs(tms / 1000 - time.time()) > 6 * 3600:
                     continue
             # 1) 已被 _check_fills / 其他路径记过 → 只打标记
             hit = None
