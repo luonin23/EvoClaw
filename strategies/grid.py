@@ -109,8 +109,13 @@ class GridStrategy:
                 return
 
         size = float(cfg.get("size_usdt", 0) or 0)
+        # 单标的能承受的名义价值上限 = 权益 × 敞口上限 / 名额。
+        # 用来把「最小一手就买不起」的币挡在名单外（ZECUSDT 一手 1089U 而总资金 30U）。
+        slots = n if n > 0 else max(1, len(self.config.get("grid_selection") or []) or 5)
+        ratio = float(cfg.get("max_exposure_ratio", 3) or 3)
+        budget = (equity * ratio / slots) if equity > 0 else 0.0
         picks = await select_grid_symbols(
-            self.client, cfg, size, n if n > 0 else 999)
+            self.client, cfg, size, n if n > 0 else 999, budget)
         if not picks:
             return
         limit = max(1, n if n > 0 else self._auto_symbol_cap(equity, picks))

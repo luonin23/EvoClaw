@@ -30,8 +30,15 @@ def _user_symbol(ccxt_sym: str) -> str:
 
 
 async def select_grid_symbols(client, cfg: dict, size_usdt: float,
-                              max_symbols: int = 3) -> list[dict]:
-    """返回按得分排序的候选列表，每项含 symbol/price/range/volume/score。"""
+                              max_symbols: int = 3,
+                              budget_notional: float = 0.0) -> list[dict]:
+    """返回按得分排序的候选列表，每项含 symbol/price/range/volume/score。
+
+    budget_notional：单个标的能承受的**名义价值**上限（= 权益 × 敞口上限 / 名额）。
+    最小一手就超过它的标的直接排除 —— 否则会选出一个「根本买不起」的币（实测
+    ZECUSDT 一手 = 1 张 = 1089U，而我们总共只有 30U）：它长期霸占 top1，还会
+    因为「排在前面却挂不上资金」把后面所有标的的建仓单反复撤掉。
+    """
     cfg = cfg or {}
     min_vol = float(cfg.get("min_quote_volume", 100_000_000) or 0)
     min_rng = float(cfg.get("min_daily_range", 0.02) or 0)
@@ -45,6 +52,7 @@ async def select_grid_symbols(client, cfg: dict, size_usdt: float,
         return []
 
     out = []
+    too_big: list[str] = []
     for ccxt_sym, t in tickers.items():
         m = client._fut_markets.get(ccxt_sym)
         if not m:
@@ -77,6 +85,13 @@ async def select_grid_symbols(client, cfg: dict, size_usdt: float,
         # 能否买得起「一手」——决定小资金能不能布多档
         if size_usdt > 0 and client.amount_for_notional(us, size_usdt, close, "futures") <= 0:
             continue
+        # 最小一手的**名义价值**必须在本标的的预算之内。只判断「数量>0」不够：
+        # 交易所会按最小变动单位向上取整，1089U 的币照样返回「1 张」。
+        if budget_notional > 0:
+            lot = client.min_amount(us, close, "futures")
+            if lot <= 0 or lot * close > budget_notional:
+                too_big.append(f"{us}(一手{lot*close:.0f}U>"f"{budget_notional:.0f}U)")
+                continue
 
         # 得分：振幅为主，流动性加权（成交量越大越可信）
         liq_w = 0.5 + 0.5 * min(1.0, math.log10(max(qvol, 1)) / 10.0)
@@ -88,6 +103,9 @@ async def select_grid_symbols(client, cfg: dict, size_usdt: float,
 
     out.sort(key=lambda x: -x["score"])
     picked = out[:max(1, max_symbols)]
+    if too_big:
+        log.info(f"选币：排除 {len(too_big)} 个「一手就超预算」的标的（共 {len(out)} 个可用）："
+                 + ", ".join(too_big[:6]) + ("…" if len(too_big) > 6 else ""))
     if picked:
         log.info("选币结果: " + ", ".join(
             f"{p['symbol']}(振幅{p['range']*100:.1f}%,量{p['quote_volume']/1e8:.1f}亿)" for p in picked))
