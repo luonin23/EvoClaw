@@ -18,6 +18,7 @@ from aiohttp import web
 log = logging.getLogger(__name__)
 
 _static_cache: dict[str, tuple[tuple, str]] = {}
+_screen_cache: dict[int, tuple[float, list]] = {}   # 现货筛选榜缓存(days -> (ts, rows))
 
 
 def _static(path: str) -> str:
@@ -62,6 +63,8 @@ class WebServer:
         r.add_post("/api/config", self.api_config_set)
         r.add_get("/api/params", self.api_params_get)
         r.add_get("/api/symbols", self.api_symbols)
+        r.add_get("/api/spot/screen", self.api_spot_screen)
+        r.add_get("/api/profit-dca", self.api_profit_dca)
         r.add_get("/api/config/history", self.api_config_history)
         r.add_post("/api/config/rollback", self.api_config_rollback)
         r.add_post("/api/auth-check", self.api_auth_check)
@@ -191,7 +194,7 @@ class WebServer:
 
     _WRITABLE = {"mode", "dry_run", "loop_interval", "grid", "dca",
                  "min_order_notional", "order_notional_safety", "exchange_kwargs",
-                 "web_password"}
+                 "web_password", "profit_dca"}
 
     def _check(self, section: str, key: str, value):
         """按注册表校验并转换一个值。返回 (ok, 转换后的值, 错误消息)。"""
@@ -238,14 +241,13 @@ class WebServer:
                     kw["apiKey"] = nk["apiKey"]
                 if nk.get("secret"):
                     kw["secret"] = nk["secret"]
-            # grid / dca 做**字段级合并**，不做整体替换。
-            # 网页上只暴露了其中几个参数，若照单全收地整体替换，其余几十个参数
+            # 各配置段做**字段级合并**，不做整体替换。
+            # 网页上只暴露了其中几个参数，若照单全收地整体替换，其余参数
             # 会被"页面上没显示"这一点顺手抹掉（含自动选币维护的字段）。
-            for key in ("grid", "dca"):
-                if isinstance(body.get(key), dict) and isinstance(cfg.get(key), dict):
-                    merged = dict(cfg[key])
-                    merged.update(body[key])
-                    body[key] = merged
+            # ⚠ 段名从**注册表**推导，别再写死 ("grid","dca") —— 新增一段
+            # （比如 profit_dca）时忘了加，一次保存就会把该段其余键全冲掉
+            # （实测：POST {profit_dca:{step_usdt:20}} 把 ratio/enabled 冲没了）。
+            self._merge_sections(cfg, body)
             cfg.update(body)
             cfg["exchange_kwargs"] = kw
 
@@ -262,6 +264,21 @@ class WebServer:
             return web.json_response({"status": "ok", "changed": changed})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+    @staticmethod
+    def _merge_sections(cfg: dict, body: dict) -> dict:
+        """把 body 里各配置段**按字段合并**进 cfg 的对应段（就地改 body）。
+
+        段名从注册表推导，不写死 —— 新增一段时忘了加，一次保存就会把该段
+        其余键全冲掉（实测：POST {profit_dca:{step_usdt:20}} 把 ratio/enabled
+        冲没了，因为合并列表里只有 grid/dca）。
+        """
+        for key in {p.section for p in params.PARAMS if p.section}:
+            if isinstance(body.get(key), dict) and isinstance(cfg.get(key), dict):
+                merged = dict(cfg[key])
+                merged.update(body[key])
+                body[key] = merged
+        return body
 
     @staticmethod
     def _diff_changed(old: dict, new: dict) -> dict:
@@ -336,6 +353,55 @@ class WebServer:
                 log.warning(f"加载现货市场失败: {e}")
         return web.json_response({"futures": fut, "spot": spot,
                                   "forced": sorted(DEFAULT_BLACKLIST)})
+
+    async def api_spot_screen(self, request):
+        """现货筛选榜：跌幅最大 / 涨幅最大 / 振幅最大（按 N 日）。
+
+        ?mode=drop|gain|range&days=7&limit=50
+        结果按对应指标排序（跌幅榜跌得最多的排第一）。
+        """
+        mode = str(request.query.get("mode", "drop"))
+        try:
+            days = max(1, min(90, int(request.query.get("days", 7))))
+            limit = max(5, min(200, int(request.query.get("limit", 50))))
+        except ValueError:
+            return web.json_response({"status": "error", "message": "参数不合法"}, status=400)
+        if mode not in ("drop", "gain", "range"):
+            return web.json_response({"status": "error", "message": "mode 只能是 drop/gain/range"},
+                                     status=400)
+
+        now = time.monotonic()
+        key = days
+        hit = _screen_cache.get(key)
+        if hit and now - hit[0] < 600:            # 10 分钟缓存，避免反复拉几百根 K 线
+            rows = hit[1]
+        else:
+            try:
+                rows = await self.client.spot_screen(days=days)
+            except Exception as e:
+                log.warning(f"现货筛选失败: {e}")
+                return web.json_response({"status": "error", "message": str(e)}, status=500)
+            if rows:
+                # 只在拿到结果时缓存 —— 空结果（市场没加载完/瞬时失败）
+                # 一旦写进缓存，接下来 10 分钟点几次都是空的。
+                _screen_cache[key] = (now, rows)
+            else:
+                return web.json_response(
+                    {"status": "error", "message": "没取到候选标的（现货市场可能还在加载），请稍后重试"},
+                    status=503)
+        if mode == "drop":
+            rows = sorted(rows, key=lambda r: r["change"])            # 跌最多在前
+        elif mode == "gain":
+            rows = sorted(rows, key=lambda r: -r["change"])           # 涨最多在前
+        else:
+            rows = sorted(rows, key=lambda r: -r["range"])            # 振幅最大在前
+        return web.json_response({"mode": mode, "days": days,
+                                  "total": len(rows), "items": rows[:limit]})
+
+    async def api_profit_dca(self, request):
+        from strategies.profit_dca import ProfitDCA
+        p = ProfitDCA(self.client, self.db, self.db.load_config())
+        return web.json_response(p.status())
 
     async def api_config_history(self, request):
         if not self._auth_ok(request):

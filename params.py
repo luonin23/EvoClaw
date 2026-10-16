@@ -33,7 +33,8 @@ GROUPS: tuple[tuple[str, str, str], ...] = (
     ("grid_entry",   "网格·入场",  "首次建仓的择时闸门"),
     ("grid_short",   "网格·空单",  "高位试空（独立开关，默认关）"),
     ("grid_select",  "网格·选币",  "自动选币的周期与合格线"),
-    ("dca",          "定投",       "方案C · 现货定投"),
+    ("dca",          "定投",       "方案C · 现货定投（按时间）"),
+    ("profit_dca",   "利润定投",   "用合约赚到的钱定投现货（只在 grid 模式下工作）"),
     ("advanced",     "高级",       "密钥与密码（敏感，不在参数表内编辑）"),
 )
 
@@ -205,11 +206,7 @@ PARAMS: tuple[Param, ...] = (
           "留 0 按资金自动推导（推荐）", unit="个", min=0, max=50, step=1,
           sentinel="auto"),
     Param("grid.refresh_min", "int", 10, "grid_select", "选币周期",
-          "多久重新选一次币。留 0 会回退到旧的「选币周期（小时）」",
-          unit="分钟", min=0, max=1440, step=1, sentinel="fallback"),
-    Param("grid.refresh_hours", "int", 6, "grid_select", "选币周期（旧）",
-          "已废弃：仅当上面的「选币周期（分钟）」为 0 时才生效",
-          unit="小时", min=1, max=168, step=1),
+          "多久重新选一次币（分钟）", unit="分钟", min=1, max=1440, step=1),
     Param("grid.min_quote_volume", "float", 100000000, "grid_select", "成交额下限",
           "24h 成交额低于此值的标的直接排除", unit="U", min=0, max=1e12),
     Param("grid.min_daily_range", "float", 0.02, "grid_select", "振幅下限",
@@ -236,6 +233,28 @@ PARAMS: tuple[Param, ...] = (
           "达到后停止买入", unit="U", min=0, max=1e9, sentinel="unlimited"),
     Param("dca.first_buy_immediately", "bool", True, "dca", "启动立即买首期",
           "从未买过时，启动就先买一期", widget="switch"),
+
+    # ---------------- 利润定投（合约赚的钱 → 买现货）----------------
+    # 用户要的规则：合约累计盈利每上一个台阶，就拿出**这一台阶利润**的一部分买现货。
+    # 「不能循环定投」是关键 —— 用只升不降的「已触发水位线」实现：
+    # 盈利涨到水位线之上一个台阶才触发一次，水位线随之上移；之后盈利回吐再涨回来
+    # 也不会重复触发（因为水位线没降），必须有**新的**利润才会再投。
+    Param("profit_dca.enabled", "bool", False, "profit_dca", "开启利润定投",
+          "合约累计已实现盈利每上涨一个「台阶」，就拿出该台阶利润的一部分买入现货。"
+          "盈利回吐后再涨回来不会重复触发（水位线只升不降）", widget="switch"),
+    Param("profit_dca.step_usdt", "float", 20, "profit_dca", "每档盈利",
+          "累计盈利每上涨这么多 U，算一个台阶", unit="U", min=0.5, max=1000, step=0.5),
+    Param("profit_dca.ratio", "float", 0.3, "profit_dca", "每档投入比例",
+          "每个台阶拿出该台阶利润的百分之多少买现货。例如每档 20U、比例 30% "
+          "→ 每涨 20U 就投 6U。"
+          "⚠ 每档投出的钱要够交易所的最小下单额（现货约 5U），否则会一直攒着不投",
+          widget="percent", unit="%", scale=100, min=0.01, max=1.0, step=0.01),
+    Param("profit_dca.max_total", "float", 0, "profit_dca", "累计投入上限",
+          "利润定投累计买入的 USDT 达到此值后停止", unit="U", min=0, max=1e9,
+          sentinel="unlimited"),
+    Param("profit_dca.symbols", "str_list", [], "profit_dca", "定投标的",
+          "利润买哪些现货。可用「筛选」按跌幅/涨幅/振幅排名挑",
+          widget="multiselect"),
 
     # ---------------- 高级（不进参数表）----------------
     Param("exchange_kwargs", "kwargs", {}, "advanced", "API 密钥",

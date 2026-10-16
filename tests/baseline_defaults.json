@@ -33,7 +33,6 @@
    "recenter_cooldown_min": 30,
    "recenter_margin": 0.01,
    "reentry_tol": 0.003,
-   "refresh_hours": 6,
    "refresh_min": 10,
    "short_confirm": 0.01,
    "short_enabled": false,
@@ -52,6 +51,13 @@
   "min_order_notional": 5,
   "mode": "off",
   "order_notional_safety": 1.02,
+  "profit_dca": {
+   "enabled": false,
+   "max_total": 0,
+   "ratio": 0.3,
+   "step_usdt": 20,
+   "symbols": []
+  },
   "web_password": ""
  },
  "derived_defaults": {

@@ -78,6 +78,8 @@ class ExchangeClient:
 
         self._spot = None
         self._spot_kwargs = kwargs
+        self._spot_lock = asyncio.Lock()      # ensure_spot 可重入（见其 docstring）
+        self._spot_ready = False
 
         self._fut_markets: dict = {}
         self._spot_markets: dict = {}
@@ -120,18 +122,29 @@ class ExchangeClient:
         log.info(f"Futures markets loaded: {len(self._fut_markets)} USDT swaps")
 
     async def ensure_spot(self):
-        """惰性加载现货市场（只有 DCA 模式才需要）。"""
-        if self._spot is not None:
+        """惰性加载现货市场（DCA / 现货筛选 / 利润定投才需要）。
+
+        必须可重入：引擎 tick 和 Web 请求随时可能同时调它。以前是
+        `if self._spot is not None: return` —— 第二个调用者会在市场**还没加载完**
+        时直接返回，于是 _spot_markets 是空的，现货筛选静默返回 0 个候选
+        （实测踩过）。现在用锁 + 完成标记：后到的协程会**等**第一次加载完成。
+        """
+        if self._spot_ready:
             return
-        self._spot = ccxt.binance(dict(self._spot_kwargs))
-        self._spot.options["recvWindow"] = 60000
-        self._spot.options["adjustForTimeDifference"] = True
-        markets = await self._safe_call(self._spot.load_markets(), timeout=25)
-        for sym, m in markets.items():
-            if m.get("spot") and m.get("quote") == "USDT":
-                self._spot_markets[sym] = m
-                self._register_reverse(sym)
-        log.info(f"Spot markets loaded: {len(self._spot_markets)} USDT pairs")
+        async with self._spot_lock:
+            if self._spot_ready:
+                return
+            if self._spot is None:
+                self._spot = ccxt.binance(dict(self._spot_kwargs))
+                self._spot.options["recvWindow"] = 60000
+                self._spot.options["adjustForTimeDifference"] = True
+            markets = await self._safe_call(self._spot.load_markets(), timeout=25)
+            for sym, m in markets.items():
+                if m.get("spot") and m.get("quote") == "USDT":
+                    self._spot_markets[sym] = m
+                    self._register_reverse(sym)
+            self._spot_ready = True
+            log.info(f"Spot markets loaded: {len(self._spot_markets)} USDT pairs")
 
     def _register_reverse(self, ccxt_sym: str):
         if ccxt_sym not in self._reverse:
@@ -154,19 +167,37 @@ class ExchangeClient:
 
     # ===== 价格 =====
     async def refresh_prices(self, symbols: list[str]):
-        """刷新价格缓存；失败会抛异常（由引擎决定是否降级）。"""
-        resolved = [self.to_ccxt(s, "futures") for s in symbols]
-        resolved = [s for s in resolved if s in self._fut_markets]
-        if not resolved:
-            return
-        tickers = await self._safe_call(self.futures.fetch_tickers(resolved), timeout=20)
+        """刷新价格缓存；失败会抛异常（由引擎决定是否降级）。
+
+        两张市场都要查：只在合约上市的币走 futures，只在上现货的币（部分新币）
+        走 spot。以前只查 futures —— 现货定投选了纯现货币时永远拿不到价格，
+        定投会静默跳过。
+        """
         ts = time.monotonic()
-        for sym, t in tickers.items():
-            if t and t.get("last"):
-                us = self.user_symbol(sym)
-                self._prices[us] = float(t["last"])
-                self._price_ts[us] = ts
-                self._store_hl(us, t)
+        got = set()
+        fut = [s for s in (self.to_ccxt(x, "futures") for x in symbols)
+               if s in self._fut_markets]
+        if fut:
+            tickers = await self._safe_call(self.futures.fetch_tickers(fut), timeout=20)
+            for sym, t in (tickers or {}).items():
+                if t and t.get("last"):
+                    us = self.user_symbol(sym)
+                    self._prices[us] = float(t["last"])
+                    self._price_ts[us] = ts
+                    self._store_hl(us, t)
+                    got.add(us)
+        rest = [x for x in symbols if x not in got]
+        if rest and self._spot is not None:
+            spo = [s for s in (self.to_ccxt(x, "spot") for x in rest)
+                   if s in self._spot_markets]
+            if spo:
+                tickers = await self._safe_call(self._spot.fetch_tickers(spo), timeout=20)
+                for sym, t in (tickers or {}).items():
+                    if t and t.get("last"):
+                        us = self.user_symbol(sym)
+                        self._prices[us] = float(t["last"])
+                        self._price_ts[us] = ts
+                        self._store_hl(us, t)
 
     def _store_hl(self, user_symbol: str, t: dict):
         try:
@@ -197,17 +228,24 @@ class ExchangeClient:
         p = self._prices.get(user_symbol)
         if p and p > 0 and (now - self._price_ts.get(user_symbol, 0)) < max_age:
             return float(p)
-        ccxt_sym = self.to_ccxt(user_symbol, "futures")
-        try:
-            t = await self._safe_call(self.futures.fetch_ticker(ccxt_sym), timeout=10)
-            last = float(t.get("last", 0) or 0)
-            if last > 0:
-                self._prices[user_symbol] = last
-                self._price_ts[user_symbol] = now
-                self._store_hl(user_symbol, t)
-                return last
-        except Exception as e:
-            log.warning(f"ensure_price {user_symbol} failed: {e}")
+        # 合约优先，合约没有就试现货（只在上现货的币走这条）
+        for kind, ex, table in (("futures", self.futures, self._fut_markets),
+                                ("spot", self._spot, self._spot_markets)):
+            if ex is None:
+                continue
+            ccxt_sym = self.to_ccxt(user_symbol, kind)
+            if ccxt_sym not in table:
+                continue
+            try:
+                t = await self._safe_call(ex.fetch_ticker(ccxt_sym), timeout=10)
+                last = float(t.get("last", 0) or 0)
+                if last > 0:
+                    self._prices[user_symbol] = last
+                    self._price_ts[user_symbol] = now
+                    self._store_hl(user_symbol, t)
+                    return last
+            except Exception as e:
+                log.warning(f"ensure_price {user_symbol} ({kind}) failed: {e}")
         return float(self._prices.get(user_symbol, 0) or 0)
 
     def last_price(self, user_symbol: str) -> float:
@@ -222,20 +260,49 @@ class ExchangeClient:
         ex_min = float((m.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
         return max(ex_min, self.min_order_notional)
 
+    def _round_amount(self, user_symbol: str, raw: float, kind: str, up: bool) -> float:
+        """把数量对齐到交易所的数量步长（ccxt 的 amount_to_precision 是**向下截断**）。
+
+        up=True 向上取整（保证够得着最小名义值，宁可多买一档也不能被拒单）。
+        """
+        ex = self.futures if kind == "futures" else self._spot
+        ccxt_sym = self.to_ccxt(user_symbol, kind)
+        m = self.market_info(user_symbol, kind)
+        try:
+            step = float((m.get("precision") or {}).get("amount") or 0)
+        except (TypeError, ValueError):
+            step = 0.0
+        if step > 0 and raw > 0:
+            n = raw / step
+            raw = (math.ceil(round(n, 9)) if up else round(n)) * step
+        return float(ex.amount_to_precision(ccxt_sym, raw))
+
     def min_amount(self, user_symbol: str, price: float, kind: str = "futures") -> float:
-        """满足最小名义值与最小数量精度所需的最小可下数量；算不出（资金/精度不足）返回 0。"""
+        """满足最小名义值与最小数量精度所需的最小可下数量；算不出（资金/精度不足）返回 0。
+
+        ⚠ 合约和现货的「数量」是两种东西：
+          · 合约 = 张数，**必须是整数**（ceil 到整张）
+          · 现货 = 币的数量，**可以是小数**（对齐到步长即可）
+        以前两者共用 `max(1.0, math.ceil(...))` —— 现货买 BTC 时算出「1 整枚」
+        （≈8 万 U），而调用方只想买 12U。现货下单测试实测「5 个币买了一共
+        84889U」。这条路径连着真钱，必须分开算。
+        """
         m = self.market_info(user_symbol, kind)
         if not m or price <= 0:
             return 0.0
-        ex = self.futures if kind == "futures" else self._spot
         try:
             cs = float(m.get("contractSize", 1) or 1)
             target = self.min_notional_of(user_symbol, kind) * self.notional_safety
-            min_amt = float((m.get("limits", {}).get("amount", {}).get("min", 0)) or 0)
-            raw = max(1.0, math.ceil(target / (price * cs)))
-            if min_amt > 0:
-                raw = max(raw, math.ceil(min_amt / cs))
-            return float(ex.amount_to_precision(self.to_ccxt(user_symbol, kind), raw))
+            ex_min = float(((m.get("limits") or {}).get("amount") or {}).get("min") or 0)
+            if kind == "futures":
+                raw = max(1.0, math.ceil(target / (price * cs)))
+                if ex_min > 0:
+                    raw = max(raw, math.ceil(ex_min / cs))
+            else:
+                raw = target / (price * cs)
+                if ex_min > 0:
+                    raw = max(raw, ex_min / cs)
+            return self._round_amount(user_symbol, raw, kind, up=True)
         except Exception:
             return 0.0
 
@@ -249,19 +316,16 @@ class ExchangeClient:
         m = self.market_info(user_symbol, kind)
         if not m or price <= 0:
             return 0.0
-        ex = self.futures if kind == "futures" else self._spot
         try:
             cs = float(m.get("contractSize", 1) or 1)
             lo = self.min_amount(user_symbol, price, kind)
             if lo <= 0:
                 return 0.0
-            raw = usdt / (price * cs)
-            try:
-                amt = float(ex.amount_to_precision(self.to_ccxt(user_symbol, kind), raw))
-            except Exception:
-                return 0.0
+            amt = self._round_amount(user_symbol, usdt / (price * cs), kind, up=False)
             if amt <= 0:
                 return 0.0
+            # 就近取整后若够不着最小可下量，抬到最小量（会略微超出目标金额，
+            # 但绝不会被交易所拒单）
             return max(amt, lo)
         except Exception:
             return 0.0
@@ -366,8 +430,11 @@ class ExchangeClient:
             return {"order_id": f"dry-{int(time.time()*1000)}", "price": px,
                     "amount": amount, "dry_run": True}
         ex = self.futures if kind == "futures" else self._spot
-        params = ({"positionSide": position_side.upper(),
-                   "newClientOrderId": _client_oid()} if kind == "futures" else {})
+        # 现货也要带客户端单号：对账时用来区分「本程序下的单」和「手工买的」。
+        # 现货没有 positionSide，合约才有。
+        oid_tag = {"newClientOrderId": _client_oid()}
+        params = ({**oid_tag, "positionSide": position_side.upper()}
+                  if kind == "futures" else oid_tag)
         try:
             # 注意 ccxt 签名：create_order(symbol, type, side, amount, price, params)
             # 市价单 price 必须传 None，否则 params 会被当成 price 丢弃 → -4061
@@ -406,6 +473,62 @@ class ExchangeClient:
             if s is not None:
                 log.warning(f"Stop order failed {user_symbol} {side} {amount}@{stop_price}: {e}{s}")
             return None
+
+    async def spot_screen(self, days: int = 7, universe: int = 100,
+                          min_quote_volume: float = 3_000_000.0) -> list[dict]:
+        """现货标的的 N 日排行榜数据（供「跌幅/涨幅/振幅」三种筛选）。
+
+        先用一次 fetch_tickers 拿到现货全市场的 24h 成交额，取成交额最大的
+        `universe` 个作为候选（冷门币的 K 线没参考价值，也省掉几百次请求），
+        再逐个拉日线算 N 日涨跌幅与振幅。
+
+        返回 [{symbol, price, change, range, quote_volume, days}]，调用方排序。
+        """
+        await self.ensure_spot()
+        tickers = await self._safe_call(self._spot.fetch_tickers(), timeout=25)
+        cands = []
+        for ccxt_sym, t in (tickers or {}).items():
+            m = self._spot_markets.get(ccxt_sym)
+            if not m:
+                continue
+            qv = float((t or {}).get("quoteVolume") or 0)
+            last = float((t or {}).get("last") or 0)
+            if qv < min_quote_volume or last <= 0:
+                continue
+            cands.append((qv, ccxt_sym, last))
+        cands.sort(reverse=True)
+        cands = cands[:max(1, universe)]
+
+        out: list[dict] = []
+        n = max(1, int(days))
+        sem = asyncio.Semaphore(5)               # 限并发：别和引擎的实时下单抢接口带宽
+
+        async def one(ccxt_sym: str, last: float, qv: float):
+            async with sem:
+                try:
+                    k = await self._safe_call(
+                        self._spot.fetch_ohlcv(ccxt_sym, "1d", None, n + 1), timeout=15)
+                except Exception:
+                    return
+            if not k or len(k) < 2:
+                return
+            base = float(k[0][1])                # N 天前的开盘价
+            hi = max(float(x[2]) for x in k)
+            lo = min(float(x[3]) for x in k)
+            close = float(k[-1][4])
+            if base <= 0 or lo <= 0:
+                return
+            out.append({
+                "symbol": self.user_symbol(ccxt_sym),
+                "price": close or last,
+                "change": (close - base) / base,          # 负=跌，正=涨
+                "range": (hi - lo) / lo,                  # N 日振幅
+                "quote_volume": qv,
+                "days": len(k) - 1,
+            })
+
+        await asyncio.gather(*(one(s, l, q) for q, s, l in cands))
+        return out
 
     async def fetch_my_trades(self, user_symbol: str, since_ms: int = None,
                               limit: int = 100) -> list[dict]:

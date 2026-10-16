@@ -264,6 +264,23 @@ tr:hover td{background:var(--hover)}
 .mrow.fixed{opacity:.45;cursor:not-allowed}
 .modal .actions{margin-top:12px}
 
+.mfilter{border:1px solid var(--bd);border-radius:8px;padding:9px 10px;margin-bottom:9px;background:var(--bg)}
+.mfrow{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.btn.sm{font-size:11px;padding:4px 10px}
+.btn.sm.on{border-color:var(--accent);color:var(--accent);background:rgba(0,208,132,.08)}
+.mfday{font-size:11px;color:var(--t3);display:flex;align-items:center;gap:4px;margin-left:auto}
+.mfday input{width:52px;background:var(--surface);border:1px solid var(--bd);color:var(--t1);
+  border-radius:6px;padding:3px 6px;font-family:var(--mono);font-size:11px;outline:none}
+.mrow .mk{margin-left:auto;font-size:10.5px;font-family:var(--mono);white-space:nowrap}
+.mrow .mk.dn{color:var(--error)} .mrow .mk.up{color:var(--accent)} .mrow .mk.rg{color:var(--warn)}
+.mrank{font-size:10px;color:var(--t3);min-width:20px;font-family:var(--mono)}
+.pdc{margin-top:12px;padding:11px 13px;border:1px solid var(--bd);border-radius:9px;
+  background:var(--bg);font-size:11.5px;color:var(--t2);line-height:1.9;display:none}
+.pdc.show{display:block}
+.pdc b{color:var(--t1);font-family:var(--mono);font-weight:600}
+.pdc .bar{height:5px;border-radius:3px;background:var(--surface);overflow:hidden;margin:6px 0 4px}
+.pdc .bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.pdc .warnline{color:var(--warn)}
 /* 窄屏：三列表格塞不下 → 每行折成一张小卡片（标签/控件/说明 竖排），
    免得手机上要横向拖着看、说明列还被切掉一半。 */
 @media (max-width:720px){
@@ -342,6 +359,7 @@ tr:hover td{background:var(--hover)}
           <tbody id="pBody"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
         </table>
       </div>
+      <div id="pdcBox" class="pdc"></div>
       <div class="actions">
         <button class="btn primary" id="btnSave" onclick="saveParams()">保存修改</button>
         <button class="btn" onclick="loadParams(true)">重新读取</button>
@@ -357,6 +375,16 @@ tr:hover td{background:var(--hover)}
   <div class="mbox">
     <h3 id="mTitle">选择标的</h3>
     <div class="msub" id="mSub"></div>
+    <div class="mfilter" id="mFilter" style="display:none">
+      <div class="mfrow">
+        <button class="btn sm" data-m="drop" onclick="applyScreen('drop')">跌幅榜</button>
+        <button class="btn sm" data-m="gain" onclick="applyScreen('gain')">涨幅榜</button>
+        <button class="btn sm" data-m="range" onclick="applyScreen('range')">振幅榜</button>
+        <span class="mfday">近 <input type="number" id="mDays" value="7" min="1" max="90"> 日</span>
+        <button class="btn sm" onclick="clearScreen()">恢复全列表</button>
+      </div>
+      <div class="msub" id="mScreenHint"></div>
+    </div>
     <input type="text" id="mSearch" placeholder="搜索币种…" oninput="renderMList()">
     <div class="mlist" id="mList"></div>
     <div class="actions">
@@ -759,7 +787,36 @@ async function loadParams(keepTab){
   PMETA = d;
   if(!PTAB || !d.groups.some(g=>g.id===PTAB)) PTAB = d.groups[0].id;
   if(!keepTab) PDIRTY = {};
-  renderTabs(); renderParams();
+  renderTabs(); renderParams(); loadProfitDca();
+}
+
+async function loadProfitDca(){
+  const d = await api('/api/profit-dca');
+  const box = $('pdcBox');
+  if(!d || !d.enabled){ box.className='pdc'; box.innerHTML=''; return; }
+  box.className = 'pdc show';
+  const pct = d.step_usdt>0 ? Math.max(0, Math.min(100, (1 - d.to_next_step/d.step_usdt)*100)) : 0;
+  box.innerHTML =
+    '<b>利润定投</b> · 合约累计已实现盈利 <b>'+d.realized_total.toFixed(2)+'U</b>'
+    + ' ｜ 已触发水位线 <b>'+d.anchor.toFixed(2)+'U</b>'
+    + ' ｜ 已投现货 <b>'+d.invested_total.toFixed(2)+'U</b>'
+    + (d.max_total>0?(' ｜ 上限 '+d.max_total+'U'):'')
+    + '<div class="bar"><i style="width:'+pct.toFixed(1)+'%"></i></div>'
+    + '每档 <b>'+d.step_usdt+'U</b> 拿出 <b>'+(d.ratio*100).toFixed(0)+'%</b>（= '
+    + d.per_step_usdt.toFixed(2)+'U/档）买现货'
+    + (d.symbols.length ? ('，分给 '+d.symbols.length+' 个标的 → 每个 '
+       + d.per_symbol_usdt.toFixed(2)+'U') : '')
+    + (d.symbols.length && d.per_symbol_usdt < d.min_notional
+        ? ('<br><span class="warnline">⚠ 每个标的只分到 '+d.per_symbol_usdt.toFixed(2)
+           + 'U，低于交易所最小下单额（约 '+d.min_notional+'U）→ 会一直攒着不投。'
+           + '请调大「每档盈利」或「每档投入比例」，或减少定投标的个数</span>')
+        : '')
+    + '；'
+    + (d.pending_steps>0
+        ? '<span class="warnline">已累计 '+d.pending_steps+' 档待投（'+d.pending_usdt.toFixed(2)+'U），'
+          + (d.symbols.length?('下次循环买入 '+d.symbols.length+' 个标的'):'但还没勾选标的！')+'</span>'
+        : ('距下一档还差 <b>'+d.to_next_step.toFixed(2)+'U</b> 盈利'))
+    + (d.symbols.length ? (' ｜ 标的：'+d.symbols.join('、')) : '');
 }
 
 function renderTabs(){
@@ -924,8 +981,11 @@ let MPICK = { key:null, sel:new Set(), all:[], forced:new Set() };
 
 async function openPicker(key){
   const p = PMETA.params.find(x=>x.key===key);
-  const d = await api("/api/symbols?kind="+(key==="dca.symbols"?"spot":"futures")); if(!d){ toast("读取标的列表失败"); return; }
-  const spot = (key==='dca.symbols');
+  // 买现货的选币器要用现货标的表（利润定投也是买现货）
+  const isSpotKey = (key==='dca.symbols' || key==='profit_dca.symbols');
+  const d = await api("/api/symbols?kind="+(isSpotKey?"spot":"futures"));
+  if(!d){ toast("读取标的列表失败"); return; }
+  const spot = isSpotKey;
   const all = spot ? d.spot : d.futures;
   const cur = Object.prototype.hasOwnProperty.call(PDIRTY,key) ? PDIRTY[key] : p.value;
   MPICK = { key, sel:new Set(cur||[]), all, forced:new Set(spot?[]:d.forced), title:p.label,
@@ -935,23 +995,70 @@ async function openPicker(key){
     ? '现货可投标的（共 '+all.length+' 个）。'
     : '合约可投标的（共 '+all.length+' 个）。稳定币等由系统强制排除，勾了也不会生效。';
   $('mSearch').value='';
+  MPICK.ranked = null; MPICK.mode = null;
+  const isSpot = (key==='dca.symbols' || key==='profit_dca.symbols');
+  $('mFilter').style.display = isSpot ? '' : 'none';
+  $('mScreenHint').textContent = isSpot
+    ? '可按「跌幅榜 / 涨幅榜 / 振幅榜」排名挑币（数据来自现货日线，10 分钟内缓存）。'
+    : '';
+  [...document.querySelectorAll('.mfilter .btn')].forEach(b=>b.classList.remove('on'));
   $('modal').classList.add('show'); renderMList(); $('mSearch').focus();
 }
 
 function renderMList(){
   const q = ($('mSearch').value||'').toUpperCase();
-  const rows = MPICK.all.filter(s=>s.includes(q)
-    || (MPICK.forced.size && [...MPICK.forced].some(f=>f.includes(q) && f===s)));
-  const extra = [...MPICK.sel].filter(s=>!MPICK.all.includes(s));   // 已选但不在可选列表
-  const list = extra.concat(rows);
-  $('mList').innerHTML = list.map(s=>{
+  let list, meta = {};
+  if(MPICK.ranked){                       // 榜单模式：按排名显示，带指标
+    list = MPICK.ranked.filter(r=>r.symbol.includes(q)).map(r=>r.symbol);
+    MPICK.ranked.forEach(r=>{ meta[r.symbol] = r; });
+  } else {
+    list = MPICK.all.filter(s=>s.includes(q));
+  }
+  // 已选但不在当前列表里的，补在最前面，免得「勾了却看不到」
+  const extra = [...MPICK.sel].filter(s=>!list.includes(s));
+  list = extra.concat(list);
+  const kind = MPICK.mode;
+  $('mList').innerHTML = list.map((s, i)=>{
+    const r = meta[s];
+    let mk = '';
+    if(r){
+      if(kind==='range') mk = '<span class="mk rg">振幅 '+(r.range*100).toFixed(1)+'%</span>';
+      else mk = '<span class="mk '+(r.change<0?'dn':'up')+'">'+(r.change>0?'+':'')
+                + (r.change*100).toFixed(2)+'%</span>';
+    }
     const fixed = MPICK.forced.has(s);
     return '<label class="mrow'+(fixed?' fixed':'')+'">'
+      + (r?'<span class="mrank">'+(i+1)+'</span>':'')
       + '<input type="checkbox" '+(MPICK.sel.has(s)?'checked':'')+(fixed?' disabled':'')
       + ' onchange="togglePick(\''+s+'\',this.checked)">'
-      + esc(s) + (fixed?' <span style="color:var(--t3)">（系统强制排除）</span>':'') + '</label>';
+      + esc(s) + (mk||'') + (fixed?' <span style="color:var(--t3)">（系统排除）</span>':'')
+      + '</label>';
   }).join('') || '<div class="mrow">没有匹配的标的</div>';
   $('mCount').textContent = '已选 '+MPICK.sel.size+' 个';
+}
+
+// 「跌幅榜 / 涨幅榜 / 振幅榜」：拉 N 日现货排名，把列表换成榜单
+async function applyScreen(mode){
+  const days = Math.max(1, Math.min(90, parseInt($('mDays').value)||7));
+  MPICK.mode = mode;
+  [...document.querySelectorAll('.mfilter .btn[data-m]')].forEach(
+    b=>b.classList.toggle('on', b.getAttribute('data-m')===mode));
+  $('mScreenHint').textContent = '正在拉取现货日线并排名…';
+  const d = await api('/api/spot/screen?mode='+mode+'&days='+days+'&limit=80');
+  if(!d || !d.items){ $('mScreenHint').textContent = '筛选失败，请稍后重试'; return; }
+  MPICK.ranked = d.items;
+  const label = {drop:'跌幅榜（跌最多在前）', gain:'涨幅榜（涨最多在前）',
+                 range:'振幅榜（波动最大在前)'}[mode];
+  $('mScreenHint').innerHTML = '近 '+d.days+' 日 · '+label
+    + ' · 从 '+d.total+' 个候选里取前 '+d.items.length+' 名。可继续勾选，已勾选的不会丢。';
+  renderMList();
+}
+
+function clearScreen(){
+  MPICK.ranked = null; MPICK.mode = null;
+  [...document.querySelectorAll('.mfilter .btn[data-m]')].forEach(b=>b.classList.remove('on'));
+  $('mScreenHint').textContent = '已恢复完整列表。';
+  renderMList();
 }
 
 function togglePick(s, on){ on?MPICK.sel.add(s):MPICK.sel.delete(s); $('mCount').textContent='已选 '+MPICK.sel.size+' 个'; }

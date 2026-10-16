@@ -167,7 +167,8 @@ class Database:
         for _tbl, _col, _type in [("grid_state", "total_cost", "REAL NOT NULL DEFAULT 0"),
                                   ("grid_state", "status", "TEXT NOT NULL DEFAULT 'active'"),
                                   ("orders", "pnl", "REAL NOT NULL DEFAULT 0"),
-                                  ("orders", "pnl_rate", "REAL NOT NULL DEFAULT 0")]:
+                                  ("orders", "pnl_rate", "REAL NOT NULL DEFAULT 0"),
+                                  ("dca_records", "note", "TEXT NOT NULL DEFAULT ''")]:
             try:
                 self.conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type}")
                 self.conn.commit()
@@ -191,6 +192,30 @@ class Database:
             self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)",
                               (key, json.dumps(val)))
         self.conn.commit()
+
+    def realized_pnl_total(self) -> float:
+        """合约累计已实现盈亏（所有平仓类记录之和）。
+
+        利润定投的触发依据 —— 用 orders 表而不是 grid_state.realized_pnl，
+        因为后者在这套部署里基本是 0（历史遗留），而 orders 才是成交记录的真源，
+        与页面上的「总盈亏」同源。
+        """
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(pnl), 0) FROM orders "
+            "WHERE type IN ('grid_sell','grid_trail','grid_external','short_close','close')"
+        ).fetchone()
+        return float(row[0] or 0)
+
+    def dca_invested_total(self, note_like: str = "") -> float:
+        """定投累计投入的 USDT（可按 note 过滤，例如只看「利润定投」那部分）。"""
+        if note_like:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(cost), 0) FROM dca_records WHERE note LIKE ?",
+                (f"%{note_like}%",)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(cost), 0) FROM dca_records").fetchone()
+        return float(row[0] or 0)
 
     # ===== 配置改动历史 / 回滚 / 审计 =====
     def save_config_audited(self, new_cfg: dict, changed: dict, source: str = "",
@@ -538,18 +563,18 @@ class Database:
 
     def insert_dca_record(self, r: dict):
         self.conn.execute(
-            """INSERT INTO dca_records (ts, symbol, price, amount, cost, fee, dry_run)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO dca_records (ts, symbol, price, amount, cost, fee, dry_run, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (r.get("ts") or datetime.now(timezone.utc).isoformat(), r["symbol"],
              float(r.get("price", 0)), float(r.get("amount", 0)), float(r.get("cost", 0)),
-             float(r.get("fee", 0)), 1 if r.get("dry_run") else 0))
+             float(r.get("fee", 0)), 1 if r.get("dry_run") else 0, r.get("note", "")))
         self.conn.commit()
 
     def get_dca_records(self, limit: int = 100) -> list[dict]:
         rows = self.conn.execute(
-            """SELECT id, ts, symbol, price, amount, cost, fee, dry_run
+            """SELECT id, ts, symbol, price, amount, cost, fee, dry_run, note
                FROM dca_records ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
-        cols = ["id", "ts", "symbol", "price", "amount", "cost", "fee", "dry_run"]
+        cols = ["id", "ts", "symbol", "price", "amount", "cost", "fee", "dry_run", "note"]
         return [dict(zip(cols, r)) for r in rows]
 
     # ===== 备份 / 检查点 =====

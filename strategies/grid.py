@@ -92,9 +92,7 @@ class GridStrategy:
         所以已选中的标的只要**仍然合格**就原样保留，新选出的只用来补足名额。
         """
         cfg = self.cfg
-        interval = float(cfg.get("refresh_min", 0) or 0) * 60
-        if interval <= 0:
-            interval = float(cfg.get("refresh_hours", 6) or 6) * 3600
+        interval = max(1, int(cfg.get("refresh_min", 10) or 10)) * 60
         now = time.time()
         n = int(cfg.get("max_symbols", 0) or 0)
         ts = float(self.db.get_runtime_stat("grid_selection_ts", 0) or 0)
@@ -198,6 +196,16 @@ class GridStrategy:
     async def step(self):
         cfg = self.cfg
         equity = await self._equity()          # 选币自动上限需要权益
+
+        # 利润定投：合约赚到的钱按台阶拿出一部分买现货。
+        # 放在这里而不是独立的 dca 策略里，是因为引擎同一时刻只跑一种 mode ——
+        # 跑网格的时候没有别的入口能触发它。没有可投的档次时它是零开销的。
+        try:
+            from strategies.profit_dca import ProfitDCA
+            await ProfitDCA(self.client, self.db, self.config).step()
+        except Exception as e:
+            log.error(f"GRID 利润定投异常: {e}")
+
         if cfg.get("auto_select"):
             try:
                 await self._refresh_selection(equity)

@@ -146,13 +146,13 @@ class TestFillMissingDefaults(unittest.TestCase):
                          "运行时状态必须原样保留")
 
     def test_skips_sentinel_params(self):
-        self.db.save_config({"grid": {}})          # size_usdt / auto_select / refresh_min 全缺
+        self.db.save_config({"grid": {}})          # size_usdt / auto_select 全缺
         fill_missing_defaults(self.db, None, self.log)
         g = self._config()["grid"]
         self.assertNotIn("size_usdt", g, "size_usdt 缺 = 跳过该标的，补 20 会变成真下单")
         self.assertNotIn("auto_select", g, "auto_select 缺 = 手动模式，补 True 会换一批币")
-        self.assertNotIn("refresh_min", g, "refresh_min 缺 = 回退小时级，补 10 会改选币周期")
         self.assertIn("short_stop_pct", g, "普通参数照补")
+        self.assertIn("refresh_min", g, "refresh_min 已无哨兵语义（废弃的小时级字段已删）")
 
 
 if __name__ == "__main__":

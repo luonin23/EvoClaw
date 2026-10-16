@@ -103,8 +103,11 @@ def fill_missing_defaults(db: Database, defaults: dict, log):
             skipped.append(p.key)
             continue
         if p.section:
+            # 整段缺失时要**建段**。以前这里 continue 掉，想着「交给 seed_config」——
+            # 但 seed_config 只在整张 config 表为空时才跑，所以**后来新增的配置段
+            # （比如利润定投）永远进不了已有的库**，参数表上显示 0、代码走兜底值。
             if not isinstance(cfg.get(p.section), dict):
-                continue                       # 整段缺失 → 交给 seed_config
+                cfg[p.section] = {}
             short = p.key.split(".", 1)[1]
             if short not in cfg[p.section]:
                 cfg[p.section][short] = p.default

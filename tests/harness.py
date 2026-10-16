@@ -31,7 +31,8 @@ class FakeClient:
 
     def __init__(self, positions=None, open_orders=None, raise_positions=False,
                  raise_open_orders=False, cancel_ok=True, hold=False,
-                 price=100.0, trades=None):
+                 price=100.0, trades=None, spot_free=1000.0, min_amt=0.0,
+                 min_notional=0.0):
         self._positions = positions or []
         self._open_orders = open_orders or []
         self.raise_positions = raise_positions          # 模拟接口失败
@@ -40,6 +41,9 @@ class FakeClient:
         self.hold = hold                                # 是否回报空头持仓
         self.price = price
         self.trades = trades or []                      # fetch_my_trades 的返回
+        self.spot_free = spot_free                      # 现货可用 USDT
+        self.min_amt = min_amt                          # 最小可下量（0=不限制）
+        self.min_notional = min_notional                # 交易所最小下单额（0=不限制）
         self.cancelled: list[tuple[str, str]] = []
         self.market_orders: list[tuple] = []
         self.stop_orders: list[tuple] = []
@@ -60,10 +64,15 @@ class FakeClient:
         return round(float(p), 8)
 
     def min_amount(self, sym, p, kind="futures"):
-        return 1.0
+        return self.min_amt
 
     def amount_for_notional(self, sym, u, p, kind="futures"):
-        return 1.0
+        # 按名义金额换算数量（和真实实现同构）—— 返回固定 1.0 会让
+        # 「买 1.5U 却下了 100U」这类超支检查误判。
+        # min_notional > 0 时模拟交易所行为：金额不够最小额就抬到最小一手。
+        if not p:
+            return 0.0
+        return max(u, self.min_notional) / p
 
     def range_pos(self, sym):
         return 0.95
@@ -73,6 +82,16 @@ class FakeClient:
 
     async def get_futures_balance(self):
         return {"balance": 30.0, "available": 10.0}
+
+    # --- 现货（定投 / 利润定投 / 现货筛选 用得到）---
+    async def ensure_spot(self):
+        return None
+
+    async def refresh_prices(self, symbols):
+        return None
+
+    async def get_spot_balance(self, asset="USDT"):
+        return {"free": self.spot_free, "total": self.spot_free}
 
     # --- 账户 ---
     async def get_positions(self):

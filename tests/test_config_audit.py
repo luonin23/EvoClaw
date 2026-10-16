@@ -22,6 +22,31 @@ class TestDiff(unittest.TestCase):
                          "密钥绝不能进审计明文")
 
 
+class TestSectionMerge(unittest.TestCase):
+    """保存一个键不能把同段其它键冲掉 —— 实盘踩过。"""
+
+    def test_unknown_new_section_is_merged_not_replaced(self):
+        cfg = {"profit_dca": {"enabled": True, "step_usdt": 20, "ratio": 0.3,
+                              "symbols": ["DOGEUSDT"], "max_total": 0}}
+        body = {"profit_dca": {"step_usdt": 50}}
+        WebServer._merge_sections(cfg, body)
+        got = body["profit_dca"]
+        self.assertEqual(got["step_usdt"], 50)
+        for k in ("enabled", "ratio", "symbols", "max_total"):
+            self.assertIn(k, got, f"{k} 被整体替换冲掉了")
+        self.assertEqual(got["ratio"], 0.3)
+
+    def test_merge_list_comes_from_registry(self):
+        """段名必须覆盖注册表里的所有段；写死清单会漏掉新段。"""
+        import params
+        want = {p.section for p in params.PARAMS if p.section}
+        for sec in want:
+            cfg = {sec: {"a": 1, "b": 2}}
+            body = {sec: {"a": 9}}
+            WebServer._merge_sections(cfg, body)
+            self.assertEqual(body[sec].get("b"), 2, f"{sec} 段没有走字段级合并")
+
+
 class TestHistoryAndRollback(unittest.TestCase):
     def setUp(self):
         self.db, self.path = temp_db()
