@@ -1016,7 +1016,7 @@ class GridStrategy:
                             f"GRID {sym}: 现价在 24h 区间 {pos*100:.0f}%（高位）但尚未回落确认，等确认再试空")
             return
 
-        offset = float(cfg.get("short_entry_offset", 0.02) or 0.02)
+        offset = float(cfg.get("short_entry_offset", 0.025) or 0.025)
         entry_px = self.client.round_price(sym, price * (1 + offset), "futures")
         amt = self.client.min_amount(sym, entry_px, "futures")     # 数量最小
         if amt <= 0:
@@ -1182,7 +1182,7 @@ class GridStrategy:
     async def _manage_short(self, sym: str, qty: float, entry: float, price: float):
         """空头持仓管理：止盈用软件平；止损优先挂交易所条件单，挂不上则软件兜底。"""
         cfg = self.cfg
-        sl = float(cfg.get("short_stop_pct", 0.02) or 0.02)
+        sl = float(cfg.get("short_stop_pct", 0.035) or 0.035)
         tp = float(cfg.get("short_tp_pct", 0.10) or 0.10)
         stop_px = entry * (1 + sl)
         tp_px = entry * (1 - tp)
@@ -2000,7 +2000,7 @@ class GridStrategy:
         entry = float(m.get("entry", 0) or 0)
         if state in (1, 2) and entry <= 0:
             entry = float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
-        sl = float(cfg.get("short_stop_pct", 0.02) or 0.02)
+        sl = float(cfg.get("short_stop_pct", 0.035) or 0.035)
         tp = float(cfg.get("short_tp_pct", 0.10) or 0.10)
         return {
             "qty": qty,
