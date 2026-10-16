@@ -1,0 +1,72 @@
+{
+ "default_config": {
+  "dca": {
+   "amount_usdt": 20,
+   "first_buy_immediately": true,
+   "interval_hours": 24,
+   "max_total_usdt": 500,
+   "symbols": [
+    "BTCUSDT",
+    "ETHUSDT"
+   ]
+  },
+  "dry_run": true,
+  "exchange": "binanceusdm",
+  "grid": {
+   "auto_range_pct": 0,
+   "auto_recenter": true,
+   "auto_select": true,
+   "blacklist": [],
+   "entry_limit_only": true,
+   "entry_min_discount": 0.004,
+   "entry_pos_max": 0.6,
+   "ext_close_cooldown_min": 30,
+   "grids": 0,
+   "leverage": 3,
+   "max_daily_range": 0.2,
+   "max_exposure_ratio": 3.0,
+   "max_grids": 15,
+   "max_symbols": 0,
+   "min_daily_range": 0.02,
+   "min_quote_volume": 100000000,
+   "min_tp_ratio": 0.002,
+   "recenter_cooldown_min": 30,
+   "recenter_margin": 0.01,
+   "reentry_tol": 0.003,
+   "refresh_hours": 6,
+   "refresh_min": 10,
+   "short_confirm": 0.01,
+   "short_enabled": false,
+   "short_entry_offset": 0.025,
+   "short_pos_min": 0.85,
+   "short_stop_pct": 0.035,
+   "short_tp_pct": 0.1,
+   "size_usdt": 20,
+   "step_ratio": 0.3,
+   "symbols": [],
+   "trail_arm_bands": 0.5,
+   "trail_bands": 1.0,
+   "trail_tp": true
+  },
+  "loop_interval": 10,
+  "min_order_notional": 5,
+  "mode": "off",
+  "order_notional_safety": 1.02,
+  "web_password": ""
+ },
+ "derived_defaults": {
+  "auto_symbol_cap(权益10.0)": 1,
+  "auto_symbol_cap(权益100.0)": 1,
+  "auto_symbol_cap(权益30.0)": 1,
+  "band(振幅0.06)": 0.018,
+  "band(振幅0.16)": 0.048,
+  "band(振幅0.25)": 0.075,
+  "grids(振幅0.06)": 8,
+  "grids(振幅0.16)": 8,
+  "grids(振幅0.25)": 8,
+  "symbol_range_pct(pick.range=0.03)": 0.04,
+  "symbol_range_pct(pick.range=0.16)": 0.15,
+  "symbol_range_pct(pick.range=0.3)": 0.15,
+  "symbol_range_pct(无range)": 0.06
+ }
+}
