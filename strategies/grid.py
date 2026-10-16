@@ -13,6 +13,7 @@ import math
 import time
 from datetime import datetime, timezone
 
+import params
 from exchange_client import _throttle
 from selector import select_grid_symbols, qualify_symbol
 
@@ -54,7 +55,8 @@ class GridStrategy:
         fixed = float(self.cfg.get("auto_range_pct", 0) or 0)
         if fixed > 0:
             return fixed
-        return max(0.04, min(0.15, float((pick or {}).get("range") or 0.06)))
+        return max(params.RANGE["min"],
+                   min(params.RANGE["max"], float((pick or {}).get("range") or params.RANGE["default"])))
 
     def _band_pct(self, pct: float) -> float:
         """相邻档位的价格间距（比例）≈ 振幅 × step_ratio，与档位推导同源。"""
@@ -171,7 +173,9 @@ class GridStrategy:
             for s in (self._selection or (self.config.get("grid_selection") or [])):
                 # 区间宽度随标的自身波动率自适应：取 1 倍日振幅，夹在 4%~15%。
                 # 固定区间对高波动币会频繁穿出，对低波动币又几乎不成交。
-                rng = fixed if fixed > 0 else max(0.04, min(0.15, float(s.get("range") or 0.06)))
+                rng = fixed if fixed > 0 else max(params.RANGE["min"],
+                                                 min(params.RANGE["max"],
+                                                     float(s.get("range") or params.RANGE["default"])))
                 out.append({"symbol": s["symbol"], "lower": 0, "upper": 0,
                             "grids": grids, "size_usdt": size, "auto_range_pct": rng})
             return out
@@ -226,7 +230,7 @@ class GridStrategy:
                 manage.append({"symbol": st["symbol"], "lower": float(st["lower"]),
                                "upper": float(st["upper"]), "grids": int(st["grids"]),
                                "size_usdt": float(st["size_usdt"]),
-                               "auto_range_pct": float(cfg.get("auto_range_pct", 0.06) or 0.06)})
+                               "auto_range_pct": float(cfg.get("auto_range_pct") or params.RANGE["default"])})
 
         symbols = [s["symbol"] for s in manage if s.get("symbol")]
         # 空单还没了结的标的，即使掉出了选币清单也要继续盯 —— 否则它的
@@ -415,7 +419,8 @@ class GridStrategy:
                     and float(st.get("upper", 0) or 0) > float(st.get("lower", 0) or 0):
                 lower, upper = float(st["lower"]), float(st["upper"])
             else:
-                pct = float(spec.get("auto_range_pct") or self.cfg.get("auto_range_pct", 0.25) or 0.25)
+                pct = float(spec.get("auto_range_pct") or self.cfg.get("auto_range_pct")
+                        or params.RANGE["fallback"])
                 lower, upper = price * (1 - pct), price * (1 + pct)
 
         grids = int(spec.get("grids") or 0)
@@ -804,7 +809,8 @@ class GridStrategy:
         if ex_qty <= 0 and price > upper and not await self._reentry_ok(sym, price):
             return False
 
-        pct = float(spec.get("auto_range_pct") or cfg.get("auto_range_pct", 0.06) or 0.06)
+        pct = float(spec.get("auto_range_pct") or cfg.get("auto_range_pct")
+                    or params.RANGE["default"])
         log.warning(f"GRID {sym}: 价格 {price:.6f} 突破区间 {lower:.6f}~{upper:.6f} → "
                     f"网格动态居中到 ±{pct*100:.1f}%")
         self.db.set_runtime_stat(key, time.time())

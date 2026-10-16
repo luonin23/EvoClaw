@@ -49,17 +49,18 @@ def read_db_config() -> dict:
 
 
 def registry_keys(cfg: dict) -> dict[str, str]:
-    """返回 {点分键: 所属区}。区 = 顶层标量 / grid / dca。"""
+    """返回 {点分键: 所属区}，取自**参数注册表**。
+
+    刻意不从 DB 的键来推：config 表里还住着 `grid_selection`（每轮选币写回的
+    运行时状态），它每 10 分钟就变一次，混进来会让「行为快照比对」永远报差异，
+    把真正需要盯的参数变化淹掉。
+    """
+    import params as P
     keys = {}
-    for k, v in DEFAULT_CONFIG.items():
-        if isinstance(v, dict):
-            for kk in v:
-                keys[f"{k}.{kk}"] = k
-        else:
-            keys[k] = ""
-    for k in cfg:                       # DB 里有、默认里没有的（如 exchange_kwargs）
-        if k not in DEFAULT_CONFIG and not isinstance(cfg[k], dict):
-            keys[k] = ""
+    for p in P.PARAMS:
+        if p.hidden:
+            continue
+        keys[p.key] = p.section
     return keys
 
 

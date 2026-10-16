@@ -203,6 +203,81 @@ tr:hover td{background:var(--hover)}
   border-radius:10px;padding:11px 16px;font-size:13px;opacity:0;transform:translateY(8px);
   transition:.25s;pointer-events:none;z-index:99}
 .toast.show{opacity:1;transform:translateY(0)}
+
+/* ===== 参数中心 ===== */
+.ptabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;margin-bottom:12px;scrollbar-width:none}
+.ptabs::-webkit-scrollbar{display:none}
+.ptab{flex:0 0 auto;font-size:12px;color:var(--t2);background:var(--bg);border:1px solid var(--bd);
+  border-radius:20px;padding:5px 12px;cursor:pointer;white-space:nowrap;transition:color .15s,border-color .15s}
+.ptab:hover{color:var(--t1);border-color:var(--bd2)}
+.ptab.on{color:var(--accent);border-color:var(--accent)}
+.ptab .badge{font-size:9px;font-family:var(--mono);margin-left:5px;color:var(--bg);background:var(--warn);
+  border-radius:8px;padding:0 5px}
+.pnote{font-size:11px;color:var(--t3);margin-bottom:10px;line-height:1.6}
+.ptable td{white-space:normal;vertical-align:top}
+.ptable .plabel{color:var(--t1);font-family:var(--ui);font-size:12.5px;font-weight:500}
+.ptable .pkey{font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:2px}
+.ptable .pdesc{font-size:11px;color:var(--t3);line-height:1.6;font-family:var(--ui)}
+.ptable .pctl{min-width:150px}
+.ptable .pctl .nw{display:flex;align-items:center;gap:6px}
+.ptable .pctl .nw input{flex:1;min-width:0}
+.ptable .pctl input[type=number],.ptable .pctl select{width:100%;background:var(--bg);
+  border:1px solid var(--bd);color:var(--t1);padding:5px 8px;border-radius:6px;outline:none;
+  font-size:12px;font-family:var(--mono)}
+.ptable .pctl input:focus,.ptable .pctl select:focus{border-color:var(--accent)}
+.ptable .pctl input.bad{border-color:var(--error)}
+.ptable tr.dirty td{background:rgba(245,158,11,.06)}
+.ptable tr.dirty .plabel:after{content:'●';color:var(--warn);font-size:8px;margin-left:5px;vertical-align:middle}
+.ptable .unit{font-size:10px;color:var(--t3);white-space:nowrap;flex:0 0 auto}
+.ptable .defhint{font-size:10px;color:var(--t3);margin-top:3px}
+.pick{width:100%;text-align:left;background:var(--bg);border:1px solid var(--bd);color:var(--t2);
+  padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;font-family:var(--mono)}
+.pick:hover{border-color:var(--bd2);color:var(--t1)}
+/* 开关 */
+.sw{position:relative;display:inline-block;width:40px;height:22px;flex:0 0 auto}
+.sw input{opacity:0;width:0;height:0}
+.sw i{position:absolute;inset:0;background:var(--bd2);border-radius:22px;transition:background .18s;cursor:pointer}
+.sw i:before{content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:var(--t1);
+  border-radius:50%;transition:transform .18s}
+.sw input:checked + i{background:var(--accent)}
+.sw input:checked + i:before{transform:translateX(18px)}
+.sw input:focus-visible + i{outline:2px solid var(--accent);outline-offset:2px}
+.swrow{display:flex;align-items:center;gap:8px}
+.swrow span{font-size:11px;color:var(--t3)}
+.pdis{opacity:.45;pointer-events:none}
+/* 弹窗 */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;z-index:200;
+  align-items:center;justify-content:center;padding:18px}
+.modal.show{display:flex}
+.mbox{background:var(--elev);border:1px solid var(--bd2);border-radius:14px;width:100%;max-width:520px;
+  max-height:86vh;display:flex;flex-direction:column;padding:16px}
+.mbox h3{font-size:14px;font-weight:600;margin-bottom:10px}
+.mbox .msub{font-size:11px;color:var(--t3);margin-bottom:8px;line-height:1.6}
+.mbox input[type=text]{width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);
+  padding:7px 10px;border-radius:8px;outline:none;font-size:13px;margin-bottom:10px}
+.mbox input[type=text]:focus{border-color:var(--accent)}
+.mlist{flex:1;overflow-y:auto;border:1px solid var(--bd);border-radius:8px;padding:4px 2px;min-height:120px}
+.mrow{display:flex;align-items:center;gap:8px;padding:5px 10px;font-size:12px;font-family:var(--mono);
+  color:var(--t2);cursor:pointer;border-radius:5px}
+.mrow:hover{background:var(--hover);color:var(--t1)}
+.mrow input{accent-color:var(--accent);cursor:pointer}
+.mrow.fixed{opacity:.45;cursor:not-allowed}
+.modal .actions{margin-top:12px}
+
+/* 窄屏：三列表格塞不下 → 每行折成一张小卡片（标签/控件/说明 竖排），
+   免得手机上要横向拖着看、说明列还被切掉一半。 */
+@media (max-width:720px){
+  .ptable thead{display:none}
+  .ptable,.ptable tbody,.ptable tr,.ptable td{display:block;width:auto}
+  .ptable tr{border-bottom:1px solid var(--bd);padding:11px 2px}
+  .ptable td{border:0;padding:0;white-space:normal}
+  .ptable .pctl{min-width:0;margin:7px 0}
+  .ptable .pctl .nw,.ptable .pctl > div{max-width:220px}
+  .ptable .pdesc{font-size:11.5px}
+  .ptable tr.dirty td{background:transparent}
+  .ptable tr.dirty{background:rgba(245,158,11,.06)}
+  #cfgBox > .scroll{overflow-x:visible}
+}
 ::-webkit-scrollbar{height:8px;width:8px}
 ::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:4px}
 </style>
@@ -259,28 +334,35 @@ tr:hover td{background:var(--hover)}
       <button class="btn primary" id="btnUnlock" onclick="unlock()">解锁</button>
     </div>
     <div id="cfgBox" style="display:none">
-      <div class="form">
-        <div class="f"><label>策略模式</label><select id="cMode">
-          <option value="off">关闭（只监控不下单）</option>
-          <option value="grid">方案B · 低杠杆网格</option>
-          <option value="dca">方案C · 现货定投</option>
-        </select></div>
-        <div class="f"><label>模拟盘 (dry-run)</label><select id="cDry">
-          <option value="true">开启 — 只记录不下单（安全）</option>
-          <option value="false">关闭 — 真实下单</option>
-        </select></div>
-        <div class="f"><label>循环间隔（秒）</label><input type="number" id="cLoop" min="3" step="1"></div>
-        <div class="f"><label>最小下单金额 (USDT)</label><input type="number" id="cMin" min="0" step="1"></div>
-        <div class="f"><label>高位试空（空单）</label><select id="cShort" onchange="syncShort()">
-          <option value="false">关闭 — 不做空单</option>
-          <option value="true">开启 — 高位挂空单（最小仓·必带止损·不加仓）</option>
-        </select></div>
+      <div class="ptabs" id="pTabs"></div>
+      <div class="pnote" id="pNote"></div>
+      <div class="scroll">
+        <table class="ptable">
+          <thead><tr><th style="width:190px">参数</th><th style="width:170px">当前值</th><th>说明</th></tr></thead>
+          <tbody id="pBody"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
+        </table>
       </div>
-      <div class="hint" id="shortHint"></div>
       <div class="actions">
-        <button class="btn primary" id="btnSave" onclick="saveConfig()">保存配置</button>
-        <button class="btn" onclick="loadConfig()">重新读取</button>
+        <button class="btn primary" id="btnSave" onclick="saveParams()">保存修改</button>
+        <button class="btn" onclick="loadParams(true)">重新读取</button>
+        <button class="btn" onclick="rollbackConfig()">撤销上次改动</button>
+        <span class="hint" id="pStatus" style="margin:0;align-self:center"></span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 多选弹窗（黑名单 / 手写标的 / 定投标的） -->
+<div class="modal" id="modal">
+  <div class="mbox">
+    <h3 id="mTitle">选择标的</h3>
+    <div class="msub" id="mSub"></div>
+    <input type="text" id="mSearch" placeholder="搜索币种…" oninput="renderMList()">
+    <div class="mlist" id="mList"></div>
+    <div class="actions">
+      <button class="btn primary" onclick="mOk()">确定</button>
+      <button class="btn" onclick="closeModal()">取消</button>
+      <span class="hint" id="mCount" style="margin:0;align-self:center"></span>
     </div>
   </div>
 </div>
@@ -663,41 +745,226 @@ async function cancelAndReselect(sym){
   if(r.ok){ await loadGrid(); await loadState(); }
 }
 
-// 空单开关的说明文字随下拉变化。
-// 页面上只暴露这一个 grid 字段，保存时按「字段级」提交（见 saveConfig），
-// 不再把整个 grid 当 JSON 丢回去 —— 页面上没有的参数不会被顶掉。
-function syncShort(){
-  const on = $('cShort').value==='true';
-  $('shortHint').innerHTML = on
-    ? '开启：现价到 24h 区间高位、并确认回落后，挂一张最小仓空单，带交易所止损，平掉后该币不再开空。'
-    : '关闭：不再扫描开空机会。<b>已经挂出但没成交</b>的开空单会被撤掉；'
-      + '<b>已经成交</b>的空单不受影响，仍会继续止盈/止损直到平掉。';
+// ============ 参数中心 ============
+// 表格完全由 /api/params 驱动：加一个参数只需要在 params.py 里加一行，
+// 前端零改动。脏值只提交改动过的键，服务端再做一遍同样的校验。
+let PMETA = null;                 // {groups:[], params:[]}
+let PDIRTY = {};                  // key -> 原始值（未乘 scale）
+let PTAB = "";
+
+async function loadConfig(){ await loadParams(); }
+
+async function loadParams(keepTab){
+  const d = await api('/api/params'); if(!d){ toast('读取参数失败'); return; }
+  PMETA = d;
+  if(!PTAB || !d.groups.some(g=>g.id===PTAB)) PTAB = d.groups[0].id;
+  if(!keepTab) PDIRTY = {};
+  renderTabs(); renderParams();
 }
 
-async function loadConfig(){
-  const c = await api('/api/config'); if(!c) return;
-  $('cMode').value = c.mode||'off';
-  $('cDry').value = String(c.dry_run!==false);
-  $('cLoop').value = c.loop_interval||10;
-  $('cMin').value = c.min_order_notional||5;
-  $('cShort').value = String(!!((c.grid||{}).short_enabled));
-  syncShort();
+function renderTabs(){
+  $('pTabs').innerHTML = PMETA.groups.map(g=>{
+    const n = Object.keys(PDIRTY).filter(k=>k.startsWith(g.id==='global'?'':g.id+'.')||
+      (g.id==='global' && !k.includes('.'))).length;
+    const isG = g.id==='global' || g.id==='advanced' || g.id==='dca';
+    const cnt = Object.keys(PDIRTY).filter(k=> isG ? !k.includes('.') && g.id==='global'
+      : k.startsWith(g.id+'.')).length;
+    return '<div class="ptab'+(g.id===PTAB?' on':'')+'" onclick="switchTab(\''+g.id+'\')">'
+      + esc(g.title) + (cnt?'<span class="badge">'+cnt+'</span>':'') + '</div>';
+  }).join('');
 }
 
-async function saveConfig(){
+function switchTab(id){ PTAB = id; renderTabs(); renderParams(); }
+
+function renderParams(){
+  const g = PMETA.groups.find(x=>x.id===PTAB);
+  $('pNote').textContent = g ? (g.note||'') : '';
+  const items = PMETA.params.filter(p=>p.group===PTAB);
+  $('pBody').innerHTML = items.map(p=>{
+    const dirty = Object.prototype.hasOwnProperty.call(PDIRTY, p.key);
+    const raw = dirty ? PDIRTY[p.key] : p.value;
+    return '<tr data-k="'+p.key+'" class="'+(dirty?'dirty':'')+'">'
+      + '<td><div class="plabel">'+esc(p.label)+'</div><div class="pkey">'+p.key+'</div></td>'
+      + '<td class="pctl">'+ctlHtml(p,raw)+'</td>'
+      + '<td><div class="pdesc">'+esc(p.desc)+'</div>'
+        + (p.hot===false?'<div class="defhint" style="color:var(--warn)">⚠ 改完需重启进程</div>':'')
+        + (p.sentinelHint?'<div class="defhint">'+esc(p.sentinelHint)+'</div>':'')
+        + (p.changed?'<div class="defhint">已改动（默认 '+esc(fmtDef(p))+')</div>':'')
+      + '</td></tr>';
+  }).join('');
+  syncStatus();
+}
+
+function fmtDef(p){
+  if(p.widget==='switch') return p.default?'开':'关';
+  const v = p.default * p.scale;
+  return (Math.round(v*1e6)/1e6) + (p.unit||'');
+}
+
+function ctlHtml(p, raw){
+  const dis = p.enabledWhen && !enabledNow(p) ? ' pdis' : '';
+  // 敏感项：只显示掩码，留空即代表不修改（服务端也只在非空时才覆盖）
+  if(p.sensitive){
+    if(p.key==='exchange_kwargs')
+      return '<div><input type="password" placeholder="'+(esc(p.value.apiKey||'')||'API Key')+'"'
+        + ' oninput="setSecret(\'exchange_kwargs\',\'apiKey\',this.value)">'
+        + '<input type="password" placeholder="Secret（留空不改）" style="margin-top:5px"'
+        + ' oninput="setSecret(\'exchange_kwargs\',\'secret\',this.value)"></div>';
+    return '<div><input type="password" placeholder="留空不修改密码"'
+      + ' oninput="setParam(\''+p.key+'\',this.value)"></div>';
+  }
+  if(p.widget==='switch')
+    return '<div class="swrow'+dis+'"><label class="sw"><input type="checkbox" '
+      + (raw?'checked':'')+' onchange="setParam(\''+p.key+'\',this.checked)"><i></i></label>'
+      + '<span>'+(raw?'开启':'关闭')+'</span></div>';
+  if(p.widget==='select')
+    return '<div class="'+dis.trim()+'"><select onchange="setParam(\''+p.key+'\',this.value)">'
+      + (p.choices||[]).map(c=>'<option value="'+esc(c)+'"'+(c===raw?' selected':'')+'>'+esc(c)+'</option>').join('')
+      + '</select></div>';
+  if(p.widget==='multiselect' || p.type==='symbol_list' || p.type==='str_list'){
+    const n = Array.isArray(raw)?raw.length:0;
+    return '<div class="'+dis.trim()+'"><button class="pick" onclick="openPicker(\''+p.key+'\')">'
+      + (n?('已选 '+n+' 个标的'):'点击选择…')+'</button></div>';
+  }
+  const v = raw*p.scale;
+  const step = p.step!=null ? p.step*p.scale : 'any';
+  const min = p.min!=null ? p.min*p.scale : '';
+  const max = p.max!=null ? p.max*p.scale : '';
+  return '<div class="nw '+dis.trim()+'"><input type="number" value="'+(Math.round(v*1e6)/1e6)+'"'
+    + ' step="'+step+'" min="'+min+'" max="'+max+'"'
+    + ' oninput="setParam(\''+p.key+'\',this.value,this)">'
+    + (p.unit?'<span class="unit">'+esc(p.unit)+'</span>':'')+'</div>';
+}
+
+// API Key / Secret 两个字段合并成 exchange_kwargs 一个参数提交
+function setSecret(section, field, v){
+  const cur = PDIRTY[section] || {};
+  if(v===''){ delete cur[field]; } else { cur[field] = v; }
+  if(Object.keys(cur).length===0) delete PDIRTY[section];
+  else PDIRTY[section] = cur;
+  const tr = document.querySelector('tr[data-k="'+section+'"]');
+  if(tr) tr.classList.toggle('dirty', !!PDIRTY[section]);
+  syncStatus();
+}
+
+function enabledNow(p){
+  const [k, want] = p.enabledWhen;
+  const cur = Object.prototype.hasOwnProperty.call(PDIRTY,k) ? PDIRTY[k]
+    : (PMETA.params.find(x=>x.key===k)||{}).value;
+  return cur === want;
+}
+
+function setParam(key, v, el){
+  const p = PMETA.params.find(x=>x.key===key);
+  let raw = v;
+  if(p.widget==='switch') raw = !!v;
+  else if(p.widget==='select') raw = v;
+  else if(p.type==='int'||p.type==='float') raw = (v===''?null:v/p.scale);
+  else raw = (v===''?null:v);                    // 敏感项：留空 = 不改
+  if(raw===null){ delete PDIRTY[key]; }
+  else PDIRTY[key] = raw;
+
+  // 前端先按同一套 min/max 拦一道（服务端还会再拦一道，不信前端）
+  if(el && p.min!=null && raw!=null && !(p.sentinel && raw===0)){
+    const bad = raw < p.min || raw > p.max;
+    el.classList.toggle('bad', bad);
+  }
+  const tr = document.querySelector('tr[data-k="'+key+'"]');
+  if(tr) tr.classList.toggle('dirty', Object.prototype.hasOwnProperty.call(PDIRTY,key));
+  renderTabs(); syncStatus();
+}
+
+function syncStatus(){
+  const n = Object.keys(PDIRTY).length;
+  $('pStatus').textContent = n ? ('● '+n+' 项待保存') : '';
+  $('pStatus').style.color = n ? 'var(--warn)' : '';
+}
+
+// 把点分键还原成 /api/config 要的嵌套结构
+function buildBody(){
+  const body = {};
+  for(const [k,v] of Object.entries(PDIRTY)){
+    if(k.includes('.')){ const [sec,sub]=k.split('.'); (body[sec]=body[sec]||{})[sub]=v; }
+    else body[k]=v;
+  }
+  return body;
+}
+
+async function saveParams(){
   if(!PWD){ toast('请先解锁'); return; }
-  const body = {mode:$('cMode').value, dry_run:$('cDry').value==='true',
-    loop_interval:parseInt($('cLoop').value)||10, min_order_notional:parseFloat($('cMin').value)||5,
-    grid:{short_enabled: $('cShort').value==='true'}};   // 只提交页面上真正编辑过的字段
+  if(!Object.keys(PDIRTY).length){ toast('没有改动'); return; }
+  // 改模式/换标的这类会立刻影响真实下单的，先让人确认一次
+  const risky = Object.keys(PDIRTY).filter(k=>['mode','dry_run','grid.auto_select',
+    'grid.blacklist','grid.symbols','grid.short_enabled'].includes(k));
+  if(risky.length && !confirm('将修改：\n  '+risky.join('\n  ')+'\n\n这些会直接影响真实下单，确定保存？')) return;
+
   const btn=$('btnSave'); btn.disabled=true; btn.textContent='保存中…';
   const r = await fetch('/api/config',{method:'POST',
-    headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
-  btn.disabled=false; btn.textContent='保存配置';
+    headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(buildBody())});
+  btn.disabled=false; btn.textContent='保存修改';
   if(r.status===401){ toast('未授权，请重新解锁'); PWD=''; $('cfgBox').style.display='none'; $('lockBox').style.display=''; return; }
   const d = await r.json().catch(()=>({}));
-  toast(d.status==='ok' ? '配置已保存' : ('保存失败: '+(d.message||'未知')));
-  if(d.status==='ok') loadState();
+  if(d.status==='ok'){ toast('配置已保存'); PDIRTY={}; await loadParams(); await loadState(); }
+  else toast('保存失败：'+(d.message||'未知'));
 }
+
+async function rollbackConfig(){
+  if(!PWD){ toast('请先解锁'); return; }
+  if(!confirm('撤销最近一次配置改动？')) return;
+  const r = await fetch('/api/config/rollback',{method:'POST',
+    headers:{'Content-Type':'application/json',...authHeaders()},body:'{}'});
+  const d = await r.json().catch(()=>({}));
+  if(r.status===401){ toast('未授权，请重新解锁'); return; }
+  toast(d.status==='ok' ? '已撤销' : ('撤销失败：'+(d.message||'未知')));
+  if(d.status==='ok'){ PDIRTY={}; await loadParams(); await loadState(); }
+}
+
+// ============ 多选弹窗 ============
+let MPICK = { key:null, sel:new Set(), all:[], forced:new Set() };
+
+async function openPicker(key){
+  const p = PMETA.params.find(x=>x.key===key);
+  const d = await api("/api/symbols?kind="+(key==="dca.symbols"?"spot":"futures")); if(!d){ toast("读取标的列表失败"); return; }
+  const spot = (key==='dca.symbols');
+  const all = spot ? d.spot : d.futures;
+  const cur = Object.prototype.hasOwnProperty.call(PDIRTY,key) ? PDIRTY[key] : p.value;
+  MPICK = { key, sel:new Set(cur||[]), all, forced:new Set(spot?[]:d.forced), title:p.label,
+            spot, box:p };
+  $('mTitle').textContent = p.label;
+  $('mSub').innerHTML = spot
+    ? '现货可投标的（共 '+all.length+' 个）。'
+    : '合约可投标的（共 '+all.length+' 个）。稳定币等由系统强制排除，勾了也不会生效。';
+  $('mSearch').value='';
+  $('modal').classList.add('show'); renderMList(); $('mSearch').focus();
+}
+
+function renderMList(){
+  const q = ($('mSearch').value||'').toUpperCase();
+  const rows = MPICK.all.filter(s=>s.includes(q)
+    || (MPICK.forced.size && [...MPICK.forced].some(f=>f.includes(q) && f===s)));
+  const extra = [...MPICK.sel].filter(s=>!MPICK.all.includes(s));   // 已选但不在可选列表
+  const list = extra.concat(rows);
+  $('mList').innerHTML = list.map(s=>{
+    const fixed = MPICK.forced.has(s);
+    return '<label class="mrow'+(fixed?' fixed':'')+'">'
+      + '<input type="checkbox" '+(MPICK.sel.has(s)?'checked':'')+(fixed?' disabled':'')
+      + ' onchange="togglePick(\''+s+'\',this.checked)">'
+      + esc(s) + (fixed?' <span style="color:var(--t3)">（系统强制排除）</span>':'') + '</label>';
+  }).join('') || '<div class="mrow">没有匹配的标的</div>';
+  $('mCount').textContent = '已选 '+MPICK.sel.size+' 个';
+}
+
+function togglePick(s, on){ on?MPICK.sel.add(s):MPICK.sel.delete(s); $('mCount').textContent='已选 '+MPICK.sel.size+' 个'; }
+function closeModal(){ $('modal').classList.remove('show'); }
+function mOk(){
+  const arr = [...MPICK.sel].sort();
+  setParam(MPICK.key, arr);
+  const tr = document.querySelector('tr[data-k="'+MPICK.key+'"] .pick');
+  if(tr) tr.textContent = arr.length ? ('已选 '+arr.length+' 个标的') : '点击选择…';
+  closeModal();
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
+$('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
 
 async function togglePause(){
   if(!PWD){ toast('请先解锁配置页再操作'); return; }

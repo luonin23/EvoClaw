@@ -37,13 +37,33 @@ GROUPS: tuple[tuple[str, str, str], ...] = (
     ("advanced",     "高级",       "密钥与密码（敏感，不在参数表内编辑）"),
 )
 
-# 哨兵语义：0 / False 不是「小」或「关」，而是「自动/无上限/跳过/回退」
+# 哨兵语义：0 / False 不是「小」或「关」，而是「自动/无上限/跳过/回退」。
+#
+# ⚠ 别把「是个开关」当成哨兵。判据只有一条：**键缺失时，代码的兜底值
+#   是否等于注册表默认值**。
+#     · dry_run / entry_limit_only / trail_tp … 缺键时代码用的就是默认值
+#       → 普通参数，补齐默认值不改变行为
+#     · auto_select 缺键时代码兜底 False（手动模式），默认值却是 True
+#       （自动选币）→ 真哨兵，补齐会把「手动」变成「自动」，换一批币去买
+#   给普通开关标上 sentinel 会让 fill_missing_defaults 白白跳过它们，
+#   曾因此让守卫测试报出 3 处「哨兵值应为 False」。
 SENTINEL_HINT = {
     "auto": "0 = 按波动率/资金自动推导（推荐）",
     "unlimited": "0 = 不设上限",
     "skip": "0 = 跳过该标的，不建仓",
     "fallback": "0 = 回退到旧字段（不推荐）",
     "off": "关闭该机制",
+}
+
+
+# 派生值的兜底 —— **不是配置参数**，是「区间宽度按波动率推导」这套逻辑自己的边界。
+# 以前这几个数散在 grid.py 的 5 处（0.04/0.15/0.06，还有一处 0.25），改一个忘一个。
+# 集中到这里，代码引用它们而不是再写字面量。
+RANGE = {
+    "min": 0.04,        # 推导出的区间宽度下限
+    "max": 0.15,        # 上限（再宽就分散到没效率）
+    "default": 0.06,    # 拿不到标的振幅时的兜底
+    "fallback": 0.25,   # 连 spec 都没有时的最后兜底（仅用于重建区间上下轨）
 }
 
 
@@ -83,8 +103,7 @@ PARAMS: tuple[Param, ...] = (
           "off=只监控不下单；grid=低杠杆网格；dca=现货定投",
           widget="select", choices=("off", "grid", "dca")),
     Param("dry_run", "bool", True, "global", "模拟盘",
-          "开启时完整计算并记录「本应下的单」，但不发真实订单", widget="switch",
-          sentinel="off"),
+          "开启时完整计算并记录「本应下的单」，但不发真实订单", widget="switch"),
     Param("loop_interval", "int", 10, "global", "循环间隔", "主循环多少秒跑一轮",
           unit="秒", min=3, max=600, step=1),
     Param("min_order_notional", "float", 5, "global", "最小下单金额",
@@ -118,7 +137,7 @@ PARAMS: tuple[Param, ...] = (
 
     # ---------------- 网格·跟随 ----------------
     Param("grid.auto_recenter", "bool", True, "grid_follow", "自动重排区间",
-          "价格突破区间后网格自动重新居中", widget="switch", sentinel="off"),
+          "价格突破区间后网格自动重新居中", widget="switch"),
     Param("grid.recenter_margin", "float", 0.01, "grid_follow", "重排触发幅度",
           "突破区间多少才触发重排", widget="percent", unit="%", scale=100,
           min=0, max=0.2, step=0.001),
@@ -139,8 +158,7 @@ PARAMS: tuple[Param, ...] = (
 
     # ---------------- 网格·入场 ----------------
     Param("grid.entry_limit_only", "bool", True, "grid_entry", "只用限价建仓",
-          "首次建仓一律挂限价买单等回落，绝不市价追高", widget="switch",
-          sentinel="off"),
+          "首次建仓一律挂限价买单等回落，绝不市价追高", widget="switch"),
     Param("grid.entry_pos_max", "float", 0.6, "grid_entry", "建仓位置门槛",
           "现价在 24h 区间的位置高于此值就不建仓（等回落）。0.6 即 60%",
           widget="percent", unit="%", scale=100, min=0, max=1, step=0.05),
@@ -152,7 +170,7 @@ PARAMS: tuple[Param, ...] = (
     Param("grid.short_enabled", "bool", False, "grid_short", "高位试空",
           "开启后：价格到 24h 区间高位并确认回落时，挂一张最小仓空单并带交易所止损；"
           "平掉后该币不再开空。关闭时不再扫描机会，未成交的挂单会被撤掉，"
-          "已成交的持仓仍继续止盈/止损", widget="switch", sentinel="off"),
+          "已成交的持仓仍继续止盈/止损", widget="switch"),
     Param("grid.short_pos_min", "float", 0.85, "grid_short", "高位门槛",
           "现价在 24h 区间的位置 ≥ 此值才算高位", widget="percent", unit="%",
           scale=100, min=0, max=1, step=0.01),
@@ -172,7 +190,7 @@ PARAMS: tuple[Param, ...] = (
     # ---------------- 网格·移动止盈 ----------------
     Param("grid.trail_tp", "bool", True, "grid_follow", "移动止盈",
           "浮盈冲高后回撤时卖出剩余仓位，把利润落袋。只止盈、绝不割肉",
-          widget="switch", sentinel="off"),
+          widget="switch"),
     Param("grid.trail_arm_bands", "float", 0.5, "grid_follow", "移动止盈·武装",
           "浮盈达到几个档距才开始记录最高价", unit="档", min=0, max=10, step=0.1),
     Param("grid.trail_bands", "float", 1.0, "grid_follow", "移动止盈·回撤",
@@ -182,7 +200,7 @@ PARAMS: tuple[Param, ...] = (
     # ---------------- 网格·选币 ----------------
     Param("grid.auto_select", "bool", True, "grid_select", "自动选币",
           "开启=每轮按振幅与成交额自动挑标的；关闭=只用下面的手写清单。"
-          "⚠ 切换会改变实际交易的币种", widget="switch", sentinel="off"),
+          "⚠ 切换会改变实际交易的币种。缺键时代码按「手动模式」处理，所以补齐默认值会改变交易币种，故意不补", widget="switch", sentinel="off"),
     Param("grid.max_symbols", "int", 0, "grid_select", "同时跑几个",
           "留 0 按资金自动推导（推荐）", unit="个", min=0, max=50, step=1,
           sentinel="auto"),
@@ -217,7 +235,7 @@ PARAMS: tuple[Param, ...] = (
     Param("dca.max_total_usdt", "float", 500, "dca", "累计投入上限",
           "达到后停止买入", unit="U", min=0, max=1e9, sentinel="unlimited"),
     Param("dca.first_buy_immediately", "bool", True, "dca", "启动立即买首期",
-          "从未买过时，启动就先买一期", widget="switch", sentinel="off"),
+          "从未买过时，启动就先买一期", widget="switch"),
 
     # ---------------- 高级（不进参数表）----------------
     Param("exchange_kwargs", "kwargs", {}, "advanced", "API 密钥",

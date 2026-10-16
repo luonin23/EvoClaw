@@ -61,6 +61,7 @@ class WebServer:
         r.add_get("/api/config", self.api_config_get)
         r.add_post("/api/config", self.api_config_set)
         r.add_get("/api/params", self.api_params_get)
+        r.add_get("/api/symbols", self.api_symbols)
         r.add_get("/api/config/history", self.api_config_history)
         r.add_post("/api/config/rollback", self.api_config_rollback)
         r.add_post("/api/auth-check", self.api_auth_check)
@@ -280,12 +281,27 @@ class WebServer:
     async def api_params_get(self, request):
         """参数表元数据 + 当前值。前端表格完全由它驱动。"""
         cfg = self.db.load_config()
+        kw = dict(cfg.get("exchange_kwargs") or {})
+        masked = {
+            "exchange_kwargs": {"apiKey": (kw.get("apiKey", "")[:6] + "…")
+                                if kw.get("apiKey") else "", "secret": ""},
+        }
         items = []
         for p in params.PARAMS:
             if p.hidden:
                 continue
             if p.sensitive:
-                continue                      # 敏感项由 /api/config 走单独通道
+                # 敏感项也进表（否则用户在页面上根本改不了 API key / 密码），
+                # 但**绝不回传明文** —— 前端只显示掩码，留空即表示不修改。
+                items.append({
+                    "key": p.key, "group": p.group, "label": p.label, "desc": p.desc,
+                    "type": p.type, "widget": p.widget, "unit": "", "scale": 1,
+                    "min": None, "max": None, "step": None,
+                    "sentinel": None, "sentinelHint": "", "choices": None,
+                    "hot": p.hot, "value": masked.get(p.key, ""), "default": None,
+                    "changed": False, "enabledWhen": None, "sensitive": True,
+                })
+                continue
             cur = params.dotted_get(cfg, p.key, p.default)
             if p.type == "kwargs":
                 continue
@@ -301,6 +317,25 @@ class WebServer:
                 "enabledWhen": list(p.enabled_when) if p.enabled_when else None,
             })
         return web.json_response({"groups": params.groups(), "params": items})
+
+    async def api_symbols(self, request):
+        """供「黑名单 / 手写标的 / 定投标的」的多选弹窗用。"""
+        from selector import DEFAULT_BLACKLIST
+
+        def _list(markets):
+            return sorted({self.client.user_symbol(s) for s in (markets or {})})
+
+        fut = _list(getattr(self.client, "_fut_markets", {}))
+        spot = _list(getattr(self.client, "_spot_markets", {}))
+        if not spot and request.query.get("kind") == "spot":
+            # 现货市场默认不加载（只有跑定投时才用），按需拉一次，之后有缓存。
+            try:
+                await self.client.ensure_spot()
+                spot = _list(getattr(self.client, "_spot_markets", {}))
+            except Exception as e:
+                log.warning(f"加载现货市场失败: {e}")
+        return web.json_response({"futures": fut, "spot": spot,
+                                  "forced": sorted(DEFAULT_BLACKLIST)})
 
     async def api_config_history(self, request):
         if not self._auth_ok(request):
