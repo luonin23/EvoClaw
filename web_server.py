@@ -17,14 +17,28 @@ from aiohttp import web
 
 log = logging.getLogger(__name__)
 
-_static_cache: dict[str, str] = {}
+_static_cache: dict[str, tuple[tuple, str]] = {}
 
 
 def _static(path: str) -> str:
-    if path not in _static_cache:
-        with open(path, "r", encoding="utf-8") as f:
-            _static_cache[path] = f.read()
-    return _static_cache[path]
+    """读静态文件；文件变了就自动重读。
+
+    原来是进程级永久缓存 —— 改一行 HTML 都得重启服务，实测被这个坑过好几次。
+    按 (mtime, size) 判断是否重读：命中缓存时只是一次 stat，代价可忽略。
+    """
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+    hit = _static_cache.get(path)
+    if hit and sig is not None and hit[0] == sig:
+        return hit[1]
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    if sig is not None:
+        _static_cache[path] = (sig, text)
+    return text
 
 
 _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
