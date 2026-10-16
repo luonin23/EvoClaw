@@ -79,27 +79,48 @@ def release_pid_lock(fd):
 
 
 def fill_missing_defaults(db: Database, defaults: dict, log):
-    """把默认配置里**缺失**的键补进去；已有的值一律不动（只增不改）。
+    """按**参数注册表**补齐缺失的键；已有的值一律不动（只增不改）。
 
-    实测：配置页的 grid JSON 少了 19 个参数（含全部空单参数），它们只能靠代码里的
-    兜底值生效 —— 用户在页面上既看不见也改不了，改参数只能改代码。补进来后行为
-    完全不变（补的值就等于原来的兜底值），但所有参数可见可调。
+    ⚠ 带 sentinel 的参数**故意跳过**。它们的「缺失」是有语义的 —— 代码在键缺失时
+    走的完全是另一套逻辑：
+      · size_usdt 缺 = 跳过该标的   ≠ 补成 20 后每格真下 20U
+      · amount_usdt 缺 = 不定投      ≠ 补成 20 后真买
+      · auto_select 缺 = 手动模式    ≠ 补成 True 后改成自动选币（买完全不同的币）
+      · refresh_min 缺 = 回退小时级  ≠ 补成 10 后改成 10 分钟一轮
+    补齐这些等于**把语义反过来**，直接影响真实下单，所以宁可不补。
+
+    注册表里没有的键一律放行 —— `grid_selection`（选币结果）这类运行时状态
+    就住在同一张 config 表里，任何「按注册表重建」的动作都会把它删掉。
     """
+    import params as P
+
     cfg = db.load_config()
-    added = []
-    for k, v in defaults.items():
-        if k not in cfg:
-            cfg[k] = v
-            added.append(k)
-        elif isinstance(v, dict) and isinstance(cfg.get(k), dict):
-            for kk, vv in v.items():
-                if kk not in cfg[k]:
-                    cfg[k][kk] = vv
-                    added.append(f"{k}.{kk}")
+    added, skipped = [], []
+    for p in P.PARAMS:
+        if not p.in_defaults:
+            continue
+        if p.sentinel:
+            skipped.append(p.key)
+            continue
+        if p.section:
+            if not isinstance(cfg.get(p.section), dict):
+                continue                       # 整段缺失 → 交给 seed_config
+            short = p.key.split(".", 1)[1]
+            if short not in cfg[p.section]:
+                cfg[p.section][short] = p.default
+                added.append(p.key)
+        elif p.key not in cfg:
+            cfg[p.key] = p.default
+            added.append(p.key)
+
     if added:
         db.save_config(cfg)
         head = ", ".join(added[:8]) + ("…" if len(added) > 8 else "")
         log.info(f"配置补齐缺失项 {len(added)} 个（只增不改）：{head}")
+    if skipped:
+        log.info(f"配置跳过 {len(skipped)} 个带哨兵语义的参数（缺失即代表"
+                 f"「自动/跳过/回退」，补默认值会改变交易行为）")
+    return added
 
 
 def migrate_api_keys(db: Database, log):
