@@ -793,11 +793,15 @@ async function loadParams(keepTab){
 async function loadProfitDca(){
   const d = await api('/api/profit-dca');
   const box = $('pdcBox');
-  if(!d || !d.enabled){ box.className='pdc'; box.innerHTML=''; return; }
+  if(!d){ box.className='pdc'; box.innerHTML=''; return; }
+  // 只在「利润定投」这一页显示；没开启也给预览（否则开启前看不到算出来的金额）
+  if(PTAB !== 'profit_dca'){ box.className='pdc'; return; }
   box.className = 'pdc show';
+  const preview = !d.enabled
+    ? '<span class="warnline">未开启</span> · 开启后：' : '';
   const pct = d.step_usdt>0 ? Math.max(0, Math.min(100, (1 - d.to_next_step/d.step_usdt)*100)) : 0;
-  box.innerHTML =
-    '<b>利润定投</b> · 合约累计已实现盈利 <b>'+d.realized_total.toFixed(2)+'U</b>'
+  box.innerHTML = preview
+    + '<b>利润定投</b> · 合约累计已实现盈利 <b>'+d.realized_total.toFixed(2)+'U</b>'
     + ' ｜ 已触发水位线 <b>'+d.anchor.toFixed(2)+'U</b>'
     + ' ｜ 已投现货 <b>'+d.invested_total.toFixed(2)+'U</b>'
     + (d.max_total>0?(' ｜ 上限 '+d.max_total+'U'):'')
@@ -831,7 +835,7 @@ function renderTabs(){
   }).join('');
 }
 
-function switchTab(id){ PTAB = id; renderTabs(); renderParams(); }
+function switchTab(id){ PTAB = id; renderTabs(); renderParams(); loadProfitDca(); }
 
 function renderParams(){
   const g = PMETA.groups.find(x=>x.id===PTAB);
