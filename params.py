@@ -269,6 +269,14 @@ def dotted_get(config: dict, key: str, fallback: Any = None) -> Any:
     return config.get(key, fallback)
 
 
+def _fmt(p: Param, raw: float) -> str:
+    """把原始值按显示倍率格式化 —— 报错信息要给用户看得懂的数。
+
+    否则会出现「不能大于 0.5%」这种把人绕晕的提示（真实含义是 50%）。
+    """
+    return f"{raw * p.scale:g}{p.unit}"
+
+
 def coerce(key: str, value: Any) -> Any:
     """按注册表做类型转换；不合法抛 ValueError（消息可直接展示给用户）。"""
     p = _INDEX.get(key)
@@ -296,9 +304,9 @@ def coerce(key: str, value: Any) -> Any:
         # 哨兵值（如 0 = 自动）必须放行，哪怕它低于 min
         if not (p.sentinel and num == 0):
             if p.min is not None and num < p.min:
-                raise ValueError(f"{p.label} 不能小于 {p.min}{p.unit}")
+                raise ValueError(f"{p.label} 不能小于 {_fmt(p, p.min)}")
             if p.max is not None and num > p.max:
-                raise ValueError(f"{p.label} 不能大于 {p.max}{p.unit}")
+                raise ValueError(f"{p.label} 不能大于 {_fmt(p, p.max)}")
         return int(num) if p.type == "int" else num
 
     if p.type == "enum":
@@ -316,7 +324,14 @@ def coerce(key: str, value: Any) -> Any:
             out.append(v.strip().upper())
         return out
 
-    if p.type in ("str", "password"):
+    if p.type == "password":
+        if not isinstance(value, str) or not value.strip():
+            # 空密码 = 谁都能改配置（_auth_ok 在密码为空时一律拒绝，
+            # 但也不能让页面把密码清空成「没有密码」这种自锁状态）
+            raise ValueError(f"{p.label} 不能为空")
+        return value
+
+    if p.type == "str":
         if not isinstance(value, str):
             raise ValueError(f"{p.label} 必须是字符串")
         return value

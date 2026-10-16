@@ -11,6 +11,8 @@ import os
 import secrets
 import time
 
+import params
+
 from aiohttp import web
 
 log = logging.getLogger(__name__)
@@ -44,6 +46,9 @@ class WebServer:
         r.add_get("/api/orders", self.api_orders)
         r.add_get("/api/config", self.api_config_get)
         r.add_post("/api/config", self.api_config_set)
+        r.add_get("/api/params", self.api_params_get)
+        r.add_get("/api/config/history", self.api_config_history)
+        r.add_post("/api/config/rollback", self.api_config_rollback)
         r.add_post("/api/auth-check", self.api_auth_check)
         r.add_post("/api/pause", self.api_pause)
         self._start = time.time()
@@ -170,7 +175,15 @@ class WebServer:
         return web.json_response(safe)
 
     _WRITABLE = {"mode", "dry_run", "loop_interval", "grid", "dca",
-                 "min_order_notional", "order_notional_safety", "exchange_kwargs"}
+                 "min_order_notional", "order_notional_safety", "exchange_kwargs",
+                 "web_password"}
+
+    def _check(self, section: str, key: str, value):
+        """按注册表校验并转换一个值。返回 (ok, 转换后的值, 错误消息)。"""
+        ok, val, msg = params.validate(f"{section}.{key}" if section else key, value)
+        if not ok:
+            return False, value, f"{section + '.' if section else ''}{key}：{msg}"
+        return True, val, ""
 
     async def api_config_set(self, request):
         if not self._auth_ok(request):
@@ -179,7 +192,31 @@ class WebServer:
             body = await request.json()
             body = {k: v for k, v in body.items() if k in self._WRITABLE}
             cfg = self.db.load_config()
-            kw = cfg.get("exchange_kwargs", {})
+            errors: list[str] = []
+
+            # ---- 先全校验，一处不合法就整体拒绝（不做半截生效）----
+            for key in ("grid", "dca"):
+                if isinstance(body.get(key), dict):
+                    for k, v in list(body[key].items()):
+                        ok, val, msg = self._check(key, k, v)
+                        if ok:
+                            body[key][k] = val
+                        else:
+                            errors.append(msg)
+            for k in list(body.keys()):
+                if k in ("grid", "dca", "exchange_kwargs"):
+                    continue
+                ok, val, msg = self._check("", k, body[k])
+                if ok:
+                    body[k] = val
+                else:
+                    errors.append(msg)
+            if errors:
+                return web.json_response(
+                    {"status": "error", "message": "；".join(errors), "errors": errors},
+                    status=400)
+
+            kw = dict(cfg.get("exchange_kwargs", {}))
             if "exchange_kwargs" in body:
                 nk = body.pop("exchange_kwargs")
                 if nk.get("apiKey"):
@@ -196,12 +233,80 @@ class WebServer:
                     body[key] = merged
             cfg.update(body)
             cfg["exchange_kwargs"] = kw
-            self.db.save_config(cfg)
+
+            # ---- 通用防线：记下改动前的完整配置，供审计与一键回滚 ----
+            # 没有任何实际变化就不写历史 —— 否则「点一次保存」就多一条，
+            # 真正有用的那几条会被冲掉。
+            changed = self._diff_changed(self.db.load_config(), cfg)
+            if changed:
+                self.db.save_config_audited(cfg, changed, source=request.remote or "web")
+            else:
+                self.db.save_config(cfg)
             if self.engine:
                 self.engine._reload()
-            return web.json_response({"status": "ok"})
+            return web.json_response({"status": "ok", "changed": changed})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+    @staticmethod
+    def _diff_changed(old: dict, new: dict) -> dict:
+        """对比出真正变化的键（含 grid/dca 的子键），用于审计与回滚展示。"""
+        out = {}
+        for k, v in new.items():
+            if k == "exchange_kwargs":
+                continue                      # 密钥不进审计明文
+            if isinstance(v, dict) and isinstance(old.get(k), dict):
+                for kk, vv in v.items():
+                    if vv != old[k].get(kk):
+                        out[f"{k}.{kk}"] = [old[k].get(kk), vv]
+            elif v != old.get(k):
+                out[k] = [old.get(k), v]
+        return out
+
+    async def api_params_get(self, request):
+        """参数表元数据 + 当前值。前端表格完全由它驱动。"""
+        cfg = self.db.load_config()
+        items = []
+        for p in params.PARAMS:
+            if p.hidden:
+                continue
+            if p.sensitive:
+                continue                      # 敏感项由 /api/config 走单独通道
+            cur = params.dotted_get(cfg, p.key, p.default)
+            if p.type == "kwargs":
+                continue
+            items.append({
+                "key": p.key, "group": p.group, "label": p.label, "desc": p.desc,
+                "type": p.type, "widget": p.widget, "unit": p.unit, "scale": p.scale,
+                "min": p.min, "max": p.max, "step": p.step,
+                "sentinel": p.sentinel,
+                "sentinelHint": params.SENTINEL_HINT.get(p.sentinel or "", ""),
+                "choices": list(p.choices) if p.choices else None,
+                "hot": p.hot, "value": cur, "default": p.default,
+                "changed": cur != p.default,
+                "enabledWhen": list(p.enabled_when) if p.enabled_when else None,
+            })
+        return web.json_response({"groups": params.groups(), "params": items})
+
+    async def api_config_history(self, request):
+        if not self._auth_ok(request):
+            return await self._deny(request)
+        return web.json_response({"items": self.db.config_history(20)})
+
+    async def api_config_rollback(self, request):
+        if not self._auth_ok(request):
+            return await self._deny(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        target = self.db.config_rollback(int(body.get("id") or 0))
+        if target is None:
+            return web.json_response({"status": "error", "message": "没有可回滚的历史"},
+                                     status=400)
+        if self.engine:
+            self.engine._reload()
+        return web.json_response({"status": "ok"})
 
     async def api_pause(self, request):
         if not self._auth_ok(request):

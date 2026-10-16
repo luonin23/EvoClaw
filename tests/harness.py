@@ -14,12 +14,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-# strategies/grid.py 只用到 exchange_client._throttle。装个桩，避免为一个
-# 日志节流器去 import ccxt（既慢又可能触发网络初始化）。
-if "exchange_client" not in sys.modules:
-    _m = types.ModuleType("exchange_client")
-    _m._throttle = type("T", (), {"emit": lambda self, k: ""})()
-    sys.modules["exchange_client"] = _m
+# 用**真实**的 exchange_client，不装桩：装了桩会让 `from main import ...`
+# 找不到 ExchangeClient（main 在模块级导入它）。ccxt 本来就是运行依赖，
+# 导入它不建连接、不发请求，多花的那点时间换测试跑在真代码上，值。
+import exchange_client  # noqa: E402,F401
 
 
 class FakeClient:

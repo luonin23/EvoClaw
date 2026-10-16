@@ -30,6 +30,7 @@ class Database:
         # 所有复合写方法统一加锁
         for _name in (
             "save_config", "seed_config", "set_runtime_stat", "insert_order",
+            "save_config_audited", "config_rollback",
             "update_order_status", "upsert_grid_state", "replace_grid_levels",
             "insert_grid_level", "fill_grid_level", "clear_grid_order_id", "mark_grid_level",
             "add_lot", "consume_lots", "reset_lots", "clear_lots",
@@ -138,6 +139,13 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_dca_records_ts ON dca_records(ts);
 
             -- 定投累计状态（每 symbol 一行）
+            CREATE TABLE IF NOT EXISTS config_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                config TEXT NOT NULL,      -- 改动**之前**的完整 config（JSON）
+                changed TEXT NOT NULL,     -- 本次改了哪些键，{key: [旧值, 新值]}
+                source TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS seen_trades (
                 symbol TEXT NOT NULL,
                 trade_id TEXT NOT NULL,
@@ -183,6 +191,54 @@ class Database:
             self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)",
                               (key, json.dumps(val)))
         self.conn.commit()
+
+    # ===== 配置改动历史 / 回滚 / 审计 =====
+    def save_config_audited(self, new_cfg: dict, changed: dict, source: str = "",
+                            keep: int = 20) -> None:
+        """写入配置，并留一份「改动前」的完整快照，供回滚与审计。
+
+        与 save_config 分开是刻意的：`_refresh_selection` 每 10 分钟就会
+        save_config 一次（写选币结果），那种内部写入不该污染历史。
+        只有**用户改配置**这条路径才走这里。
+        """
+        prev = self.load_config()
+        self.conn.execute(
+            "INSERT INTO config_history (ts, config, changed, source) VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(),
+             json.dumps(prev, ensure_ascii=False),
+             json.dumps(changed, ensure_ascii=False), source))
+        self.conn.execute(
+            "DELETE FROM config_history WHERE id NOT IN "
+            "(SELECT id FROM config_history ORDER BY id DESC LIMIT ?)", (keep,))
+        self.conn.commit()
+        self.save_config(new_cfg)
+
+    def config_history(self, limit: int = 20) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, ts, changed, source FROM config_history ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()
+        return [{"id": r[0], "ts": r[1], "changed": json.loads(r[2] or "{}"),
+                 "source": r[3]} for r in rows]
+
+    def config_rollback(self, history_id: int = 0) -> dict | None:
+        """回滚到某次改动**之前**的配置。history_id=0 表示最近一次。
+
+        回滚本身也记一条历史 —— 否则「回滚后又想回滚回去」就没路了。
+        """
+        if history_id:
+            row = self.conn.execute(
+                "SELECT id, config, changed FROM config_history WHERE id=?",
+                (history_id,)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, config, changed FROM config_history ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if not row:
+            return None
+        target = json.loads(row[1])
+        self.save_config_audited(target, {"__rollback__": [None, f"history#{row[0]}"]},
+                                 source="rollback")
+        return target
 
     def seed_config(self, defaults: dict) -> bool:
         existing = self.conn.execute("SELECT COUNT(*) FROM config").fetchone()[0]
