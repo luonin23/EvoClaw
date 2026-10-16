@@ -186,6 +186,14 @@ class WebServer:
                     kw["apiKey"] = nk["apiKey"]
                 if nk.get("secret"):
                     kw["secret"] = nk["secret"]
+            # grid / dca 做**字段级合并**，不做整体替换。
+            # 网页上只暴露了其中几个参数，若照单全收地整体替换，其余几十个参数
+            # 会被"页面上没显示"这一点顺手抹掉（含自动选币维护的字段）。
+            for key in ("grid", "dca"):
+                if isinstance(body.get(key), dict) and isinstance(cfg.get(key), dict):
+                    merged = dict(cfg[key])
+                    merged.update(body[key])
+                    body[key] = merged
             cfg.update(body)
             cfg["exchange_kwargs"] = kw
             self.db.save_config(cfg)
