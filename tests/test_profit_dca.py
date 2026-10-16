@@ -184,6 +184,43 @@ class TestMinimumOrderGuard(Base):
                              f"预算 1.5U 却花掉 {total:.2f}U")
 
 
+class TestAnchorAdvancesByWholeSteps(Base):
+    """水位线只能**按整档**推进 —— 否则会被超支放大、一步吞掉好几档。"""
+
+    def test_overspend_does_not_swallow_extra_steps(self):
+        """预算 1U/档、最小一手把实际支出抬到 5U 时，只能推进 1 档，不能是 5 档。"""
+        self.earn(60.0)                          # 累计 60 → 3 档（step=20）
+        cl = FakeClient(price=100.0, min_notional=5.0)
+        p = ProfitDCA(cl, self.db, cfg(step=20.0, ratio=0.05, symbols=("AUSDT",)))
+        # 每档预算 = 20×0.05 = 1U，分给 1 个标的 → 1U < 最小一手 5U
+        # 但 5U ≤ 1U×1.2? 不成立 → 会被跳过，anchor 不动
+        run(p.step())
+        self.assertEqual(p._anchor(), 0.0, "买不起就攒着，不动水位线")
+
+    def test_partial_fill_does_not_advance(self):
+        self.earn(20.0)                          # 1 档 = 6U
+        cl = FakeClient(price=100.0, min_notional=5.0)
+        p = ProfitDCA(cl, self.db, cfg(step=20.0, ratio=0.3,
+                                       symbols=("AUSDT", "BUSDT", "CUSDT")))
+        run(p.step())                            # 每份 2U < 5U → 全跳过
+        self.assertEqual(p._anchor(), 0.0)
+
+    def test_full_fill_advances_exactly_one_step(self):
+        self.earn(20.0)
+        cl = FakeClient(price=100.0, min_notional=5.0)
+        p = ProfitDCA(cl, self.db, cfg(step=20.0, ratio=0.3, symbols=("AUSDT",)))
+        run(p.step())
+        self.assertAlmostEqual(p._anchor(), 20.0, places=6,
+                               msg="投出去 6U（正好一档预算）→ 水位线推进整 20U")
+
+    def test_two_steps_advance_two_steps(self):
+        self.earn(40.0)
+        cl = FakeClient(price=100.0, min_notional=5.0)
+        p = ProfitDCA(cl, self.db, cfg(step=20.0, ratio=0.3, symbols=("AUSDT",)))
+        run(p.step())
+        self.assertAlmostEqual(p._anchor(), 40.0, places=6)
+
+
 class TestStatus(Base):
     def test_status_reports_distance_to_next_step(self):
         self.earn(3.2)

@@ -1,6 +1,7 @@
 """配置改动的审计、历史与一键回滚（实盘改错配置的救命通道）。"""
 from __future__ import annotations
 
+import json
 import os
 import unittest
 
@@ -20,6 +21,37 @@ class TestDiff(unittest.TestCase):
         new = {"exchange_kwargs": {"apiKey": "BBB"}, "mode": "grid"}
         self.assertEqual(WebServer._diff_changed(old, new), {},
                          "密钥绝不能进审计明文")
+
+
+class TestNoSecretLeak(unittest.TestCase):
+    """密钥绝不能从任何只读接口漏出去。"""
+
+    def setUp(self):
+        self.db, self.path = temp_db()
+
+    def tearDown(self):
+        self.db.close()
+        if os.path.exists(self.path):
+            os.remove(self.path)
+
+    def test_history_listing_carries_no_secrets(self):
+        self.db.save_config({"mode": "grid",
+                             "exchange_kwargs": {"apiKey": "SECRETKEY", "secret": "S3CR3T"}})
+        self.db.save_config_audited({"mode": "off",
+                                     "exchange_kwargs": {"apiKey": "SECRETKEY",
+                                                         "secret": "S3CR3T"}},
+                                    {"mode": ["grid", "off"]})
+        blob = json.dumps(self.db.config_history(), ensure_ascii=False)
+        self.assertNotIn("S3CR3T", blob)
+        self.assertNotIn("SECRETKEY", blob)
+
+    def test_rollback_keeps_working_after_restoring(self):
+        """回滚要能把密钥一起还原（所以历史里必须留着），但接口不能回传。"""
+        self.db.save_config({"mode": "grid", "exchange_kwargs": {"apiKey": "K1"}})
+        self.db.save_config_audited({"mode": "off", "exchange_kwargs": {"apiKey": "K2"}}, {})
+        target = self.db.config_rollback()
+        self.assertEqual(target["exchange_kwargs"]["apiKey"], "K1", "回滚要能还原密钥")
+        self.assertEqual(self.db.load_config()["exchange_kwargs"]["apiKey"], "K1")
 
 
 class TestSectionMerge(unittest.TestCase):

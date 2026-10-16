@@ -274,7 +274,8 @@ class ExchangeClient:
             step = 0.0
         if step > 0 and raw > 0:
             n = raw / step
-            raw = (math.ceil(round(n, 9)) if up else round(n)) * step
+            # 留 1e-9 容差：n 恰为整数倍时不要被 IEEE 误差顶到下一档
+            raw = (math.ceil(n - 1e-9) if up else round(n)) * step
         return float(ex.amount_to_precision(ccxt_sym, raw))
 
     def min_amount(self, user_symbol: str, price: float, kind: str = "futures") -> float:
@@ -522,7 +523,7 @@ class ExchangeClient:
                 "symbol": self.user_symbol(ccxt_sym),
                 "price": close or last,
                 "change": (close - base) / base,          # 负=跌，正=涨
-                "range": (hi - lo) / lo,                  # N 日振幅
+                "range": (hi - lo) / close,               # N 日振幅（口径与选币器一致）
                 "quote_volume": qv,
                 "days": len(k) - 1,
             })

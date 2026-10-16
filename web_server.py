@@ -213,7 +213,13 @@ class WebServer:
             errors: list[str] = []
 
             # ---- 先全校验，一处不合法就整体拒绝（不做半截生效）----
-            for key in ("grid", "dca"):
+            # ⚠ 段名必须**从注册表推导**，不能写死 ("grid","dca")。
+            # 写死时新增的段（如 profit_dca）会掉进下面那个「顶层键」分支，
+            # 而 validate("profit_dca", {...}) 查不到这个段名 → 直接放行 →
+            # 类型/范围校验被整体绕过（实测 POST {"profit_dca":{"ratio":100}}
+            # 把 10000% 写进了库）。_merge_sections 用的是注册表，这里必须一致。
+            sections = {p.section for p in params.PARAMS if p.section}
+            for key in sections:
                 if isinstance(body.get(key), dict):
                     for k, v in list(body[key].items()):
                         ok, val, msg = self._check(key, k, v)
@@ -222,7 +228,7 @@ class WebServer:
                         else:
                             errors.append(msg)
             for k in list(body.keys()):
-                if k in ("grid", "dca", "exchange_kwargs"):
+                if k in sections or k == "exchange_kwargs":
                     continue
                 ok, val, msg = self._check("", k, body[k])
                 if ok:

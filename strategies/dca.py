@@ -9,6 +9,8 @@
 import logging
 from datetime import datetime, timezone, timedelta
 
+from strategies.profit_dca import MAX_OVERSPEND
+
 log = logging.getLogger(__name__)
 
 
@@ -108,7 +110,7 @@ class DCAStrategy:
         if qty <= 0:
             log.warning(f"DCA {sym}: 数量计算为 0（金额 {amount_usdt}U 可能低于最小下单额）")
             return
-        if qty * price > amount_usdt * 1.5:
+        if qty * price > amount_usdt * MAX_OVERSPEND:
             # 交易所最小下单额（币安现货 ≈5U）会把「买 5U」变成「买 6U」甚至更多。
             # 超出太多就不买，免得小额定投变成大额。
             log.warning(f"DCA {sym}: 最小一手 {qty * price:.2f}U 远超本期金额 "

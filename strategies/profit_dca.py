@@ -29,6 +29,11 @@ log = logging.getLogger(__name__)
 ANCHOR_KEY = "profit_dca_anchor"
 NOTE = "利润定投"
 
+# 单笔允许超出预算的上限。低于它才买：交易所的「最小下单额」会把小额预算抬高
+# （币安现货 ≈5U），不对齐步长又会溢出一点，所以留 20% 余量。
+# 调小 → 更容易跳过、更省；调大 → 更容易投出去、但单笔可能超预算。
+MAX_OVERSPEND = 1.2
+
 
 class ProfitDCA:
     """无状态（全部状态落库），每个 tick 新建也无所谓。"""
@@ -111,12 +116,18 @@ class ProfitDCA:
             log.warning(f"{NOTE}: 本档买入全部失败，水位线不推进，下轮重试。{detail}")
             return
 
-        # **只有真的买成了才推进水位线**，且按「实际花掉的钱 ÷ 比例」换算成消耗掉
-        # 的利润 —— 部分成交时只扣掉对应的那一部分，剩下的档位留到下一轮再投。
-        # 失败就不推进：否则「失败也扣档」会永久吞掉一次定投。
+        # **只有真的买成了才推进水位线**，而且**按整档推进**。
+        #
+        # 不能写成「水位线 += 实际花掉的钱 ÷ 比例」：实际支出会因为「最小一手」
+        # 而超出该档预算（例如预算 1U、最小一手 5.1U），那样算出来是 5.1/ratio，
+        # 一步就吞掉好几档、把本该留给未来的定投永久吃掉；反过来 ratio 很小时
+        # 又会漂移。用户定的规则是「每上涨一档利润、投这一档的一部分」，
+        # 所以推进的单位只能是**档**：投出去的钱够几档，就推进几档。
         ratio = float(cfg.get("ratio") or 0)
-        consumed = (spent / ratio) if ratio > 0 else 0.0
-        new_anchor = min(self._anchor() + consumed, self.db.realized_pnl_total())
+        steps_done = min(n, int(spent / per_step + 1e-9)) if per_step > 0 else 0
+        per_step_profit = (per_step / ratio) if ratio > 0 else 0.0   # 一档对应多少利润
+        new_anchor = min(self._anchor() + steps_done * per_step_profit,
+                         self.db.realized_pnl_total())
         self._set_anchor(new_anchor)
         tag = "[模拟]" if self.client.dry_run else "[实盘]"
         log.warning(f"{tag} {NOTE}: 触发 {n} 档（累计盈利已越过 "
@@ -159,7 +170,7 @@ class ProfitDCA:
         if qty <= 0:
             return 0.0
         notional = qty * price
-        if notional > amount_usdt * 1.5:
+        if notional > amount_usdt * MAX_OVERSPEND:
             # 最小一手就比预算大太多 → 宁可这一轮不投，也不要超支
             log.info(f"{NOTE} {sym}: 最小一手 {notional:.2f}U 远超本次预算 "
                      f"{amount_usdt:.2f}U，跳过（等攒够）")
@@ -169,6 +180,11 @@ class ProfitDCA:
             return 0.0
         fill = float(res.get("price") or price)
         cost = fill * qty
+        if cost > amount_usdt * MAX_OVERSPEND:
+            # 市价单成交价可能高于下单前盯的价，事后复核一遍留痕（单已成交，
+            # 撤不回来了，但日志要能解释「为什么这档花了这么多」）
+            log.warning(f"{NOTE} {sym}: 实际成交 {cost:.2f}U 超出预算 "
+                        f"{amount_usdt:.2f}U 的 {MAX_OVERSPEND:.0%}（滑点/最小一手）")
         now = datetime.now(timezone.utc).isoformat()
         self.db.insert_dca_record({"ts": now, "symbol": sym, "price": fill, "amount": qty,
                                    "cost": cost, "fee": cost * 0.001,
