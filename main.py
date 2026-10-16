@@ -78,6 +78,30 @@ def release_pid_lock(fd):
         pass
 
 
+def fill_missing_defaults(db: Database, defaults: dict, log):
+    """把默认配置里**缺失**的键补进去；已有的值一律不动（只增不改）。
+
+    实测：配置页的 grid JSON 少了 19 个参数（含全部空单参数），它们只能靠代码里的
+    兜底值生效 —— 用户在页面上既看不见也改不了，改参数只能改代码。补进来后行为
+    完全不变（补的值就等于原来的兜底值），但所有参数可见可调。
+    """
+    cfg = db.load_config()
+    added = []
+    for k, v in defaults.items():
+        if k not in cfg:
+            cfg[k] = v
+            added.append(k)
+        elif isinstance(v, dict) and isinstance(cfg.get(k), dict):
+            for kk, vv in v.items():
+                if kk not in cfg[k]:
+                    cfg[k][kk] = vv
+                    added.append(f"{k}.{kk}")
+    if added:
+        db.save_config(cfg)
+        head = ", ".join(added[:8]) + ("…" if len(added) > 8 else "")
+        log.info(f"配置补齐缺失项 {len(added)} 个（只增不改）：{head}")
+
+
 def migrate_api_keys(db: Database, log):
     """v2 的 config 为空时，从 v1 数据库迁移 API key（用户：key 都在代码/库里）。"""
     cfg = db.load_config()
@@ -151,6 +175,7 @@ async def main():
     log.info(f"数据库: {DB_PATH} (WAL={'存在' if os.path.exists(DB_PATH + '-wal') else '无'})")
     if db.seed_config(DEFAULT_CONFIG):
         log.info("已用默认配置初始化数据库")
+    fill_missing_defaults(db, DEFAULT_CONFIG, log)
 
     migrate_api_keys(db, log)
 

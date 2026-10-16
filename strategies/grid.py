@@ -982,7 +982,12 @@ class GridStrategy:
             if not enabled:
                 # 关掉开关：只撤「还没成交」的开空挂单。从没成交过 = 这一轮空单
                 # 没发生过，所以不把 short_done 置位（重新打开开关时它还能再试）。
-                await self._cancel_short_entry(sym)
+                await self._cancel_short_entry(sym, "空单开关已关闭")
+                return
+            if not self._in_selection(sym):
+                # 用户规则：挂着还没成交，币却已经掉出 top5 → 撤掉这张开空挂单。
+                # 它已经不在名单里了，再等成交只是白占保证金。
+                await self._cancel_short_entry(sym, "已掉出选币 top5 且开空单尚未成交")
                 return
             if await self._short_entry_open(sym):
                 return                               # 开空单还挂着，等它成交
@@ -1011,7 +1016,7 @@ class GridStrategy:
                             f"GRID {sym}: 现价在 24h 区间 {pos*100:.0f}%（高位）但尚未回落确认，等确认再试空")
             return
 
-        offset = float(cfg.get("short_entry_offset", 0.002) or 0.002)
+        offset = float(cfg.get("short_entry_offset", 0.02) or 0.02)
         entry_px = self.client.round_price(sym, price * (1 + offset), "futures")
         amt = self.client.min_amount(sym, entry_px, "futures")     # 数量最小
         if amt <= 0:
@@ -1053,12 +1058,17 @@ class GridStrategy:
         except Exception as e:
             log.warning(f"GRID {sym}: 撤止损单失败: {e}")
 
-    async def _cancel_short_entry(self, sym: str) -> int:
+    def _in_selection(self, sym: str) -> bool:
+        """该标的是否还在当前选币清单（top5）里。"""
+        sel = self._selection or (self.config.get("grid_selection") or [])
+        return any(s.get("symbol") == sym for s in sel)
+
+    async def _cancel_short_entry(self, sym: str, why: str = "空单开关已关闭") -> int:
         """撤掉「挂着但还没成交」的开空单，并清掉这轮空单的挂单状态。
 
         只撤 positionSide=SHORT 的卖单 —— 多头网格的卖档同是 sell，但属于 LONG
         腿，不能误伤。没有成交过就不置 short_done：这一轮空单等于没发生，
-        重新打开开关时该币还能再试一次。
+        之后该币还能再试一次。
         """
         n = 0
         try:
@@ -1097,7 +1107,7 @@ class GridStrategy:
         self.db.set_runtime_stat(f"short_stop_oid:{sym}", 0)
         self.db.set_runtime_stat(f"short_qty:{sym}", 0)
         self.db.set_runtime_stat(f"short_entry:{sym}", 0)
-        log.warning(f"GRID {sym}: 空单开关已关闭 → 撤销 {n} 条未成交的开空挂单")
+        log.warning(f"GRID {sym}: {why} → 撤销 {n} 条未成交的开空挂单")
         return n
 
     async def _recent_exit(self, sym: str, qty: float, side: str = "sell",
@@ -1172,8 +1182,8 @@ class GridStrategy:
     async def _manage_short(self, sym: str, qty: float, entry: float, price: float):
         """空头持仓管理：止盈用软件平；止损优先挂交易所条件单，挂不上则软件兜底。"""
         cfg = self.cfg
-        sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)
-        tp = float(cfg.get("short_tp_pct", 0.03) or 0.03)
+        sl = float(cfg.get("short_stop_pct", 0.02) or 0.02)
+        tp = float(cfg.get("short_tp_pct", 0.10) or 0.10)
         stop_px = entry * (1 + sl)
         tp_px = entry * (1 - tp)
         placed = float(self.db.get_runtime_stat(f"short_stop_oid:{sym}", 0) or 0) > 0
@@ -1990,8 +2000,8 @@ class GridStrategy:
         entry = float(m.get("entry", 0) or 0)
         if state in (1, 2) and entry <= 0:
             entry = float(self.db.get_runtime_stat(f"short_entry:{sym}", 0) or 0)
-        sl = float(cfg.get("short_stop_pct", 0.03) or 0.03)
-        tp = float(cfg.get("short_tp_pct", 0.03) or 0.03)
+        sl = float(cfg.get("short_stop_pct", 0.02) or 0.02)
+        tp = float(cfg.get("short_tp_pct", 0.10) or 0.10)
         return {
             "qty": qty,
             "entry": round(entry, 8),
