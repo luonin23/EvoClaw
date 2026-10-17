@@ -340,7 +340,7 @@ tr:hover td{background:var(--hover)}
   <!-- ===== 第一页：合约网格 + 合约成交记录 ===== -->
   <div id="page-futures">
     <div class="panel" id="panelGrid">
-      <h2>方案B · 低杠杆网格 <span class="tag" id="gridTag"></span></h2>
+      <h2>合约网格 · 低杠杆 <span class="tag" id="gridTag"></span></h2>
       <div id="gridBody"><div class="empty">暂无网格数据</div></div>
     </div>
 
@@ -478,7 +478,7 @@ async function api(p,opt){try{const r=await fetch(p,opt);return await r.json();}
 
 async function loadState(){
   const d = await api('/api/state'); if(!d) return; STATE = d;
-  $('bMode').textContent = '模式 ' + ({off:'关闭',grid:'网格',dca:'现货交易'}[d.mode]||d.mode);
+  $('bMode').textContent = '模式 ' + ({off:'全部停止',grid:'合约网格',dca:'仅现货'}[d.mode]||d.mode);
   $('bMode').className = 'badge ' + (d.mode==='off'?'':'ok');
   $('bDry').textContent = d.dry_run ? '模拟盘' : '实盘';
   $('bDry').className = 'badge ' + (d.dry_run?'warn':'err');
@@ -867,6 +867,12 @@ async function cancelAndReselect(sym){
 let PMETA = null;                 // {groups:[], params:[]}
 let PDIRTY = {};                  // key -> 原始值（未乘 scale）
 let PTAB = "";
+// 枚举选项的中文标签（只翻译含义不直观的；其余直接显示原始值）
+const CHOICE_CN = {
+  'mode.off':  '全部停止（只监控）',
+  'mode.grid': '运行合约网格',
+  'mode.dca':  '仅现货（合约网格停跑）',
+};
 
 async function loadConfig(){ await loadParams(); }
 
@@ -970,7 +976,8 @@ function ctlHtml(p, raw){
       + '<span>'+(raw?'开启':'关闭')+'</span></div>';
   if(p.widget==='select')
     return '<div class="'+dis.trim()+'"><select onchange="setParam(\''+p.key+'\',this.value)">'
-      + (p.choices||[]).map(c=>'<option value="'+esc(c)+'"'+(c===raw?' selected':'')+'>'+esc(c)+'</option>').join('')
+      + (p.choices||[]).map(c=>'<option value="'+esc(c)+'"'+(c===raw?' selected':'')+'>'
+        + esc(CHOICE_CN[p.key+'.'+c]||c)+'</option>').join('')
       + '</select></div>';
   if(p.widget==='multiselect' || p.type==='symbol_list' || p.type==='str_list'){
     const n = Array.isArray(raw)?raw.length:0;

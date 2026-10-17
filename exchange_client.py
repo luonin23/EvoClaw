@@ -2,8 +2,8 @@
 
 借鉴 v1 的成熟做法：价格缓存 + 精度处理 + 最小名义值 + 错误码分类 + 取消安全。
 v2 同时支持两个市场：
-  - futures（binanceusdm）：方案B 低杠杆网格
-  - spot（binance）      ：方案C 现货定投
+  - futures（binanceusdm）：合约网格（低杠杆）
+  - spot（binance）      ：现货交易（马丁格尔）/ 利润定投 / 现货筛选
 
 dry_run=True 时，策略层不会调用下单方法；客户端仍可读行情/余额用于模拟。
 """
@@ -170,8 +170,8 @@ class ExchangeClient:
         """刷新价格缓存；失败会抛异常（由引擎决定是否降级）。
 
         两张市场都要查：只在合约上市的币走 futures，只在上现货的币（部分新币）
-        走 spot。以前只查 futures —— 现货定投选了纯现货币时永远拿不到价格，
-        定投会静默跳过。
+        走 spot。以前只查 futures —— 现货策略选了纯现货币时永远拿不到价格，
+        买入会静默跳过。
         """
         ts = time.monotonic()
         got = set()
