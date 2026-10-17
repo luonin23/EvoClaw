@@ -251,13 +251,6 @@ PARAMS: tuple[Param, ...] = (
     Param("dca.max_total_usdt", "float", 500, "dca", "单轮投入上限",
           "一轮里（首单+全部加仓）累计投入超过此值就不再加仓；0 = 不限",
           unit="U", min=0, max=1e9, sentinel="unlimited"),
-    Param("dca.min_notional", "float", 5, "dca", "现货最低下单金额",
-          "现货低于此值的买单会被跳过（币安现货自身约 5U，取两者较大）。"
-          "现货交易和利润定投共用。0 = 只按交易所规则。改完需重启",
-          unit="U", min=0, max=100000, hot=False),
-    Param("dca.order_safety", "float", 1.02, "dca", "现货下单安全系数",
-          "现货下单金额相对最小名义值的放大倍数，防止卡在边界被拒。改完需重启",
-          unit="倍", min=1.0, max=3.0, step=0.01, hot=False),
     Param("dca.first_buy_immediately", "bool", True, "dca", "新标的立即建仓",
           "标的第一轮是否不等 interval_hours 直接买首单。之后的每一轮都是止盈后立即重启，"
           "不受此开关和间隔控制", widget="switch"),

@@ -74,6 +74,10 @@ class FakeClient:
     def min_amount(self, sym, p, kind="futures"):
         return self.min_amt
 
+    def min_notional_of(self, sym, kind="futures"):
+        # 与真实实现同构：返回该市场当前生效的最小下单额
+        return self.min_notional
+
     def amount_for_notional(self, sym, u, p, kind="futures"):
         # 按名义金额换算数量（和真实实现同构）—— 返回固定 1.0 会让
         # 「买 1.5U 却下了 100U」这类超支检查误判。

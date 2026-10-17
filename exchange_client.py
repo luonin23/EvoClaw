@@ -48,6 +48,14 @@ class LogThrottle:
 
 _throttle = LogThrottle(cooldown=300)
 
+# 现货下单下限：**全自动跟随交易所规则**（NOTIONAL filter，一般 5U、DOGE 等部分
+# 币对 1U），不设人工配置。下面两个只是技术保障，不是门槛：
+#   · SAFETY —— min_amount 向上取整时的保险，保证按步长截断后的数量仍够得着
+#     最小名义额，不被交易所拒单
+#   · FALLBACK —— 市场表拿不到时的保守兜底（币安现货典型值）
+SPOT_NOTIONAL_SAFETY = 1.02
+SPOT_NOTIONAL_FALLBACK = 5.0
+
 _oid_seq = 0
 
 
@@ -91,11 +99,6 @@ class ExchangeClient:
         self._closed = False
         self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
         self.notional_safety = float(config.get("order_notional_safety", 1.02) or 1.02)
-        # 现货的下单下限是独立的一套（币安现货自身有 minNotional 规则，约 5U），
-        # 不再共用合约的全局配置 —— 全局组只管合约，现货的在这里。
-        _d = dict(config.get("dca", {}) or {})
-        self.spot_min_notional = float(_d.get("min_notional", 5) or 0)
-        self.spot_safety = float(_d.get("order_safety", 1.02) or 1.02)
 
     # ===== 基础设施 =====
     async def _safe_call(self, coro, timeout=20):
@@ -258,16 +261,22 @@ class ExchangeClient:
 
     # ===== 精度与最小下单量 =====
     def min_notional_of(self, user_symbol: str, kind: str = "futures") -> float:
-        """该标的「一手」至少需要多少 USDT（交易所最小名义值 vs 配置最小额的较大者）。
+        """该标的「一手」至少需要多少 USDT。
 
-        合约看全局的 min_order_notional，现货看 dca.min_notional —— 两套独立配置。
+        合约 = max(交易所规则, 配置的 min_order_notional)；
+        现货 = **全自动跟随交易所规则**（NOTIONAL filter，DOGE 1U、主流 5U），
+        不叠加任何人工配置。
         """
-        lo = self.min_order_notional if kind == "futures" else self.spot_min_notional
         m = self.market_info(user_symbol, kind)
+        if kind == "spot":
+            if not m:
+                return SPOT_NOTIONAL_FALLBACK
+            ex_min = float((m.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
+            return ex_min or SPOT_NOTIONAL_FALLBACK
         if not m:
-            return lo
+            return self.min_order_notional
         ex_min = float((m.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
-        return max(ex_min, lo)
+        return max(ex_min, self.min_order_notional)
 
     def _round_amount(self, user_symbol: str, raw: float, kind: str, up: bool) -> float:
         """把数量对齐到交易所的数量步长（ccxt 的 amount_to_precision 是**向下截断**）。
@@ -313,7 +322,7 @@ class ExchangeClient:
             return 0.0
         try:
             cs = float(m.get("contractSize", 1) or 1)
-            safety = self.notional_safety if kind == "futures" else self.spot_safety
+            safety = self.notional_safety if kind == "futures" else SPOT_NOTIONAL_SAFETY
             target = self.min_notional_of(user_symbol, kind) * safety
             ex_min = float(((m.get("limits") or {}).get("amount") or {}).get("min") or 0)
             if kind == "futures":

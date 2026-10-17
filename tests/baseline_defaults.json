@@ -7,8 +7,6 @@
    "interval_hours": 24,
    "max_steps": 3,
    "max_total_usdt": 500,
-   "min_notional": 5,
-   "order_safety": 1.02,
    "step_dev": 0.02,
    "step_scale": 1.5,
    "symbols": [

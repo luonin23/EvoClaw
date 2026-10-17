@@ -328,6 +328,12 @@ class ProfitDCA:
         anchor = self._anchor()
         n, per_step, invest = self.pending_steps()
         pend = self.db.pending_spot_orders(PURPOSE)
+        # 最小下单额跟随交易所规则（各币对不同，取所配标的里最高的做保守提示）
+        try:
+            floors = [self.client.min_notional_of(s, "spot")
+                      for s in (cfg.get("symbols") or []) if s]
+        except Exception:
+            floors = []
         return {
             "enabled": bool(cfg.get("enabled")),
             "realized_total": round(realized, 4),
@@ -342,7 +348,7 @@ class ProfitDCA:
             "max_total": float(cfg.get("max_total") or 0),
             "symbols": list(cfg.get("symbols") or []),
             "per_symbol_usdt": round(per_step / max(1, len(cfg.get("symbols") or [])), 4),
-            "min_notional": 5.0,
+            "min_notional": max(floors) if floors else 5.0,
             "entry_offset": self._num("entry_offset"),
             "pending_orders": [
                 {"symbol": p["symbol"], "amount": p["amount"], "price": p["price"],

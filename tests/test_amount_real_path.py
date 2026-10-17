@@ -55,8 +55,6 @@ def real_client() -> ExchangeClient:
     cl.dry_run = True
     cl.min_order_notional = 5.0
     cl.notional_safety = 1.02
-    cl.spot_min_notional = 5.0
-    cl.spot_safety = 1.02
     cl._fut_markets = {}
     cl._spot_markets = {"BTC/USDT": BTC_MARKET, "DOGE/USDT": DOGE_MARKET}
     cl._spot = _CcxtStub({"BTC/USDT": 1e-05, "DOGE/USDT": 1.0})
@@ -112,40 +110,47 @@ class TestRealAmountMath(unittest.TestCase):
 
 
 class TestPerKindNotional(unittest.TestCase):
-    """下单下限按市场分流：合约看全局 min_order_notional，现货看 dca.min_notional。"""
+    """现货下单下限**全自动跟随交易所规则**（用户要求）：DOGE 1U、主流 5U，
+    不受任何人工配置影响；合约仍看全局的 min_order_notional。"""
 
     def setUp(self):
         self.cl = real_client()
 
-    def test_spot_uses_its_own_floor(self):
-        """现货配置 8U > 交易所 5U → 下限取 8U。"""
-        self.cl.spot_min_notional = 8.0
-        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 8.0, places=9)
+    def test_spot_floor_follows_exchange_per_symbol(self):
+        """下限逐币对跟随交易所：BTC 5U、DOGE 1U（2026-10 实测值）。"""
+        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0, places=9)
+        self.assertAlmostEqual(self.cl.min_notional_of("DOGEUSDT", "spot"), 1.0, places=9)
 
-    def test_futures_uses_global_floor(self):
-        """合约配置 20U → 合约下限 20U，同时现货不受影响。"""
+    def test_futures_floor_independent(self):
+        """合约下限调到 20U 也不影响现货（各管各的）。"""
         self.cl.min_order_notional = 20.0
         self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "futures"), 20.0,
                                places=9, msg="合约应用全局下限")
         self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0,
-                               places=9, msg="现货不应被全局下限抬高")
+                               places=9, msg="现货只看交易所规则")
 
-    def test_exchange_floor_wins_when_higher(self):
-        """交易所规则更高时取交易所的（max 语义）。"""
-        self.cl.spot_min_notional = 1.0        # 配置很低
-        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0,
-                               places=9, msg="币安现货 minNotional 5U 应兜底")
+    def test_doge_small_budget_can_buy(self):
+        """DOGE 最小 1U：3U 的小额预算也买得起（数量取整到步长 1）。"""
+        qty = self.cl.amount_for_notional("DOGEUSDT", 3.0, 0.08, "spot")
+        self.assertGreater(qty, 0, "DOGE 1U 下限下 3U 预算应可下单")
+        notional = qty * 0.08
+        self.assertGreaterEqual(notional, 1.0, "必须够得着交易所最小额")
+        self.assertLessEqual(notional, 3.0 * 1.2, f"3U 预算实际算了 {notional:.2f}U")
+        self.assertAlmostEqual(qty, round(qty), places=9, msg="步长 1 的币必须整数枚")
 
-    def test_zero_means_exchange_rules_only(self):
-        """现货下限配 0 = 只按交易所规则。"""
-        self.cl.spot_min_notional = 0.0
-        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0, places=9)
+    def test_btc_small_budget_still_cannot_buy(self):
+        """BTC 最小 5U：3U 预算确实买不起 → 返回 0 让上层跳过。"""
+        qty = self.cl.amount_for_notional("BTCUSDT", 3.0, 82000.0, "spot")
+        # min_amount 会抬到 5.1U > 3×1.2 超支护栏 → 上层不会下这种单；
+        # amount_for_notional 本身返回最小一手量，由调用方的 MAX_OVERSPEND 挡
+        notional = qty * 82000.0
+        self.assertGreater(notional, 5.0, "最小一手必须够得着 5U")
 
-    def test_spot_safety_applies_to_min_amount(self):
-        """现货安全系数独立：1.1 → 最小可下金额 = 5×1.1 = 5.5U。"""
-        self.cl.spot_safety = 1.1
+    def test_spot_safety_is_builtin_constant(self):
+        """现货取整保险系数是内置常量（不是配置）：最小可下 ≈ 下限×1.02，
+        再 ceil 到步长（BTC 一步 0.82U，所以上界放宽到 +2 步）。"""
         amt = self.cl.min_amount("BTCUSDT", 82000.0, "spot")
-        self.assertGreaterEqual(amt * 82000.0, 5.5 - 1e-6)
+        self.assertGreaterEqual(amt * 82000.0, 5.0)
         self.assertLess(amt * 82000.0, 6.0)
 
 
