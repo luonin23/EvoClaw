@@ -14,9 +14,12 @@ from strategies.profit_dca import ANCHOR_KEY, NOTE, ProfitDCA
 from tests.harness import FakeClient, temp_db
 
 
-def cfg(enabled=True, step=20.0, ratio=0.3, cap=0.0, symbols=("BTCUSDT",)):
+def cfg(enabled=True, step=20.0, ratio=0.3, cap=0.0, symbols=("BTCUSDT",),
+        entry_offset=0.0):
+    # entry_offset=0 → 市价路径（这些用例验证的是市价买入）
     return {"profit_dca": {"enabled": enabled, "step_usdt": step, "ratio": ratio,
-                           "max_total": cap, "symbols": list(symbols)}}
+                           "max_total": cap, "symbols": list(symbols),
+                           "entry_offset": entry_offset}}
 
 
 def run(coro):

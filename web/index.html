@@ -325,10 +325,10 @@ tr:hover td{background:var(--hover)}
     <div id="gridBody"><div class="empty">暂无网格数据</div></div>
   </div>
 
-  <!-- 定投 -->
+  <!-- 现货交易 -->
   <div class="panel" id="panelDca" style="display:none">
-    <h2>方案C · 现货定投 <span class="tag" id="dcaTag"></span></h2>
-    <div id="dcaBody"><div class="empty">暂无定投数据</div></div>
+    <h2>现货交易 <span class="tag" id="dcaTag"></span></h2>
+    <div id="dcaBody"><div class="empty">暂无现货数据</div></div>
   </div>
 
   <!-- 成交 -->
@@ -370,7 +370,7 @@ tr:hover td{background:var(--hover)}
   </div>
 </div>
 
-<!-- 多选弹窗（黑名单 / 手写标的 / 定投标的） -->
+<!-- 多选弹窗（黑名单 / 手写标的 / 现货标的） -->
 <div class="modal" id="modal">
   <div class="mbox">
     <h3 id="mTitle">选择标的</h3>
@@ -444,7 +444,7 @@ async function api(p,opt){try{const r=await fetch(p,opt);return await r.json();}
 
 async function loadState(){
   const d = await api('/api/state'); if(!d) return; STATE = d;
-  $('bMode').textContent = '模式 ' + ({off:'关闭',grid:'网格',dca:'定投'}[d.mode]||d.mode);
+  $('bMode').textContent = '模式 ' + ({off:'关闭',grid:'网格',dca:'现货交易'}[d.mode]||d.mode);
   $('bMode').className = 'badge ' + (d.mode==='off'?'':'ok');
   $('bDry').textContent = d.dry_run ? '模拟盘' : '实盘';
   $('bDry').className = 'badge ' + (d.dry_run?'warn':'err');
@@ -666,7 +666,7 @@ async function loadDca(){
   html += '</tbody></table></div>';
   const recs = d.records||[];
   if(recs.length){
-    html += '<div class="hint" style="margin-top:14px">最近定投记录</div><div class="scroll"><table><thead><tr><th>时间</th><th>币种</th><th>价格</th><th>数量</th><th>金额</th></tr></thead><tbody>';
+    html += '<div class="hint" style="margin-top:14px">最近现货买入</div><div class="scroll"><table><thead><tr><th>时间</th><th>币种</th><th>价格</th><th>数量</th><th>金额</th></tr></thead><tbody>';
     for(const r of recs.slice(0,20)){
       html += '<tr><td>'+esc((r.ts||'').replace('T',' ').slice(0,19))+'</td><td>'+esc(r.symbol)+'</td><td>'+nf(r.price,6)
         + '</td><td>'+nf(r.amount,6)+'</td><td>'+nf(r.cost,2)+'</td></tr>';
@@ -688,7 +688,7 @@ const TYPE_CN = {
   grid_external:'外部·合约·多单·平仓',
   short_open:'自动·合约·空单·开仓',
   short_close:'自动·合约·空单·平仓',
-  dca_buy:'自动·现货·定投·开仓',
+  dca_buy:'自动·现货·现货交易·开仓',
   close:'手动·合约·多单·平仓'
 };
 
@@ -821,7 +821,11 @@ async function loadProfitDca(){
         ? '<span class="warnline">已累计 '+d.pending_steps+' 档待投（'+d.pending_usdt.toFixed(2)+'U），'
           + (d.symbols.length?('下次循环买入 '+d.symbols.length+' 个标的'):'但还没勾选标的！')+'</span>'
         : ('距下一档还差 <b>'+d.to_next_step.toFixed(2)+'U</b> 盈利'))
-    + (d.symbols.length ? (' ｜ 标的：'+d.symbols.join('、')) : '');
+    + (d.symbols.length ? (' ｜ 标的：'+d.symbols.join('、')) : '')
+    + ((d.pending_orders && d.pending_orders.length)
+        ? ('<br><span class="warnline">在途挂单 '+d.pending_orders.length+' 张：'
+           + d.pending_orders.map(o => o.symbol+' '+o.amount+'@'+o.price).join('、')
+           + '（成交后才推进水位线）</span>') : '');
 }
 
 function renderTabs(){

@@ -33,8 +33,8 @@ GROUPS: tuple[tuple[str, str, str], ...] = (
     ("grid_entry",   "网格·入场",  "首次建仓的择时闸门"),
     ("grid_short",   "网格·空单",  "高位试空（独立开关，默认关）"),
     ("grid_select",  "网格·选币",  "自动选币的周期与合格线"),
-    ("dca",          "定投",       "方案C · 现货定投（按时间）"),
-    ("profit_dca",   "利润定投",   "用合约赚到的钱定投现货（只在 grid 模式下工作）"),
+    ("dca",          "现货交易",   "现货买卖（可与网格/利润定投同时运行）"),
+    ("profit_dca",   "利润定投",   "用合约赚到的钱买现货；可与网格/现货交易同时开启"),
     ("advanced",     "高级",       "密钥与密码（敏感，不在参数表内编辑）"),
 )
 
@@ -101,7 +101,7 @@ class Param:
 PARAMS: tuple[Param, ...] = (
     # ---------------- 全局 ----------------
     Param("mode", "enum", "off", "global", "策略模式",
-          "off=只监控不下单；grid=低杠杆网格；dca=现货定投",
+          "off=只监控不下单；grid=低杠杆网格；dca=现货交易（网格可与现货/利润定投同时开）",
           widget="select", choices=("off", "grid", "dca")),
     Param("dry_run", "bool", True, "global", "模拟盘",
           "开启时完整计算并记录「本应下的单」，但不发真实订单", widget="switch"),
@@ -222,8 +222,11 @@ PARAMS: tuple[Param, ...] = (
           "仅在「自动选币」关闭时生效", widget="multiselect",
           enabled_when=("grid.auto_select", False)),
 
-    # ---------------- 定投 ----------------
-    Param("dca.symbols", "str_list", ["BTCUSDT", "ETHUSDT"], "dca", "定投标的",
+    # ---------------- 现货交易 ----------------
+    Param("dca.enabled", "bool", False, "dca", "现货交易开关",
+          "开启后即使同时在跑合约网格，也会执行现货买卖（与利润定投互不冲突、可同时开）",
+          widget="switch"),
+    Param("dca.symbols", "str_list", ["BTCUSDT", "ETHUSDT"], "dca", "现货标的",
           "现货定投的币种", widget="multiselect"),
     Param("dca.amount_usdt", "float", 20, "dca", "每期金额",
           "每期每个币投入多少 U", unit="U", min=0, max=100000, sentinel="skip"),
@@ -252,7 +255,11 @@ PARAMS: tuple[Param, ...] = (
     Param("profit_dca.max_total", "float", 0, "profit_dca", "累计投入上限",
           "利润定投累计买入的 USDT 达到此值后停止", unit="U", min=0, max=1e9,
           sentinel="unlimited"),
-    Param("profit_dca.symbols", "str_list", [], "profit_dca", "定投标的",
+    Param("profit_dca.entry_offset", "float", 0.02, "profit_dca", "挂单折扣",
+          "达到触发条件后不追价：挂在「现价 ×(1−此值)」等回落。留 0 = 市价直接买。"
+          "挂单只在**成交后**才推进盈利水位线", widget="percent", unit="%",
+          scale=100, min=0, max=0.2, step=0.001),
+    Param("profit_dca.symbols", "str_list", [], "profit_dca", "利润定投标的",
           "利润买哪些现货。可用「筛选」按跌幅/涨幅/振幅排名挑",
           widget="multiselect"),
 

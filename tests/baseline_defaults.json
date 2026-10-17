@@ -2,6 +2,7 @@
  "default_config": {
   "dca": {
    "amount_usdt": 20,
+   "enabled": false,
    "first_buy_immediately": true,
    "interval_hours": 24,
    "max_total_usdt": 500,
@@ -53,6 +54,7 @@
   "order_notional_safety": 1.02,
   "profit_dca": {
    "enabled": false,
+   "entry_offset": 0.02,
    "max_total": 0,
    "ratio": 0.3,
    "step_usdt": 20,

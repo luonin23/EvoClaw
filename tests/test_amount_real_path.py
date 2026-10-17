@@ -149,7 +149,8 @@ class TestRealPathOverspend(unittest.TestCase):
         self._earn(20.0)
         p = ProfitDCA(self.cl, self.db, {
             "profit_dca": {"enabled": True, "step_usdt": 20, "ratio": 0.3,
-                           "max_total": 0, "symbols": ["BTCUSDT", "BTCUSDT2"]}})
+                           "max_total": 0, "symbols": ["BTCUSDT", "BTCUSDT2"],
+                           "entry_offset": 0.0}})
         asyncio.run(p.step())
         # BTCUSDT2 不在市场表里 → 拿不到价；BTCUSDT 每份 3U < 5.1U 最小一手 → 跳过
         self.assertEqual(self.orders, [], "预算不足最小一手时下了真实订单")
@@ -158,7 +159,8 @@ class TestRealPathOverspend(unittest.TestCase):
         self._earn(20.0)                      # 1 档 = 6U，单个标的买得起
         p = ProfitDCA(self.cl, self.db, {
             "profit_dca": {"enabled": True, "step_usdt": 20, "ratio": 0.3,
-                           "max_total": 0, "symbols": ["BTCUSDT"]}})
+                           "max_total": 0, "symbols": ["BTCUSDT"],
+                           "entry_offset": 0.0}})
         asyncio.run(p.step())
         self.assertEqual(len(self.orders), 1)
         recs = [r for r in self.db.get_dca_records(10) if r["note"] == NOTE]

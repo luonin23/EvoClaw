@@ -146,6 +146,21 @@ class Database:
                 changed TEXT NOT NULL,     -- 本次改了哪些键，{key: [旧值, 新值]}
                 source TEXT NOT NULL DEFAULT ''
             );
+            -- 现货挂单：限价单挂出去后要跨 tick 跟踪成交，不能只记在内存里
+            CREATE TABLE IF NOT EXISTS spot_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                price REAL NOT NULL DEFAULT 0,
+                cost_usdt REAL NOT NULL DEFAULT 0,
+                order_id TEXT NOT NULL DEFAULT '',
+                purpose TEXT NOT NULL DEFAULT '',
+                profit_share REAL NOT NULL DEFAULT 0,  -- 该单对应的利润份额（成交后推进水位线）
+                status TEXT NOT NULL DEFAULT 'pending',   -- pending|filled|cancelled
+                filled_ts TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS seen_trades (
                 symbol TEXT NOT NULL,
                 trade_id TEXT NOT NULL,
@@ -168,7 +183,8 @@ class Database:
                                   ("grid_state", "status", "TEXT NOT NULL DEFAULT 'active'"),
                                   ("orders", "pnl", "REAL NOT NULL DEFAULT 0"),
                                   ("orders", "pnl_rate", "REAL NOT NULL DEFAULT 0"),
-                                  ("dca_records", "note", "TEXT NOT NULL DEFAULT ''")]:
+                                  ("dca_records", "note", "TEXT NOT NULL DEFAULT ''"),
+                                  ("spot_orders", "profit_share", "REAL NOT NULL DEFAULT 0")]:
             try:
                 self.conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type}")
                 self.conn.commit()
@@ -191,6 +207,36 @@ class Database:
         for key, val in config.items():
             self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)",
                               (key, json.dumps(val)))
+        self.conn.commit()
+
+    # ===== 现货挂单 =====
+    def insert_spot_order(self, o: dict) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO spot_orders (ts, symbol, side, amount, price, cost_usdt,
+                                        order_id, purpose, profit_share, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (o.get("ts") or datetime.now(timezone.utc).isoformat(), o["symbol"], o["side"],
+             float(o.get("amount", 0)), float(o.get("price", 0)),
+             float(o.get("cost_usdt", 0)), str(o.get("order_id", "")),
+             o.get("purpose", ""), float(o.get("profit_share", 0))))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def pending_spot_orders(self, purpose: str = "") -> list[dict]:
+        if purpose:
+            rows = self.conn.execute(
+                "SELECT * FROM spot_orders WHERE status='pending' AND purpose=? ORDER BY id",
+                (purpose,)).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM spot_orders WHERE status='pending' ORDER BY id").fetchall()
+        cols = [d[0] for d in self.conn.execute("SELECT * FROM spot_orders LIMIT 0").description]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def update_spot_order(self, row_id: int, status: str, filled_ts: str = ""):
+        self.conn.execute(
+            "UPDATE spot_orders SET status=?, filled_ts=? WHERE id=?",
+            (status, filled_ts, int(row_id)))
         self.conn.commit()
 
     def realized_pnl_total(self) -> float:

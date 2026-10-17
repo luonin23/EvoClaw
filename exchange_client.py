@@ -348,6 +348,91 @@ class ExchangeClient:
             "available": float(b.get("free", {}).get("USDT", 0) or 0),
         }
 
+    async def transfer_futures_to_spot(self, amount: float) -> dict | None:
+        """USDT 从**合约账户**划转到**现货账户**（UMFUTURE_MAIN）。
+
+        利润定投的钱本来躺在合约账户里，不划转就下不了现货单。
+        只划「缺口」由调用方决定；这里只负责执行一次划转。
+        """
+        if amount <= 0:
+            return None
+        await self.ensure_spot()
+        if self.dry_run:
+            return {"id": "dry-transfer", "amount": amount, "dry_run": True}
+        try:
+            r = await self._safe_call(
+                self._spot.transfer("USDT", float(amount), "future", "spot"), timeout=20)
+            return {"id": str((r or {}).get("id") or ""), "amount": float(amount),
+                    "dry_run": False}
+        except Exception as e:
+            log.error(f"划转 合约→现货 {amount:.2f}U 失败: {e}")
+            return None
+
+    async def ensure_spot_funds(self, needed: float) -> tuple[bool, float]:
+        """确保现货账户有够用的 USDT；不够就从合约账户补缺口。
+
+        返回 (是否够用, 本次划转了多少)。宁可少划，绝不多划 —— 划多了
+        现货里躺着的钱不会自动回合约。
+        """
+        try:
+            spot = await self.get_spot_balance("USDT")
+            free = float(spot.get("free", 0) or 0)
+        except Exception as e:
+            log.warning(f"读取现货余额失败: {e}")
+            return False, 0.0
+        short = float(needed) - free
+        if short <= 1e-9:
+            return True, 0.0
+        if self.dry_run:
+            return True, short
+        try:
+            fut = await self.get_futures_balance()
+            avail = float(fut.get("available", 0) or 0)
+        except Exception as e:
+            log.warning(f"读取合约可用余额失败: {e}")
+            return False, 0.0
+        if avail < short:
+            log.warning(f"合约可用 {avail:.2f}U < 现货缺口 {short:.2f}U，无法划转")
+            return False, 0.0
+        r = await self.transfer_futures_to_spot(short)
+        if not r:
+            return False, 0.0
+        log.warning(f"资金划转：合约 → 现货 {short:.2f}U（现货原 {free:.2f}U，"
+                    f"需要 {needed:.2f}U）")
+        return True, short
+
+    async def fetch_spot_order(self, order_id: str, user_symbol: str) -> dict | None:
+        await self.ensure_spot()
+        try:
+            return await self._safe_call(
+                self._spot.fetch_order(str(order_id), self.to_ccxt(user_symbol, "spot")),
+                timeout=15)
+        except Exception as e:
+            log.warning(f"查询现货订单 {order_id} 失败: {e}")
+            return None
+
+    async def fetch_spot_open_orders(self, user_symbol: str) -> list[dict]:
+        await self.ensure_spot()
+        try:
+            return await self._safe_call(
+                self._spot.fetch_open_orders(self.to_ccxt(user_symbol, "spot")), timeout=15)
+        except Exception as e:
+            log.warning(f"查询现货挂单失败 {user_symbol}: {e}")
+            return []
+
+    async def cancel_spot_order(self, order_id: str, user_symbol: str) -> bool:
+        await self.ensure_spot()
+        if self.dry_run:
+            return True
+        try:
+            await self._safe_call(
+                self._spot.cancel_order(str(order_id), self.to_ccxt(user_symbol, "spot")),
+                timeout=15)
+            return True
+        except Exception as e:
+            log.warning(f"撤现货单 {order_id} 失败: {e}")
+            return False
+
     async def get_spot_balance(self, asset: str = "USDT") -> dict:
         await self.ensure_spot()
         b = await self._safe_call(self._spot.fetch_balance(), timeout=15)
@@ -403,10 +488,9 @@ class ExchangeClient:
             return {"order_id": f"dry-{int(time.time()*1000)}", "price": price,
                     "amount": amount, "dry_run": True}
         ex = self.futures if kind == "futures" else self._spot
-        params = {}
+        params = {"newClientOrderId": _client_oid()}        # 现货/合约都打标记，方便对账
         if kind == "futures":
             params["positionSide"] = position_side.upper()
-            params["newClientOrderId"] = _client_oid()      # 标记「这单是本程序下的」
         if kind == "futures" and reduce_only:
             params["reduceOnly"] = True
         try:

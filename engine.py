@@ -35,13 +35,30 @@ class Engine:
         except Exception as e:
             log.error(f"Config reload failed: {e}")
 
-    def _strategy(self):
+    def _strategies(self):
+        """本 tick 要跑的策略列表。
+
+        以前是「mode 三选一」，导致网格和现货不能同时跑。现在：
+          · mode=off   → 什么都不跑（只监控）
+          · mode=grid  → 合约网格
+          · mode=dca   → 现货交易
+          · `dca.enabled` 独立开关：即使在跑网格，也会同时执行现货交易
+          · `profit_dca.enabled` 独立开关：用合约利润买现货，可与其他两个同时开
+        三者**互不冲突**：网格管合约、现货交易管现货买卖、利润定投只买。
+        """
         mode = self.config.get("mode", "off")
+        if mode == "off":
+            return []
+        out = []
         if mode == "grid":
-            return GridStrategy(self.client, self.db, self.config)
-        if mode == "dca":
-            return DCAStrategy(self.client, self.db, self.config)
-        return None
+            out.append(GridStrategy(self.client, self.db, self.config))
+        dca_cfg = self.config.get("dca", {}) or {}
+        if mode == "dca" or dca_cfg.get("enabled"):
+            out.append(DCAStrategy(self.client, self.db, self.config))
+        if (self.config.get("profit_dca", {}) or {}).get("enabled"):
+            from strategies.profit_dca import ProfitDCA
+            out.append(ProfitDCA(self.client, self.db, self.config))
+        return out
 
     def set_paused(self, paused: bool):
         self.paused = paused
@@ -72,9 +89,15 @@ class Engine:
                     log.info(f"模式切换 → {mode}")
                     self._last_mode = mode
 
-                strat = self._strategy()
-                if strat is not None:
-                    await asyncio.wait_for(strat.step(), timeout=60)
+                for strat in self._strategies():
+                    try:
+                        await asyncio.wait_for(strat.step(), timeout=60)
+                    except asyncio.TimeoutError:
+                        self.last_error = f"{type(strat).__name__} 执行超时(60s)"
+                        log.error(f"策略执行超时，跳过本轮 ({type(strat).__name__})")
+                    except Exception as e:
+                        self.last_error = f"{type(strat).__name__}: {e}"
+                        log.error(f"策略异常 ({type(strat).__name__}): {e}")
 
                 self._last_ok = time.monotonic()
                 self.last_error = ""

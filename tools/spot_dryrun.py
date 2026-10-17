@@ -42,7 +42,8 @@ async def main() -> int:
            "dca": {"symbols": SYMS, "amount_usdt": 12, "interval_hours": 24,
                    "max_total_usdt": 0, "first_buy_immediately": True},
            "profit_dca": {"enabled": True, "step_usdt": 20, "ratio": 0.3,
-                          "max_total": 0, "symbols": ["DOGEUSDT"]}}
+                          "max_total": 0, "symbols": ["DOGEUSDT"],
+                          "entry_offset": 0.02}}
     cl = ExchangeClient(cfg)
     db = Database(tempfile.mktemp(suffix=".db"))
     try:
@@ -86,7 +87,17 @@ async def main() -> int:
         line("OK" if st["symbols"] else "FAIL",
              f"持仓状态 {len(st['symbols'])} 个，总成本 {st['total_cost']:.2f}U")
 
-        print("⑥ 利润定投链路（合约盈利触发 → 买现货）")
+        print("⑥ 资金划转（合约 → 现货）")
+        try:
+            before_spot = await cl.get_spot_balance("USDT")
+            moved = await cl.transfer_futures_to_spot(0.0)   # 0 = 不划转，只验证接口不炸
+            line("OK", f"现货可用 {before_spot['free']:.2f}U；划转接口就绪"
+                       f"（dry_run 下不真划，0 金额返回 {moved}）")
+        except Exception as e:
+            ok_all = False
+            line("FAIL", f"划转接口异常: {e}")
+
+        print("⑦ 利润定投链路（合约盈利触发 → 挂限价买单 → 成交后推进水位线）")
         # 造 24U 合约盈利 → 触发 1 档（20U×30% = 6U，够币安 5U 最小下单额）
         db.insert_order({"mode": "grid", "symbol": "FAKE", "side": "sell",
                          "type": "grid_sell", "price": 1, "amount": 1, "pnl": 24.0})
@@ -97,14 +108,22 @@ async def main() -> int:
         if (n, round(invest, 4)) != (1, 6.0):
             ok_all = False
         await pdc.step()
+        pend = db.pending_spot_orders("profit_dca")
+        line("OK" if pend else "FAIL",
+             f"已挂限价买单 {len(pend)} 张（现价下 2%），水位线 {pdc._anchor():.2f}U"
+             f"（成交前不动）")
+        if not pend:
+            ok_all = False
+        # 模拟成交（dry_run 下 _settle_pending 按挂单价成交）
+        await pdc.step()
         precs = [r for r in db.get_dca_records(50) if r["note"] == NOTE]
-        line("OK" if precs else "FAIL",
-             f"利润定投买入 {len(precs)} 笔，共 {sum(r['cost'] for r in precs):.2f}U"
-             f"，水位线推进到 {pdc._anchor():.2f}U")
+        line("OK" if precs and not db.pending_spot_orders("profit_dca") else "FAIL",
+             f"挂单成交 {len(precs)} 笔，共 {sum(r['cost'] for r in precs):.2f}U，"
+             f"水位线推进到 {pdc._anchor():.2f}U")
         if not precs:
             ok_all = False
 
-        print("⑦ 不能循环定投（再跑 5 轮，盈利没涨就不该再买）")
+        print("⑧ 不能循环定投（再跑 5 轮，盈利没涨就不该再买）")
         before = len(db.get_dca_records(200))
         for _ in range(5):
             await pdc.step()
@@ -114,7 +133,7 @@ async def main() -> int:
         if after != before:
             ok_all = False
 
-        print("⑧ 下一档的进度提示")
+        print("⑨ 下一档的进度提示")
         s = pdc.status()
         line("OK", f"累计盈利 {s['realized_total']}U / 水位线 {s['anchor']}U / "
                    f"距下一档 {s['to_next_step']}U / 已投 {s['invested_total']}U")

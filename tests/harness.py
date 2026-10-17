@@ -32,7 +32,7 @@ class FakeClient:
     def __init__(self, positions=None, open_orders=None, raise_positions=False,
                  raise_open_orders=False, cancel_ok=True, hold=False,
                  price=100.0, trades=None, spot_free=1000.0, min_amt=0.0,
-                 min_notional=0.0):
+                 min_notional=0.0, futures_available=10.0):
         self._positions = positions or []
         self._open_orders = open_orders or []
         self.raise_positions = raise_positions          # 模拟接口失败
@@ -44,10 +44,14 @@ class FakeClient:
         self.spot_free = spot_free                      # 现货可用 USDT
         self.min_amt = min_amt                          # 最小可下量（0=不限制）
         self.min_notional = min_notional                # 交易所最小下单额（0=不限制）
+        self.futures_available = futures_available      # 合约可用 USDT（划转用）
         self.cancelled: list[tuple[str, str]] = []
         self.market_orders: list[tuple] = []
         self.stop_orders: list[tuple] = []
         self.positions_calls = 0
+        self.transfers: list[float] = []
+        self.spot_orders_status: dict[str, dict] = {}
+        self.limit_orders: list[tuple] = []
 
     # --- 标识 ---
     def user_symbol(self, s: str) -> str:
@@ -93,6 +97,31 @@ class FakeClient:
     async def get_spot_balance(self, asset="USDT"):
         return {"free": self.spot_free, "total": self.spot_free}
 
+    async def ensure_spot_funds(self, needed):
+        """与真实实现同构：缺多少划多少；合约也不够就失败。"""
+        short = float(needed) - self.spot_free
+        if short <= 1e-9:
+            return True, 0.0
+        if self.futures_available < short:
+            return False, 0.0
+        await self.transfer_futures_to_spot(short)
+        self.futures_available -= short
+        return True, short
+
+    async def transfer_futures_to_spot(self, amount):
+        self.transfers.append(float(amount))
+        self.spot_free += float(amount)
+        return {"id": "T1", "amount": amount}
+
+    async def fetch_spot_order(self, order_id, user_symbol):
+        return self.spot_orders_status.get(str(order_id))
+
+    async def fetch_spot_open_orders(self, user_symbol):
+        return []
+
+    async def cancel_spot_order(self, order_id, user_symbol):
+        return True
+
     # --- 账户 ---
     async def get_positions(self):
         self.positions_calls += 1
@@ -129,8 +158,11 @@ class FakeClient:
         self.cancelled.append((sym, str(oid)))
         return self.cancel_ok
 
-    async def create_limit_order(self, *a, **kw):
-        return {"order_id": f"L{len(self.market_orders)}", "dry_run": False}
+    async def create_limit_order(self, sym, side, amt, px, kind="futures",
+                                 reduce_only=False, position_side="LONG"):
+        oid = f"L{len(self.limit_orders)}"
+        self.limit_orders.append((sym, side, amt, px, kind, oid))
+        return {"order_id": oid, "price": px, "amount": amt, "dry_run": False}
 
     async def create_market_order(self, sym, side, amt, kind="futures", position_side="LONG"):
         self.market_orders.append((sym, side, amt))
