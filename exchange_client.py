@@ -304,7 +304,9 @@ class ExchangeClient:
                 if ex_min > 0:
                     raw = max(raw, ex_min / cs)
             return self._round_amount(user_symbol, raw, kind, up=True)
-        except Exception:
+        except Exception as e:
+            # 返回 0 = 上层会跳过下单（安全方向），但必须留痕，否则排障没线索
+            log.warning(f"min_amount {user_symbol} ({kind}) failed: {e}")
             return 0.0
 
     def amount_for_notional(self, user_symbol: str, usdt: float, price: float,

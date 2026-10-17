@@ -206,27 +206,51 @@ class Database:
         ).fetchone()
         return float(row[0] or 0)
 
-    def dca_invested_total(self, note_like: str = "") -> float:
-        """定投累计投入的 USDT（可按 note 过滤，例如只看「利润定投」那部分）。"""
-        if note_like:
+    def dca_invested_total(self, note: str = "") -> float:
+        """定投累计投入的 USDT（按 note **精确**过滤，例如只看「利润定投」那部分）。
+
+        不用 LIKE：note 是精确写入的常量（"利润定投"/"定期定投"/""），
+        模糊匹配会被「碰巧包含同样字样」的其他记录污染上限统计。
+        """
+        if note:
             row = self.conn.execute(
-                "SELECT COALESCE(SUM(cost), 0) FROM dca_records WHERE note LIKE ?",
-                (f"%{note_like}%",)).fetchone()
+                "SELECT COALESCE(SUM(cost), 0) FROM dca_records WHERE note = ?",
+                (note,)).fetchone()
         else:
             row = self.conn.execute(
                 "SELECT COALESCE(SUM(cost), 0) FROM dca_records").fetchone()
         return float(row[0] or 0)
 
     # ===== 配置改动历史 / 回滚 / 审计 =====
+    @staticmethod
+    def _mask_sensitive(cfg: dict) -> dict:
+        """历史快照里**绝不存密钥明文** —— 否则等于把 API Key 复制 20 份。
+
+        代价是「回滚不再还原密钥」：这是刻意为之 —— 回滚到一份带着**旧密钥**的
+        配置，轻则下单全挂，重则把可能已作废的 key 写回去。回滚永远保留
+        当前正在用的密钥（见 config_rollback）。
+        """
+        out = dict(cfg)
+        kw = dict(out.get("exchange_kwargs") or {})
+        if kw:
+            out["exchange_kwargs"] = {
+                "apiKey": (kw.get("apiKey", "")[:6] + "…") if kw.get("apiKey") else "",
+                "secret": "***" if kw.get("secret") else "",
+            }
+        if out.get("web_password"):
+            out["web_password"] = "***"
+        return out
+
     def save_config_audited(self, new_cfg: dict, changed: dict, source: str = "",
                             keep: int = 20) -> None:
         """写入配置，并留一份「改动前」的完整快照，供回滚与审计。
 
         与 save_config 分开是刻意的：`_refresh_selection` 每 10 分钟就会
         save_config 一次（写选币结果），那种内部写入不该污染历史。
-        只有**用户改配置**这条路径才走这里。
+        只有**用户改配置**这条路径才走这里。快照中的密钥/密码做掩码
+        （见 _mask_sensitive）。
         """
-        prev = self.load_config()
+        prev = self._mask_sensitive(self.load_config())
         self.conn.execute(
             "INSERT INTO config_history (ts, config, changed, source) VALUES (?, ?, ?, ?)",
             (datetime.now(timezone.utc).isoformat(),
@@ -261,6 +285,13 @@ class Database:
         if not row:
             return None
         target = json.loads(row[1])
+        # 历史快照里的密钥/密码是掩码。回滚时**保留当前正在用的**——
+        # 把配置滚回去了、却顺手把（可能已换掉的）密钥也滚回去，轻则下单全挂、
+        # 重则把作废的 key 写回去。参数可以回滚，凭据永远不跟着滚。
+        current = self.load_config()
+        for k in ("exchange_kwargs", "web_password"):
+            if k in target:
+                target[k] = current.get(k)
         self.save_config_audited(target, {"__rollback__": [None, f"history#{row[0]}"]},
                                  source="rollback")
         return target

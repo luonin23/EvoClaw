@@ -288,11 +288,20 @@ class WebServer:
 
     @staticmethod
     def _diff_changed(old: dict, new: dict) -> dict:
-        """对比出真正变化的键（含 grid/dca 的子键），用于审计与回滚展示。"""
+        """对比出真正变化的键（含各配置段的子键），用于审计与回滚展示。
+
+        exchange_kwargs / web_password 是凭据：只记「改过没有」，不记值。
+        """
         out = {}
         for k, v in new.items():
             if k == "exchange_kwargs":
+                if v != old.get(k):
+                    out["exchange_kwargs"] = ["***", "***"]
                 continue                      # 密钥不进审计明文
+            if k == "web_password":
+                if v != old.get(k):
+                    out["web_password"] = ["***", "***"]
+                continue
             if isinstance(v, dict) and isinstance(old.get(k), dict):
                 for kk, vv in v.items():
                     if vv != old[k].get(kk):

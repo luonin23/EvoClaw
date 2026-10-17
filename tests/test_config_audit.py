@@ -19,8 +19,17 @@ class TestDiff(unittest.TestCase):
     def test_never_leaks_api_secret_into_audit(self):
         old = {"exchange_kwargs": {"apiKey": "AAA"}, "mode": "grid"}
         new = {"exchange_kwargs": {"apiKey": "BBB"}, "mode": "grid"}
-        self.assertEqual(WebServer._diff_changed(old, new), {},
-                         "密钥绝不能进审计明文")
+        got = WebServer._diff_changed(old, new)
+        self.assertEqual(got, {"exchange_kwargs": ["***", "***"]},
+                         "密钥只记「改过」，不记值")
+        blob = json.dumps(got)
+        self.assertNotIn("AAA", blob) and self.assertNotIn("BBB", blob)
+
+    def test_password_change_records_mask_not_value(self):
+        got = WebServer._diff_changed({"web_password": "old-pw"},
+                                      {"web_password": "new-pw"})
+        self.assertEqual(got, {"web_password": ["***", "***"]})
+        self.assertNotIn("new-pw", json.dumps(got))
 
 
 class TestNoSecretLeak(unittest.TestCase):
@@ -45,13 +54,23 @@ class TestNoSecretLeak(unittest.TestCase):
         self.assertNotIn("S3CR3T", blob)
         self.assertNotIn("SECRETKEY", blob)
 
-    def test_rollback_keeps_working_after_restoring(self):
-        """回滚要能把密钥一起还原（所以历史里必须留着），但接口不能回传。"""
+    def test_rollback_never_touches_credentials(self):
+        """回滚只滚参数，**绝不滚凭据**。
+
+        历史快照里的密钥是掩码。若照单还原，可能把已作废的旧 key 写回去、
+        让实盘下单全挂。所以回滚永远保留当前正在用的密钥。
+        """
         self.db.save_config({"mode": "grid", "exchange_kwargs": {"apiKey": "K1"}})
-        self.db.save_config_audited({"mode": "off", "exchange_kwargs": {"apiKey": "K2"}}, {})
+        # 换了密钥 + 改了参数
+        self.db.save_config_audited({"mode": "off",
+                                     "exchange_kwargs": {"apiKey": "K2"}}, {})
+        self.db.save_config({"mode": "off", "exchange_kwargs": {"apiKey": "K2"}})
         target = self.db.config_rollback()
-        self.assertEqual(target["exchange_kwargs"]["apiKey"], "K1", "回滚要能还原密钥")
-        self.assertEqual(self.db.load_config()["exchange_kwargs"]["apiKey"], "K1")
+        self.assertEqual(target["mode"], "grid", "参数要滚回去")
+        self.assertEqual(target["exchange_kwargs"]["apiKey"], "K2",
+                         "密钥必须保留当前值，不能被历史掩码/旧值覆盖")
+        self.assertEqual(self.db.load_config()["exchange_kwargs"]["apiKey"], "K2")
+        self.assertEqual(self.db.load_config()["mode"], "grid")
 
 
 class TestSectionMerge(unittest.TestCase):

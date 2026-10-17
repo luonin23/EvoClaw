@@ -825,8 +825,6 @@ async function loadProfitDca(){
 
 function renderTabs(){
   $('pTabs').innerHTML = PMETA.groups.map(g=>{
-    const n = Object.keys(PDIRTY).filter(k=>k.startsWith(g.id==='global'?'':g.id+'.')||
-      (g.id==='global' && !k.includes('.'))).length;
     const isG = g.id==='global' || g.id==='advanced' || g.id==='dca';
     const cnt = Object.keys(PDIRTY).filter(k=> isG ? !k.includes('.') && g.id==='global'
       : k.startsWith(g.id+'.')).length;
