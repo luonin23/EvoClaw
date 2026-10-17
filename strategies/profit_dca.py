@@ -355,4 +355,35 @@ class ProfitDCA:
                  "cost_usdt": p.get("cost_usdt", 0), "order_id": p["order_id"]}
                 for p in pend
             ],
+            "holdings": self._holdings(),
         }
+
+    def _holdings(self) -> list[dict]:
+        """利润定投的现货持仓 —— 只买不卖，持仓 = 成交买入的累计。
+
+        从 spot_orders(purpose=profit_dca) 推导（单一真源），与现货交易
+        （马丁格尔）的持仓互不混账。现价用行情缓存的最新值。
+        """
+        out = []
+        syms = {r["symbol"] for r in self.db.filled_spot_orders(PURPOSE)}
+        for sym in sorted(syms):
+            fills = [r for r in self.db.filled_spot_orders(PURPOSE, sym)
+                     if r["side"] == "buy"]
+            qty = sum(float(r["amount"]) for r in fills)
+            cost = sum(float(r["cost_usdt"]) for r in fills)
+            if qty <= 1e-12:
+                continue
+            price = self.client.last_price(sym) or 0
+            value = qty * price
+            out.append({
+                "symbol": sym,
+                "qty": qty,
+                "cost": round(cost, 4),
+                "avg_price": round(cost / qty, 8),
+                "price": price,
+                "value": round(value, 4),
+                "pnl": round(value - cost, 4),
+                "pnl_rate": round((value - cost) / cost, 6) if cost > 0 else 0,
+                "buy_count": len(fills),
+            })
+        return out

@@ -348,10 +348,11 @@ tr:hover td{background:var(--hover)}
     <div class="card"><div class="lbl">最近状态</div><div class="val" id="sHealth" style="font-size:14px">—</div><div class="sub" id="sErr"></div></div>
   </div>
 
-  <!-- 三页导航 -->
+  <!-- 四页导航 -->
   <nav class="pages">
     <div class="ptab2" id="nav-futures" onclick="showPage('futures')">合约网格</div>
     <div class="ptab2" id="nav-spot" onclick="showPage('spot')">现货</div>
+    <div class="ptab2" id="nav-profit" onclick="showPage('profit')">利润定投</div>
     <div class="ptab2" id="nav-config" onclick="showPage('config')">配置</div>
   </nav>
 
@@ -391,7 +392,26 @@ tr:hover td{background:var(--hover)}
     </div>
   </div>
 
-  <!-- ===== 第三页：配置 ===== -->
+  <!-- ===== 第三页：利润定投（合约盈利 → 买现货）===== -->
+  <div id="page-profit" style="display:none">
+    <div class="panel">
+      <h2>利润定投 <span class="tag" id="pdcTag"></span></h2>
+      <div class="pdc show" id="pdcBox"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>币种</th><th>持仓量</th><th>投入</th><th>均价</th><th>现价</th><th>市值</th><th>浮盈</th><th>盈利率</th><th>买入次数</th></tr></thead>
+        <tbody id="pdcHoldings"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+      </table></div>
+    </div>
+    <div class="panel">
+      <h2>买入记录 <span class="tag">利润定投专用</span></h2>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>币种</th><th>价格</th><th>数量</th><th>金额</th></tr></thead>
+        <tbody id="pdcRecords"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- ===== 第四页：配置 ===== -->
   <div id="page-config" style="display:none">
   <div class="panel">
     <h2>交易配置</h2>
@@ -410,7 +430,6 @@ tr:hover td{background:var(--hover)}
           <tbody id="pBody"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
         </table>
       </div>
-      <div id="pdcBox" class="pdc"></div>
       <div class="actions">
         <button class="btn primary" id="btnSave" onclick="saveParams()">保存修改</button>
         <button class="btn" onclick="loadParams(true)">重新读取</button>
@@ -847,17 +866,18 @@ function ordPage(market, delta){
   loadOrders(market);
 }
 
-// ===== 三页导航（合约 / 现货 / 配置）=====
+// ===== 四页导航（合约 / 现货 / 利润定投 / 配置）=====
 let CUR_PAGE = localStorage.getItem('ec_page') || 'futures';
 function showPage(id){
   CUR_PAGE = id;
   try{ localStorage.setItem('ec_page', id); }catch(e){}
-  for(const p of ['futures','spot','config']){
+  for(const p of ['futures','spot','profit','config']){
     $('page-'+p).style.display = (p===id) ? '' : 'none';
     $('nav-'+p).classList.toggle('on', p===id);
   }
   if(id==='futures'){ loadGrid(); loadOrders('futures'); }
   else if(id==='spot'){ loadDca(); loadOrders('spot'); }
+  else if(id==='profit'){ loadProfitDca(); }
   else if(id==='config' && $('cfgBox').style.display!=='none'){ loadParams(true); }
 }
 
@@ -915,16 +935,15 @@ async function loadParams(keepTab){
   PMETA = d;
   if(!PTAB || !d.groups.some(g=>g.id===PTAB)) PTAB = d.groups[0].id;
   if(!keepTab) PDIRTY = {};
-  renderTabs(); renderParams(); loadProfitDca();
+  renderTabs(); renderParams();
 }
 
 async function loadProfitDca(){
   const d = await api('/api/profit-dca');
   const box = $('pdcBox');
   if(!d){ box.className='pdc'; box.innerHTML=''; return; }
-  // 只在「利润定投」这一页显示；没开启也给预览（否则开启前看不到算出来的金额）
-  if(PTAB !== 'profit_dca'){ box.className='pdc'; return; }
   box.className = 'pdc show';
+  $('pdcTag').textContent = d.enabled ? '已开启' : '未开启';
   const preview = !d.enabled
     ? '<span class="warnline">未开启</span> · 开启后：' : '';
   const pct = d.step_usdt>0 ? Math.max(0, Math.min(100, (1 - d.to_next_step/d.step_usdt)*100)) : 0;
@@ -953,6 +972,35 @@ async function loadProfitDca(){
         ? ('<br><span class="warnline">在途挂单 '+d.pending_orders.length+' 张：'
            + d.pending_orders.map(o => o.symbol+' '+o.amount+'@'+o.price).join('、')
            + '（成交后才推进水位线）</span>') : '');
+
+  // 持仓表（只买不卖 → 持仓 = 成交买入累计，与现货马丁的持仓分开记账）
+  const hs = d.holdings || [];
+  if(!hs.length){
+    $('pdcHoldings').innerHTML = '<tr><td colspan="9" class="empty">暂无持仓（触发条件后自动买入）</td></tr>';
+  } else {
+    let tv=0, tc=0;
+    $('pdcHoldings').innerHTML = hs.map(h=>{
+      tv += h.value; tc += h.cost;
+      return '<tr><td class="num">'+esc(h.symbol)+'</td><td>'+nf(h.qty,6)+'</td><td>'+nf(h.cost,2)
+        + '</td><td>'+nf(h.avg_price,6)+'</td><td>'+nf(h.price,6)+'</td><td>'+nf(h.value,2)
+        + '</td><td class="'+(h.pnl>=0?'pos':'neg')+'">'+nfP(h.pnl,4)
+        + '</td><td class="'+(h.pnl_rate>=0?'pos':'neg')+'">'+nfR(h.pnl_rate)
+        + '</td><td>'+h.buy_count+'</td></tr>';
+    }).join('') + '<tr><td><b>合计</b></td><td></td><td><b>'+nf(tc,2)+'</b></td><td></td><td></td>'
+      + '<td><b>'+nf(tv,2)+'</b></td><td class="'+(tv-tc>=0?'pos':'neg')+'"><b>'+nfP(tv-tc,4)
+      + '</b></td><td class="'+(tv-tc>=0?'pos':'neg')+'"><b>'+nfR(tc>0?(tv-tc)/tc:0)
+      + '</b></td><td></td></tr>';
+  }
+
+  // 买入记录
+  const recs = d.records || [];
+  if(!recs.length){
+    $('pdcRecords').innerHTML = '<tr><td colspan="5" class="empty">暂无买入记录</td></tr>';
+  } else {
+    $('pdcRecords').innerHTML = recs.map(r=>
+      '<tr><td>'+esc((r.ts||'').replace('T',' ').slice(0,19))+'</td><td class="num">'+esc(r.symbol)
+      + '</td><td>'+nf(r.price,6)+'</td><td>'+nf(r.amount,6)+'</td><td>'+nf(r.cost,2)+'</td></tr>').join('');
+  }
 }
 
 function renderTabs(){
@@ -965,7 +1013,7 @@ function renderTabs(){
   }).join('');
 }
 
-function switchTab(id){ PTAB = id; renderTabs(); renderParams(); loadProfitDca(); }
+function switchTab(id){ PTAB = id; renderTabs(); renderParams(); }
 
 function renderParams(){
   const g = PMETA.groups.find(x=>x.id===PTAB);
@@ -1267,6 +1315,7 @@ async function refreshAll(){
   // 只刷新当前页的数据，省接口也省渲染；成交记录翻页状态保留在 ORD 里
   if(CUR_PAGE==='futures'){ loadGrid(); loadOrders('futures'); }
   else if(CUR_PAGE==='spot'){ loadDca(); loadOrders('spot'); }
+  else if(CUR_PAGE==='profit'){ loadProfitDca(); }
 }
 showPage(CUR_PAGE);    // 恢复上次停留的页面并加载该页数据
 refreshAll();          // 顶部状态 + 当前页数据先刷一遍

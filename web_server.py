@@ -430,9 +430,13 @@ class WebServer:
         })
 
     async def api_profit_dca(self, request):
-        from strategies.profit_dca import ProfitDCA
+        from strategies.profit_dca import ProfitDCA, NOTE
         p = ProfitDCA(self.client, self.db, self.db.load_config())
-        return web.json_response(p.status())
+        data = p.status()
+        # 只给利润定投自己的买入记录（马丁格尔的记录在现货页）
+        data["records"] = [r for r in self.db.get_dca_records(100)
+                           if r.get("note") == NOTE][:50]
+        return web.json_response(data)
 
     async def api_config_history(self, request):
         if not self._auth_ok(request):
