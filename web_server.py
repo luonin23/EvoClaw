@@ -18,7 +18,6 @@ from aiohttp import web
 log = logging.getLogger(__name__)
 
 _static_cache: dict[str, tuple[tuple, str]] = {}
-_screen_cache: dict[int, tuple[float, list]] = {}   # 现货筛选榜缓存(days -> (ts, rows))
 
 
 def _static(path: str) -> str:
@@ -370,54 +369,52 @@ class WebServer:
                                   "forced": sorted(DEFAULT_BLACKLIST)})
 
     async def api_spot_screen(self, request):
-        """现货筛选榜：跌幅最大 / 涨幅最大 / 振幅最大（按 N 日）。
+        """现货筛选榜：跌幅 / 涨幅 / 振幅（按 N 日），各取前 10。
 
-        ?mode=drop|gain|range&days=7&limit=50
-        结果按对应指标排序（跌幅榜跌得最多的排第一）。
+        ?mode=drop|gain|range|all&days=7&limit=10
+          · drop  —— 只保留**真正下跌**的币（change < 0），跌最多在前
+          · gain  —— 涨最多在前
+          · range —— N 日振幅最大在前
+          · all   —— 一次返回全部候选（含 change 与 range），前端据此本地出三个榜
         """
         mode = str(request.query.get("mode", "drop"))
         try:
             days = max(1, min(90, int(request.query.get("days", 7))))
-            limit = max(5, min(200, int(request.query.get("limit", 50))))
+            limit = max(1, min(200, int(request.query.get("limit", 10))))
         except ValueError:
             return web.json_response({"status": "error", "message": "参数不合法"}, status=400)
-        if mode not in ("drop", "gain", "range"):
-            return web.json_response({"status": "error", "message": "mode 只能是 drop/gain/range"},
-                                     status=400)
+        if mode not in ("drop", "gain", "range", "all"):
+            return web.json_response(
+                {"status": "error", "message": "mode 只能是 drop/gain/range/all"}, status=400)
 
-        now = time.monotonic()
-        key = days
-        hit = _screen_cache.get(key)
-        rows = generated_at = None
-        if hit and now - hit[0] < 600:            # 10 分钟缓存，避免反复拉几百根 K 线
-            rows, generated_at = hit[1], hit[0]
-        else:
-            try:
-                res = await self.client.spot_screen(days=days)
-            except Exception as e:
-                log.warning(f"现货筛选失败: {e}")
-                return web.json_response({"status": "error", "message": str(e)}, status=500)
-            rows = res["items"]
-            if not rows:
-                return web.json_response(
-                    {"status": "error", "message": "没取到候选标的（现货市场可能还在加载），请稍后重试"},
-                    status=503)
-            generated_at = now
-            # **残缺结果不缓存**：逐个拉 K 线时只要有 ≥5% 失败（限频/超时），
-            # 这份榜就可能是错的——头部几个恰好失败时，跌幅第一会从 -77% 变
-            # 成 -17%（实测）。宁可下次现算，也不把错误数据缓存 10 分钟。
-            if res["failed"] == 0:
-                _screen_cache[key] = (now, rows)
+        # **不做服务端缓存**：用户要的是「每次点开弹窗重新计算」。
+        # 一次调用就把涨跌幅和振幅都算出来了，前端按天数缓存、
+        # 同一次会话里切榜不再请求；改了天数或重开弹窗才重算。
+        try:
+            res = await self.client.spot_screen(days=days)
+        except Exception as e:
+            log.warning(f"现货筛选失败: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+        rows = res["items"]
+        if not rows:
+            return web.json_response(
+                {"status": "error", "message": "没取到候选标的（现货市场可能还在加载），请稍后重试"},
+                status=503)
+
         if mode == "drop":
-            rows = sorted(rows, key=lambda r: r["change"])            # 跌最多在前
+            # 盈利的直接排除 —— 行情普涨时不会出现「跌幅榜第一名是 +2%」这种怪事
+            rows = [r for r in rows if r["change"] < 0]
+            rows.sort(key=lambda r: r["change"])                 # 跌最多在前
         elif mode == "gain":
-            rows = sorted(rows, key=lambda r: -r["change"])           # 涨最多在前
-        else:
-            rows = sorted(rows, key=lambda r: -r["range"])            # 振幅最大在前
-        return web.json_response({"mode": mode, "days": days,
-                                  "total": len(rows), "items": rows[:limit],
-                                  "age_sec": int(time.monotonic() - (generated_at or now)),
-                                  "cached": bool(hit and now - hit[0] < 600)})
+            rows.sort(key=lambda r: -r["change"])                # 涨最多在前
+        elif mode == "range":
+            rows.sort(key=lambda r: -r["range"])                 # 振幅最大在前
+        # mode == "all"：不排序，原样返回（前端自己排）
+        return web.json_response({
+            "mode": mode, "days": days, "total": len(rows),
+            "items": rows[:limit] if mode != "all" else rows,
+            "failed": res["failed"],
+        })
 
     async def api_profit_dca(self, request):
         from strategies.profit_dca import ProfitDCA

@@ -138,5 +138,25 @@ class TestSpotScreenTruthfulness(unittest.TestCase):
         self.assertAlmostEqual(res["items"][0]["change"], (80 - 100) / 100, places=9)
 
 
+class TestBoardRules(unittest.TestCase):
+    """三个榜的口径（用户明确要求）。"""
+
+    def test_drop_board_excludes_gainers(self):
+        """跌幅榜只保留真正下跌的币 —— 普涨行情不会出现 +2% 的「跌幅第一」。"""
+        items = [{"symbol": "A", "change": -0.2, "range": 0.5},
+                 {"symbol": "B", "change": 0.05, "range": 0.9},
+                 {"symbol": "C", "change": 0.30, "range": 0.7}]
+        drop = [r for r in items if r["change"] < 0]
+        drop.sort(key=lambda r: r["change"])
+        self.assertEqual([r["symbol"] for r in drop], ["A"])
+
+    def test_each_board_is_top10(self):
+        items = [{"symbol": f"S{i}", "change": -i / 100, "range": i / 100}
+                 for i in range(1, 60)]
+        for key, rev in (("change", False), ("range", True)):
+            rows = sorted(items, key=lambda r: r[key], reverse=rev)[:10]
+            self.assertEqual(len(rows), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

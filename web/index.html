@@ -999,6 +999,7 @@ async function openPicker(key){
     : '合约可投标的（共 '+all.length+' 个）。稳定币等由系统强制排除，勾了也不会生效。';
   $('mSearch').value='';
   MPICK.ranked = null; MPICK.mode = null;
+  MPICK.screenCache = {};      // 重开弹窗就重算（用户要求）
   const isSpot = (key==='dca.symbols' || key==='profit_dca.symbols');
   $('mFilter').style.display = isSpot ? '' : 'none';
   $('mScreenHint').textContent = isSpot
@@ -1040,29 +1041,58 @@ function renderMList(){
   $('mCount').textContent = '已选 '+MPICK.sel.size+' 个';
 }
 
-// 「跌幅榜 / 涨幅榜 / 振幅榜」：拉 N 日现货排名，把列表换成榜单
+// 「跌幅榜 / 涨幅榜 / 振幅榜」：一次把 N 日的涨跌幅和振幅都算出来，
+// 按天数缓存；同一次会话里切榜、改排序都不再请求。
+// 关掉弹窗再打开 = 重新计算（用户要求）。
+const SCREEN_TOP = 10;
+
+function boardOf(items, mode){
+  let rows = items.slice();
+  if(mode === 'drop'){
+    // 盈利（上涨）的直接排除 —— 行情普涨时不该出现「跌幅榜第一是 +2%」
+    rows = rows.filter(r => r.change < 0);
+    rows.sort((a,b) => a.change - b.change);          // 跌最多在前
+  } else if(mode === 'gain'){
+    rows.sort((a,b) => b.change - a.change);          // 涨最多在前
+  } else {
+    rows.sort((a,b) => b.range - a.range);            // 振幅最大在前
+  }
+  return rows.slice(0, SCREEN_TOP);
+}
+
 async function applyScreen(mode){
   const days = Math.max(1, Math.min(90, parseInt($('mDays').value)||7));
   MPICK.mode = mode;
   [...document.querySelectorAll('.mfilter .btn[data-m]')].forEach(
     b=>b.classList.toggle('on', b.getAttribute('data-m')===mode));
-  $('mScreenHint').textContent = '正在拉取现货日线并排名…';
-  const d = await api('/api/spot/screen?mode='+mode+'&days='+days+'&limit=80');
-  if(!d || !d.items){ $('mScreenHint').textContent = '筛选失败，请稍后重试'; return; }
-  MPICK.ranked = d.items;
-  const label = {drop:'跌幅榜（跌最多在前）', gain:'涨幅榜（涨最多在前）',
-                 range:'振幅榜（波动最大在前)'}[mode];
-  const age = d.age_sec>60 ? ('约 '+Math.round(d.age_sec/60)+' 分钟前') : '刚刚';
-  $('mScreenHint').innerHTML = '近 '+d.days+' 日（'+(d.days-1)+' 个完整日 + 今日实时价） · '+label
-    + ' · '+d.total+' 个候选中取前 '+d.items.length+' 名（仅含成交额靠前且<b>仍在正常交易</b>的标的）'
-    + ' · 榜单生成于 '+age+(d.cached?'（缓存）':'');
+
+  if(!MPICK.screenCache) MPICK.screenCache = {};
+  let items = MPICK.screenCache[days];
+  if(!items){
+    $('mScreenHint').textContent = '正在计算近 '+days+' 日的涨跌幅与振幅…（约 5~8 秒）';
+    // mode=all：一次返回全部候选，涨跌幅与振幅都在里面
+    const d = await api('/api/spot/screen?mode=all&days='+days+'&limit=200');
+    if(!d || !d.items){ $('mScreenHint').textContent = '筛选失败，请稍后重试'; return; }
+    items = d.items;
+    MPICK.screenCache[days] = items;        // 天数不变就复用；改天数重新拉
+  }
+  MPICK.ranked = boardOf(items, mode);
+  const label = {drop:'跌幅榜（只含下跌的币，跌最多在前）',
+                 gain:'涨幅榜（涨最多在前）',
+                 range:'振幅榜（波动最大在前）'}[mode];
+  const empty = mode==='drop' && MPICK.ranked.length===0
+    ? ' · <span class="warnline">近 '+days+' 日没有真正下跌的币</span>' : '';
+  $('mScreenHint').innerHTML = '近 '+days+' 日（'+(days-1)+' 个完整日 + 今日实时价） · '
+    + label + ' · top ' + MPICK.ranked.length + '（候选 '+items.length+' 个，'
+    + '仅含成交额靠前且仍在正常交易的标的）' + empty
+    + ' · 切换榜单不再重新计算；改天数或重新打开弹窗会重算';
   renderMList();
 }
 
 let _daysTimer = null;
 function onDaysChange(){
-  // 改了天数却还看着旧榜 = 看到的数据和输入框对不上（实测被当成 bug 报告）。
-  // 正在看榜时自动按新天数重算；没在看榜就不用动。
+  // 改天数要**实时生效**：正在看某个榜时，立刻按新天数重算。
+  // 之前改了天数不点按钮就一直看着旧榜 —— 数据和输入框对不上。
   if(!MPICK.mode) return;
   clearTimeout(_daysTimer);
   $('mScreenHint').textContent = '天数已改，正在按 '+($('mDays').value||7)+' 日重新计算…';
@@ -1071,6 +1101,7 @@ function onDaysChange(){
 
 function clearScreen(){
   MPICK.ranked = null; MPICK.mode = null;
+  MPICK.screenCache = {};      // 重开弹窗就重算（用户要求）
   [...document.querySelectorAll('.mfilter .btn[data-m]')].forEach(b=>b.classList.remove('on'));
   $('mScreenHint').textContent = '已恢复完整列表。';
   renderMList();
