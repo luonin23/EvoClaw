@@ -1,3 +1,0 @@
-[    6846ms] ReferenceError: Cannot access 'sh' before initialization
-    at loadGrid (http://localhost:8091/:386:25)
-[    9236ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://localhost:8091/:0

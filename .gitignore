@@ -19,3 +19,5 @@ __pycache__/
 # Git junk
 .git-broken/
 .git-root-owned/
+.playwright-mcp/
+dca-params.png
