@@ -139,7 +139,13 @@ tr:hover td{background:var(--hover)}
 
 /* 网格卡片：盈利=绿 / 亏损=红 / 空仓=灰 */
 .gcard{background:var(--surface);border:1px solid var(--bd);border-left:3px solid var(--t3);
-  border-radius:10px;padding:12px 14px;margin-bottom:12px;transition:.2s}
+  border-radius:10px;padding:12px 14px;margin-bottom:12px;transition:.2s;
+  container-type:inline-size}   /* 卡片变窄时由容器查询收起轴内标注 */
+/* 卡片容器：按宽度自适应 —— PC 宽屏一行 4 个，平板 2~3 个，手机单列。
+   min(100%,280px) 保证极窄屏也不会横向溢出。 */
+.ggrid{display:grid;gap:12px;align-items:start;
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))}
+.ggrid .gcard{margin-bottom:0;min-width:0}
 .gcard.profit{border-left-color:var(--accent);background:linear-gradient(90deg,rgba(0,208,132,.07),rgba(0,208,132,.01) 45%,transparent)}
 .gcard.lose{border-left-color:var(--error);background:linear-gradient(90deg,rgba(255,71,87,.08),rgba(255,71,87,.01) 45%,transparent)}
 .gcard.empty{opacity:.5;border-left-style:dashed}
@@ -167,6 +173,18 @@ tr:hover td{background:var(--hover)}
    窄屏轴内标注收起，标签条是唯一能看到档位明细的地方，故保留。
    （必须放在 .gc-ord 基础规则之后，同优先级下后者才生效） */
 @media (min-width:721px){ .gc-ord{display:none} }
+/* 容器查询：多列布局下卡片只有 ~290px，轴内档位标注必然重叠 →
+   收起轴内文字和端点，改显示下方档位条（与窄屏同一套降级）。
+   必须放在上面那条 media 之后，同优先级下后出现者生效。 */
+@container (max-width:430px){
+  .gbar2 .lvlz span{display:none}
+  .gbar2 .edge{display:none}
+  .gc-ord{display:flex}
+}
+/* 手机上强制单列（用户要求：手机单屏 1 个） */
+@media (max-width:720px){
+  .ggrid{grid-template-columns:1fr}
+}
 .gc-lots{margin-top:8px;border-top:1px dashed var(--bd);padding-top:7px}
 .gc-lots-h{font-size:10.5px;color:var(--t3);margin-bottom:5px}
 .lot{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;font-family:var(--mono);
@@ -518,6 +536,13 @@ async function loadGrid(){
         ' · 振幅'+((s.range||0)*100).toFixed(1)+'% · '+(s.quote_volume/1e8).toFixed(1)+'亿</span>').join('') +
       '<br>掉出名单的标的会自动转入「只卖不买」，卖光后退役——不会被直接抛弃。</div>';
   }
+  // 多列布局下的单卡宽度：CSS 是 minmax(min(100%,280px),1fr) + 12px gap，
+  // 这里按同一公式算列数，让轴内标注的宽度估算与实际卡片一致（否则会按整行宽度算而重叠）。
+  const gridW = ($('gridBody')||{}).clientWidth || 1200;
+  const GAP = 12, MINCOL = 280;
+  const cols = Math.max(1, Math.floor((gridW + GAP) / (MINCOL + GAP)));
+  const cardW = (gridW - GAP * (cols - 1)) / cols;
+  let cards = '';
   for(const s of d.symbols){
     const lo=s.lower, up=s.upper, px=s.price;
     const hasPos = (s.base_qty||0) > 0;
@@ -608,7 +633,8 @@ async function loadGrid(){
       fillHtml = '<div class="fill '+(isUp?'g':'r')+'" style="left:'+a.toFixed(2)+'%;width:'+Math.max(0.5,b-a).toFixed(2)+'%"></div>';
     }
     // 档位标注防重叠：按 x 排序后分配到多条「泳道」，相邻挤在一起时自动换行。
-    const AXIS_W = Math.max(300, ($('gridBody')||{}).clientWidth || 600);
+    // 轴宽 = 单卡内容宽度（去掉左右 padding 14×2 + 边框）
+    const AXIS_W = Math.max(160, cardW - 34);
     const LANES = [10, 26, 42];                 // 泳道标签上沿(px)，对应 .gbar2 高 52px
     const laneRight = LANES.map(()=>-1e9);
     const lvlHtml = (s.levels||[]).slice().sort((a,b)=>a.price-b.price).map(l=>{
@@ -648,7 +674,7 @@ async function loadGrid(){
       + '<div class="mark price" style="left:'+pxPct.toFixed(2)+'%"><span>现价 '+nfpx(px)+'</span></div>'
       + '</div>';
 
-    html += '<div class="gcard '+cardCls+'">'
+    cards += '<div class="gcard '+cardCls+'">'
       + '<div class="gc-head">'
         + '<span class="gc-sym">'+esc(s.symbol)+'</span>'
         + '<span class="gc-state '+stateCls+'">'+stateTxt+'</span>'
@@ -680,6 +706,7 @@ async function loadGrid(){
       + liqHtml
       + '</div>';
   }
+  html += '<div class="ggrid">' + cards + '</div>';
   $('gridBody').innerHTML = html;
 }
 
