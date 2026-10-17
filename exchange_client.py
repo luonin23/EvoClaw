@@ -278,6 +278,17 @@ class ExchangeClient:
             raw = (math.ceil(n - 1e-9) if up else round(n)) * step
         return float(ex.amount_to_precision(ccxt_sym, raw))
 
+    def round_amount(self, user_symbol: str, raw: float, kind: str = "futures") -> float:
+        """把数量对齐到步长（向下取整）。卖出持仓量必须用它：对齐后不能比实际持有多。
+
+        数量小于最小精度（或为 0）时 ccxt 会抛 InvalidOrder —— 这里转成返回 0，
+        让上层走「不卖/不下单」的安全分支。
+        """
+        try:
+            return self._round_amount(user_symbol, float(raw), kind, up=False)
+        except Exception:
+            return 0.0
+
     def min_amount(self, user_symbol: str, price: float, kind: str = "futures") -> float:
         """满足最小名义值与最小数量精度所需的最小可下数量；算不出（资金/精度不足）返回 0。
 

@@ -222,20 +222,39 @@ PARAMS: tuple[Param, ...] = (
           "仅在「自动选币」关闭时生效", widget="multiselect",
           enabled_when=("grid.auto_select", False)),
 
-    # ---------------- 现货交易 ----------------
+    # ---------------- 现货交易（现货马丁格尔网格）----------------
+    # 用户定的方向：现货就用网格来交易（马丁格尔）。一轮 = 首单建仓 →
+    # 跌了加倍加仓摊平 → 涨到均价上方一个止盈位整轮卖出 → 立即开下一轮。
     Param("dca.enabled", "bool", False, "dca", "现货交易开关",
           "开启后即使同时在跑合约网格，也会执行现货买卖（与利润定投互不冲突、可同时开）",
           widget="switch"),
     Param("dca.symbols", "str_list", ["BTCUSDT", "ETHUSDT"], "dca", "现货标的",
-          "现货定投的币种", widget="multiselect"),
-    Param("dca.amount_usdt", "float", 20, "dca", "每期金额",
-          "每期每个币投入多少 U", unit="U", min=0, max=100000, sentinel="skip"),
-    Param("dca.interval_hours", "int", 24, "dca", "买入间隔", "多久买一期",
+          "做现货网格的币种", widget="multiselect"),
+    Param("dca.amount_usdt", "float", 20, "dca", "首单金额",
+          "每一轮开始时买入多少 U（马丁格尔的首单）", unit="U", min=0, max=100000,
+          sentinel="skip"),
+    Param("dca.step_dev", "float", 0.02, "dca", "加仓间隔",
+          "每跌多少挂下一档加仓买单（相对上一档成交价）", widget="percent", unit="%",
+          scale=100, min=0.001, max=0.5, step=0.001),
+    Param("dca.step_scale", "float", 1.5, "dca", "加仓倍数",
+          "下一档加仓金额是上一档的多少倍（马丁格尔的核心，>1 越跌买越多）",
+          unit="倍", min=1, max=5, step=0.1),
+    Param("dca.max_steps", "int", 3, "dca", "最大加仓次数",
+          "一轮最多加仓几次（含首单共 max_steps+1 档）。用完就躺平等反弹到止盈",
+          unit="次", min=0, max=10, step=1),
+    Param("dca.tp_pct", "float", 0.015, "dca", "止盈幅度",
+          "涨到「加权均价 ×(1+此值)」就把本轮持仓全部卖出", widget="percent", unit="%",
+          scale=100, min=0.002, max=0.5, step=0.001),
+    Param("dca.max_total_usdt", "float", 500, "dca", "单轮投入上限",
+          "一轮里（首单+全部加仓）累计投入超过此值就不再加仓；0 = 不限",
+          unit="U", min=0, max=1e9, sentinel="unlimited"),
+    Param("dca.first_buy_immediately", "bool", True, "dca", "新标的立即建仓",
+          "标的第一轮是否不等 interval_hours 直接买首单。之后的每一轮都是止盈后立即重启，"
+          "不受此开关和间隔控制", widget="switch"),
+    Param("dca.interval_hours", "int", 24, "dca", "首轮等待",
+          "仅对新标的生效：first_buy_immediately 关闭时，要等多久才买第一单。"
+          "轮与轮之间不受它控制（止盈后立即开下一轮）",
           unit="小时", min=1, max=720, step=1),
-    Param("dca.max_total_usdt", "float", 500, "dca", "累计投入上限",
-          "达到后停止买入", unit="U", min=0, max=1e9, sentinel="unlimited"),
-    Param("dca.first_buy_immediately", "bool", True, "dca", "启动立即买首期",
-          "从未买过时，启动就先买一期", widget="switch"),
 
     # ---------------- 利润定投（合约赚的钱 → 买现货）----------------
     # 用户要的规则：合约累计盈利每上一个台阶，就拿出**这一台阶利润**的一部分买现货。

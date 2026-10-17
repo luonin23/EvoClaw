@@ -213,14 +213,34 @@ class Database:
     def insert_spot_order(self, o: dict) -> int:
         cur = self.conn.execute(
             """INSERT INTO spot_orders (ts, symbol, side, amount, price, cost_usdt,
-                                        order_id, purpose, profit_share, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                                        order_id, purpose, profit_share, status, filled_ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (o.get("ts") or datetime.now(timezone.utc).isoformat(), o["symbol"], o["side"],
              float(o.get("amount", 0)), float(o.get("price", 0)),
              float(o.get("cost_usdt", 0)), str(o.get("order_id", "")),
-             o.get("purpose", ""), float(o.get("profit_share", 0))))
+             o.get("purpose", ""), float(o.get("profit_share", 0)),
+             o.get("status", "pending"), o.get("filled_ts", "")))
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def filled_spot_orders(self, purpose: str, symbol: str = "") -> list[dict]:
+        """某个用途已成交的现货单（马丁格尔的持仓/均价/档位全部由它推导）。"""
+        q = "SELECT * FROM spot_orders WHERE status='filled' AND purpose=?"
+        args: list = [purpose]
+        if symbol:
+            q += " AND symbol=?"
+            args.append(symbol)
+        rows = self.conn.execute(q + " ORDER BY id", args).fetchall()
+        cols = [d[0] for d in self.conn.execute("SELECT * FROM spot_orders LIMIT 0").description]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def get_spot_order(self, row_id: int) -> dict | None:
+        row = self.conn.execute("SELECT * FROM spot_orders WHERE id=?",
+                                (int(row_id),)).fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in self.conn.execute("SELECT * FROM spot_orders LIMIT 0").description]
+        return dict(zip(cols, row))
 
     def pending_spot_orders(self, purpose: str = "") -> list[dict]:
         if purpose:
@@ -251,6 +271,14 @@ class Database:
             "WHERE type IN ('grid_sell','grid_trail','grid_external','short_close','close')"
         ).fetchone()
         return float(row[0] or 0)
+
+    def dca_round_stats(self) -> tuple[int, float]:
+        """现货马丁格尔的历史轮数与累计已实现盈亏（只统计现货网格的卖出，
+        绝不混进 realized_pnl_total —— 那是利润定投的水位线口径，只认合约利润）。"""
+        row = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(pnl), 0) FROM orders WHERE type='dca_sell'"
+        ).fetchone()
+        return int(row[0] or 0), float(row[1] or 0)
 
     def dca_invested_total(self, note: str = "") -> float:
         """定投累计投入的 USDT（按 note **精确**过滤，例如只看「利润定投」那部分）。

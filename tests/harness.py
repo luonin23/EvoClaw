@@ -32,7 +32,7 @@ class FakeClient:
     def __init__(self, positions=None, open_orders=None, raise_positions=False,
                  raise_open_orders=False, cancel_ok=True, hold=False,
                  price=100.0, trades=None, spot_free=1000.0, min_amt=0.0,
-                 min_notional=0.0, futures_available=10.0):
+                 min_notional=0.0, futures_available=10.0, asset_free=None):
         self._positions = positions or []
         self._open_orders = open_orders or []
         self.raise_positions = raise_positions          # 模拟接口失败
@@ -42,6 +42,7 @@ class FakeClient:
         self.price = price
         self.trades = trades or []                      # fetch_my_trades 的返回
         self.spot_free = spot_free                      # 现货可用 USDT
+        self.asset_free = asset_free                    # 非 USDT 资产的现货可用（None=不设限）
         self.min_amt = min_amt                          # 最小可下量（0=不限制）
         self.min_notional = min_notional                # 交易所最小下单额（0=不限制）
         self.futures_available = futures_available      # 合约可用 USDT（划转用）
@@ -66,6 +67,9 @@ class FakeClient:
 
     def round_price(self, sym, p, kind="futures"):
         return round(float(p), 8)
+
+    def round_amount(self, sym, raw, kind="futures"):
+        return float(raw)
 
     def min_amount(self, sym, p, kind="futures"):
         return self.min_amt
@@ -95,7 +99,11 @@ class FakeClient:
         return None
 
     async def get_spot_balance(self, asset="USDT"):
-        return {"free": self.spot_free, "total": self.spot_free}
+        if asset == "USDT":
+            free = self.spot_free
+        else:
+            free = self.asset_free if self.asset_free is not None else float("inf")
+        return {"free": free, "total": free}
 
     async def ensure_spot_funds(self, needed):
         """与真实实现同构：缺多少划多少；合约也不够就失败。"""
@@ -120,7 +128,9 @@ class FakeClient:
         return []
 
     async def cancel_spot_order(self, order_id, user_symbol):
-        return True
+        # 与合约 cancel_order 同构：记录被撤的单、受 cancel_ok 控制
+        self.cancelled.append((user_symbol, str(order_id)))
+        return self.cancel_ok
 
     # --- 账户 ---
     async def get_positions(self):

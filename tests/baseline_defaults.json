@@ -5,11 +5,15 @@
    "enabled": false,
    "first_buy_immediately": true,
    "interval_hours": 24,
+   "max_steps": 3,
    "max_total_usdt": 500,
+   "step_dev": 0.02,
+   "step_scale": 1.5,
    "symbols": [
     "BTCUSDT",
     "ETHUSDT"
-   ]
+   ],
+   "tp_pct": 0.015
   },
   "dry_run": true,
   "exchange": "binanceusdm",

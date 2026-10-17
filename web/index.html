@@ -656,19 +656,36 @@ async function loadGrid(){
 async function loadDca(){
   const d = await api('/api/dca'); if(!d||!d.symbols) return;
   $('dcaTag').textContent = '累计投入 ' + nf(d.total_cost,2) + 'U';
-  let html = '<div class="scroll"><table><thead><tr><th>币种</th><th>累计投入</th><th>持仓量</th><th>均价</th><th>现价</th><th>市值</th><th>盈亏</th><th>盈利率</th><th>次数</th></tr></thead><tbody>';
+  const rp = d.realized_pnl||0;
+  let html = '<div class="hint">马丁格尔网格 · 已完成 <b>'+(d.rounds||0)+'</b> 轮 · 累计盈亏 '
+    + '<b class="'+(rp>=0?'pos':'neg')+'">'+nfP(rp,4)+'U</b></div>';
+  html += '<div class="scroll"><table><thead><tr><th>币种</th><th>累计投入</th><th>持仓量</th><th>均价</th><th>现价</th><th>市值</th><th>盈亏</th><th>盈利率</th><th>轮次状态</th></tr></thead><tbody>';
   for(const s of d.symbols){
+    let gridCell = '—';
+    if(s.grid){
+      const g = s.grid;
+      if(g.active){
+        const parts = ['第'+(g.steps+1)+'档'];
+        if(g.tp_price!=null) parts.push('止盈 '+nf(g.tp_price,6));
+        parts.push(g.next_buy_price!=null ? ('下一档 '+nf(g.next_buy_price,6)) : '不加仓·到顶');
+        if(g.pending&&g.pending.length) parts.push('在途'+g.pending.length+'单');
+        gridCell = parts.join(' · ');
+      } else {
+        gridCell = '<span class="hint">待开新一轮</span>';
+      }
+    }
     html += '<tr><td class="num">'+esc(s.symbol)+'</td><td>'+nf(s.total_cost,2)+'</td><td>'+nf(s.total_qty,6)
       + '</td><td>'+nf(s.avg_price,6)+'</td><td>'+nf(s.price,6)+'</td><td>'+nf(s.value,2)
       + '</td><td class="'+(s.pnl>=0?'pos':'neg')+'">'+nfP(s.pnl)+'</td><td class="'+(s.pnl_rate>=0?'pos':'neg')+'">'
-      + (s.pnl_rate*100).toFixed(2)+'%</td><td>'+s.buy_count+'</td></tr>';
+      + (s.pnl_rate*100).toFixed(2)+'%</td><td>'+gridCell+'</td></tr>';
   }
   html += '</tbody></table></div>';
   const recs = d.records||[];
   if(recs.length){
-    html += '<div class="hint" style="margin-top:14px">最近现货买入</div><div class="scroll"><table><thead><tr><th>时间</th><th>币种</th><th>价格</th><th>数量</th><th>金额</th></tr></thead><tbody>';
+    html += '<div class="hint" style="margin-top:14px">最近现货流水</div><div class="scroll"><table><thead><tr><th>时间</th><th>币种</th><th>类型</th><th>价格</th><th>数量</th><th>金额</th></tr></thead><tbody>';
     for(const r of recs.slice(0,20)){
-      html += '<tr><td>'+esc((r.ts||'').replace('T',' ').slice(0,19))+'</td><td>'+esc(r.symbol)+'</td><td>'+nf(r.price,6)
+      html += '<tr><td>'+esc((r.ts||'').replace('T',' ').slice(0,19))+'</td><td>'+esc(r.symbol)+'</td><td>'
+        + esc(r.note||'买入')+'</td><td>'+nf(r.price,6)
         + '</td><td>'+nf(r.amount,6)+'</td><td>'+nf(r.cost,2)+'</td></tr>';
     }
     html += '</tbody></table></div>';
@@ -689,6 +706,7 @@ const TYPE_CN = {
   short_open:'自动·合约·空单·开仓',
   short_close:'自动·合约·空单·平仓',
   dca_buy:'自动·现货·现货交易·开仓',
+  dca_sell:'自动·现货·现货交易·平仓',
   close:'手动·合约·多单·平仓'
 };
 
@@ -713,7 +731,7 @@ async function loadOrders(){
     const leg = (o.type==='short_open' || o.type==='short_close') ? '空' : '多';
     const pnl = Number(o.pnl||0);
     // 有没有盈亏看「类型」而不是「方向」——空单平仓是「买」，但它确实有盈亏
-    const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close'];
+    const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close','dca_sell'];
     const hasPnl = CLOSING.indexOf(o.type) >= 0;
     // 平仓原因（止盈/止损/外部）直接跟在校验后面显示 —— 这是判断这笔交易性质的关键
     const note = String(o.note||'');

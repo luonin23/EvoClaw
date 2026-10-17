@@ -75,14 +75,31 @@ async def main() -> int:
             ok_all = False
             line("FAIL", f"余额读取失败: {e}")
 
-        print("⑤ 定期定投链路（dry-run 下单 + 落库）")
+        print("⑤ 现货马丁格尔：首单 → 挂止盈+加仓 → 止盈成交 → 立即开下一轮")
         dca = DCAStrategy(cl, db, cfg)
-        await dca.step()
-        recs = [r for r in db.get_dca_records(50) if r["note"] != NOTE]
-        line("OK" if len(recs) == len(SYMS) else "FAIL",
-             f"买入 {len(recs)}/{len(SYMS)} 笔，共 {sum(r['cost'] for r in recs):.2f}U")
-        for r in recs[:3]:
-            line("·", f"{r['symbol']:10} {r['amount']:.8g} @ {r['price']:.6g} = {r['cost']:.2f}U")
+        await dca.step()          # 首轮：市价首单 + 挂止盈卖单 + 第一档加仓买单
+        pend = db.pending_spot_orders("dca")
+        sells = [r for r in pend if r["side"] == "sell"]
+        buys = [r for r in pend if r["side"] == "buy"]
+        line("OK" if len(sells) == len(SYMS) else "FAIL",
+             f"止盈卖单 {len(sells)}/{len(SYMS)}（均价上 1.5%）")
+        line("OK" if len(buys) == len(SYMS) else "FAIL",
+             f"第一档加仓买单 {len(buys)}/{len(SYMS)}（上一档下 2%、金额 ×1.5）")
+        if len(sells) != len(SYMS) or len(buys) != len(SYMS):
+            ok_all = False
+        # dry_run 下挂单按挂单价即时成交 → 每跑一轮 step 就完成一轮止盈
+        for _ in range(3):
+            await dca.step()
+        n_rounds, realized = db.dca_round_stats()
+        line("OK" if n_rounds >= 3 and realized > 0 else "FAIL",
+             f"完成 {n_rounds} 轮止盈，累计盈亏 {realized:+.4f}U（双边 0.1% 手续费已扣）")
+        if n_rounds < 3 or realized <= 0:
+            ok_all = False
+        sell_orders = [o for o in db.get_orders(50) if o["type"] == "dca_sell"]
+        line("OK" if sell_orders else "FAIL",
+             f"成交记录 {len(sell_orders)} 笔 dca_sell，首轮示例："
+             + (f"{sell_orders[0]['amount']:.6g} @ {sell_orders[0]['price']:.6g} "
+                f"pnl {sell_orders[0]['pnl']:+.4f}U" if sell_orders else "无"))
         st = await dca.status()
         line("OK" if st["symbols"] else "FAIL",
              f"持仓状态 {len(st['symbols'])} 个，总成本 {st['total_cost']:.2f}U")
