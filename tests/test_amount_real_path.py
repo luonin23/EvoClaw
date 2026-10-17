@@ -55,6 +55,8 @@ def real_client() -> ExchangeClient:
     cl.dry_run = True
     cl.min_order_notional = 5.0
     cl.notional_safety = 1.02
+    cl.spot_min_notional = 5.0
+    cl.spot_safety = 1.02
     cl._fut_markets = {}
     cl._spot_markets = {"BTC/USDT": BTC_MARKET, "DOGE/USDT": DOGE_MARKET}
     cl._spot = _CcxtStub({"BTC/USDT": 1e-05, "DOGE/USDT": 1.0})
@@ -107,6 +109,44 @@ class TestRealAmountMath(unittest.TestCase):
         amt = cl.min_amount("XUSDT", 2.0, "futures")
         self.assertAlmostEqual(amt, 3.0, places=9,
                                msg="5.1U/2.0 = 2.55 张，应 ceil 成整 3 张")
+
+
+class TestPerKindNotional(unittest.TestCase):
+    """下单下限按市场分流：合约看全局 min_order_notional，现货看 dca.min_notional。"""
+
+    def setUp(self):
+        self.cl = real_client()
+
+    def test_spot_uses_its_own_floor(self):
+        """现货配置 8U > 交易所 5U → 下限取 8U。"""
+        self.cl.spot_min_notional = 8.0
+        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 8.0, places=9)
+
+    def test_futures_uses_global_floor(self):
+        """合约配置 20U → 合约下限 20U，同时现货不受影响。"""
+        self.cl.min_order_notional = 20.0
+        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "futures"), 20.0,
+                               places=9, msg="合约应用全局下限")
+        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0,
+                               places=9, msg="现货不应被全局下限抬高")
+
+    def test_exchange_floor_wins_when_higher(self):
+        """交易所规则更高时取交易所的（max 语义）。"""
+        self.cl.spot_min_notional = 1.0        # 配置很低
+        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0,
+                               places=9, msg="币安现货 minNotional 5U 应兜底")
+
+    def test_zero_means_exchange_rules_only(self):
+        """现货下限配 0 = 只按交易所规则。"""
+        self.cl.spot_min_notional = 0.0
+        self.assertAlmostEqual(self.cl.min_notional_of("BTCUSDT", "spot"), 5.0, places=9)
+
+    def test_spot_safety_applies_to_min_amount(self):
+        """现货安全系数独立：1.1 → 最小可下金额 = 5×1.1 = 5.5U。"""
+        self.cl.spot_safety = 1.1
+        amt = self.cl.min_amount("BTCUSDT", 82000.0, "spot")
+        self.assertGreaterEqual(amt * 82000.0, 5.5 - 1e-6)
+        self.assertLess(amt * 82000.0, 6.0)
 
 
 class TestRealPathOverspend(unittest.TestCase):

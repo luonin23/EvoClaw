@@ -27,7 +27,7 @@ from typing import Any
 
 # ===== 分类（决定前端 tab 的顺序与标题）=====
 GROUPS: tuple[tuple[str, str, str], ...] = (
-    ("global",       "全局",       "总闸、模拟盘、循环间隔与下单下限 —— 合约和现货都受影响"),
+    ("global",       "全局",       "总闸、模拟盘、循环间隔 —— 合约和现货都受影响"),
     ("grid_basic",   "合约网格·基础",  "杠杆、单格金额、档位数量"),
     ("grid_follow",  "合约网格·跟随",  "区间重排、最小止盈、不追高"),
     ("grid_entry",   "合约网格·入场",  "首次建仓的择时闸门"),
@@ -109,12 +109,13 @@ PARAMS: tuple[Param, ...] = (
           "开启时完整计算并记录「本应下的单」，但不发真实订单", widget="switch"),
     Param("loop_interval", "int", 10, "global", "循环间隔", "主循环多少秒跑一轮",
           unit="秒", min=3, max=600, step=1),
-    Param("min_order_notional", "float", 5, "global", "最小下单金额",
-          "低于此值的下单会被跳过（交易所自身下限更大时取交易所的）",
-          unit="U", min=0, max=100000),
-    Param("order_notional_safety", "float", 1.02, "global", "下单金额安全系数",
-          "下单金额相对交易所最小名义值的放大倍数，防止卡在边界被拒",
-          unit="倍", min=1.0, max=3.0, step=0.01),
+    Param("min_order_notional", "float", 5, "grid_basic", "最小下单金额（合约）",
+          "合约低于此值的下单会被跳过（交易所自身下限更大时取交易所的）。"
+          "现货的下限在「现货交易」组里单独配置",
+          unit="U", min=0, max=100000, hot=False),
+    Param("order_notional_safety", "float", 1.02, "grid_basic", "下单金额安全系数（合约）",
+          "合约下单金额相对交易所最小名义值的放大倍数，防止卡在边界被拒。改完需重启",
+          unit="倍", min=1.0, max=3.0, step=0.01, hot=False),
     Param("exchange", "str", "binanceusdm", "global", "交易所", "已废弃：代码从未读取",
           hidden=True),
 
@@ -250,6 +251,13 @@ PARAMS: tuple[Param, ...] = (
     Param("dca.max_total_usdt", "float", 500, "dca", "单轮投入上限",
           "一轮里（首单+全部加仓）累计投入超过此值就不再加仓；0 = 不限",
           unit="U", min=0, max=1e9, sentinel="unlimited"),
+    Param("dca.min_notional", "float", 5, "dca", "现货最低下单金额",
+          "现货低于此值的买单会被跳过（币安现货自身约 5U，取两者较大）。"
+          "现货交易和利润定投共用。0 = 只按交易所规则。改完需重启",
+          unit="U", min=0, max=100000, hot=False),
+    Param("dca.order_safety", "float", 1.02, "dca", "现货下单安全系数",
+          "现货下单金额相对最小名义值的放大倍数，防止卡在边界被拒。改完需重启",
+          unit="倍", min=1.0, max=3.0, step=0.01, hot=False),
     Param("dca.first_buy_immediately", "bool", True, "dca", "新标的立即建仓",
           "标的第一轮是否不等 interval_hours 直接买首单。之后的每一轮都是止盈后立即重启，"
           "不受此开关和间隔控制", widget="switch"),

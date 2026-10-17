@@ -91,6 +91,11 @@ class ExchangeClient:
         self._closed = False
         self.min_order_notional = float(config.get("min_order_notional", 5) or 5)
         self.notional_safety = float(config.get("order_notional_safety", 1.02) or 1.02)
+        # 现货的下单下限是独立的一套（币安现货自身有 minNotional 规则，约 5U），
+        # 不再共用合约的全局配置 —— 全局组只管合约，现货的在这里。
+        _d = dict(config.get("dca", {}) or {})
+        self.spot_min_notional = float(_d.get("min_notional", 5) or 0)
+        self.spot_safety = float(_d.get("order_safety", 1.02) or 1.02)
 
     # ===== 基础设施 =====
     async def _safe_call(self, coro, timeout=20):
@@ -253,12 +258,16 @@ class ExchangeClient:
 
     # ===== 精度与最小下单量 =====
     def min_notional_of(self, user_symbol: str, kind: str = "futures") -> float:
-        """该标的「一手」至少需要多少 USDT（交易所最小名义值 vs 配置最小额的较大者）。"""
+        """该标的「一手」至少需要多少 USDT（交易所最小名义值 vs 配置最小额的较大者）。
+
+        合约看全局的 min_order_notional，现货看 dca.min_notional —— 两套独立配置。
+        """
+        lo = self.min_order_notional if kind == "futures" else self.spot_min_notional
         m = self.market_info(user_symbol, kind)
         if not m:
-            return self.min_order_notional
+            return lo
         ex_min = float((m.get("limits", {}).get("cost", {}).get("min", 0)) or 0)
-        return max(ex_min, self.min_order_notional)
+        return max(ex_min, lo)
 
     def _round_amount(self, user_symbol: str, raw: float, kind: str, up: bool) -> float:
         """把数量对齐到交易所的数量步长（ccxt 的 amount_to_precision 是**向下截断**）。
@@ -304,7 +313,8 @@ class ExchangeClient:
             return 0.0
         try:
             cs = float(m.get("contractSize", 1) or 1)
-            target = self.min_notional_of(user_symbol, kind) * self.notional_safety
+            safety = self.notional_safety if kind == "futures" else self.spot_safety
+            target = self.min_notional_of(user_symbol, kind) * safety
             ex_min = float(((m.get("limits") or {}).get("amount") or {}).get("min") or 0)
             if kind == "futures":
                 raw = max(1.0, math.ceil(target / (price * cs)))
