@@ -471,6 +471,15 @@ class Database:
                    COUNT(CASE WHEN {closing} AND pnl <= 0 THEN 1 END),
                    COALESCE(SUM(CASE WHEN {closing} THEN cost END), 0)
             FROM orders{where}""", (mode,) if mode else ()).fetchone()
+        # 单笔平均盈亏率：与明细页每笔的「盈亏率」列同一口径，能直接对上。
+        # （之前展示的 Σpnl/Σ卖出名义 是周转收益率 —— 网格资金反复周转，
+        #   数字会远小于体感收益率，实测被用户质疑「1.55% 是不是算错了」。）
+        q = f"SELECT AVG(pnl_rate) FROM orders WHERE {closing} AND pnl_rate != 0"
+        args = []
+        if mode:
+            q += " AND mode=?"
+            args.append(mode)
+        avg_rate = self.conn.execute(q, args).fetchone()[0]
         sell_cost = row[6] or 0
         return {
             "total_pnl": round(row[0], 4),
@@ -480,6 +489,7 @@ class Database:
             "win_count": row[4], "loss_count": row[5],
             "win_rate": round(row[4] / (row[4] + row[5]), 4) if (row[4] + row[5]) > 0 else 0,
             "total_pnl_rate": round(row[0] / sell_cost, 6) if sell_cost > 0 else 0,
+            "avg_pnl_rate": round(float(avg_rate), 6) if avg_rate is not None else 0,
         }
 
     # ===== 网格 =====

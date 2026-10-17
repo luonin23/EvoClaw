@@ -791,7 +791,7 @@ async function loadOrders(market){
     const pnlCls = (sm.total_pnl||0) >= 0 ? 'pos2' : 'neg2';
     sum.innerHTML =
         '<span>总盈亏 <b class="'+pnlCls+'">'+nfP(sm.total_pnl,4)+' U</b></span>'
-      + '<span>总盈亏率 <b class="'+pnlCls+'">'+nfR(sm.total_pnl_rate)+'</b></span>'
+      + '<span>单笔平均盈亏率 <b class="'+pnlCls+'">'+nfR(sm.avg_pnl_rate)+'</b></span>'
       + '<span>总手续费 <b>'+nf(sm.total_fee,4)+' U</b></span>'
       + '<span>净盈亏 <b class="'+((sm.net_pnl||0)>=0?'pos2':'neg2')+'">'+nfP(sm.net_pnl,4)+' U</b></span>'
       + '<span>买入 <b>'+(sm.buy_count||0)+'</b> 笔 · 卖出 <b>'+(sm.sell_count||0)+'</b> 笔</span>'
