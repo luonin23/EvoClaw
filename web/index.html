@@ -380,7 +380,8 @@ tr:hover td{background:var(--hover)}
         <button class="btn sm" data-m="drop" onclick="applyScreen('drop')">跌幅榜</button>
         <button class="btn sm" data-m="gain" onclick="applyScreen('gain')">涨幅榜</button>
         <button class="btn sm" data-m="range" onclick="applyScreen('range')">振幅榜</button>
-        <span class="mfday">近 <input type="number" id="mDays" value="7" min="1" max="90"> 日</span>
+        <span class="mfday">近 <input type="number" id="mDays" value="7" min="1" max="90"
+  onchange="onDaysChange()"> 日</span>
         <button class="btn sm" onclick="clearScreen()">恢复全列表</button>
       </div>
       <div class="msub" id="mScreenHint"></div>
@@ -1051,9 +1052,21 @@ async function applyScreen(mode){
   MPICK.ranked = d.items;
   const label = {drop:'跌幅榜（跌最多在前）', gain:'涨幅榜（涨最多在前）',
                  range:'振幅榜（波动最大在前)'}[mode];
-  $('mScreenHint').innerHTML = '近 '+d.days+' 日 · '+label
-    + ' · 从 '+d.total+' 个候选里取前 '+d.items.length+' 名。可继续勾选，已勾选的不会丢。';
+  const age = d.age_sec>60 ? ('约 '+Math.round(d.age_sec/60)+' 分钟前') : '刚刚';
+  $('mScreenHint').innerHTML = '近 '+d.days+' 日（'+(d.days-1)+' 个完整日 + 今日实时价） · '+label
+    + ' · '+d.total+' 个候选中取前 '+d.items.length+' 名（仅含成交额靠前且<b>仍在正常交易</b>的标的）'
+    + ' · 榜单生成于 '+age+(d.cached?'（缓存）':'');
   renderMList();
+}
+
+let _daysTimer = null;
+function onDaysChange(){
+  // 改了天数却还看着旧榜 = 看到的数据和输入框对不上（实测被当成 bug 报告）。
+  // 正在看榜时自动按新天数重算；没在看榜就不用动。
+  if(!MPICK.mode) return;
+  clearTimeout(_daysTimer);
+  $('mScreenHint').textContent = '天数已改，正在按 '+($('mDays').value||7)+' 日重新计算…';
+  _daysTimer = setTimeout(()=>applyScreen(MPICK.mode), 600);
 }
 
 function clearScreen(){

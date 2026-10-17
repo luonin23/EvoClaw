@@ -478,14 +478,24 @@ class ExchangeClient:
             return None
 
     async def spot_screen(self, days: int = 7, universe: int = 100,
-                          min_quote_volume: float = 3_000_000.0) -> list[dict]:
+                          min_quote_volume: float = 3_000_000.0) -> dict:
         """现货标的的 N 日排行榜数据（供「跌幅/涨幅/振幅」三种筛选）。
 
         先用一次 fetch_tickers 拿到现货全市场的 24h 成交额，取成交额最大的
         `universe` 个作为候选（冷门币的 K 线没参考价值，也省掉几百次请求），
         再逐个拉日线算 N 日涨跌幅与振幅。
 
-        返回 [{symbol, price, change, range, quote_volume, days}]，调用方排序。
+        口径（实测踩过坑，别改松）：
+          · **K 线必须新鲜**：最后一根超过 48 小时 = 已停止交易/退市。
+            实测 NFPUSDT 的 K 线停在 3 个多月前，却按「97 天前的开盘 vs 停牌价」
+            算出了 -77% 的「30 日跌幅」——完全不是 30 日的数据。
+          · **窗口必须完整**：K 线不足 N+1 根 = 上市不满 N 天，「N 日涨跌」口径
+            不成立（短窗口的极端值会污染榜单）。
+          · **失败要重试**：候选池逐个拉 K 线，任何一次限频超时都会把这个币
+            静默挤出榜单——头部几个恰好失败时，跌幅榜第一从 -77% 变成 -17%，
+            用户看到的就是一份错误的榜。
+
+        返回 {items: [...], ok: int, failed: int}；failed 占比高时调用方**不得缓存**。
         """
         await self.ensure_spot()
         tickers = await self._safe_call(self._spot.fetch_tickers(), timeout=25)
@@ -502,26 +512,43 @@ class ExchangeClient:
         cands.sort(reverse=True)
         cands = cands[:max(1, universe)]
 
-        out: list[dict] = []
+        items: list[dict] = []
+        stats = {"failed": 0}
         n = max(1, int(days))
         sem = asyncio.Semaphore(5)               # 限并发：别和引擎的实时下单抢接口带宽
 
         async def one(ccxt_sym: str, last: float, qv: float):
-            async with sem:
-                try:
-                    k = await self._safe_call(
-                        self._spot.fetch_ohlcv(ccxt_sym, "1d", None, n + 1), timeout=15)
-                except Exception:
-                    return
+            k = None
+            # 失败重试一次：限频窗口里的单次超时不该把这个币挤出榜单
+            for attempt in range(2):
+                async with sem:
+                    try:
+                        k = await self._safe_call(
+                            self._spot.fetch_ohlcv(ccxt_sym, "1d", None, n + 1), timeout=15)
+                        break
+                    except Exception:
+                        k = None
+                        if attempt == 0:
+                            await asyncio.sleep(1.0)
             if not k or len(k) < 2:
+                stats["failed"] += 1
+                return
+            # 退市/停牌剔除：最后一根 K 线太旧 = 这个币已经不在正常交易
+            if self._spot.milliseconds() - int(k[-1][0]) > 48 * 3600 * 1000:
+                stats["failed"] += 1
+                return
+            # 窗口完整性：K 线不足 N+1 根 = 上市不满 N 天，口径不成立
+            if len(k) < n + 1:
+                stats["failed"] += 1
                 return
             base = float(k[0][1])                # N 天前的开盘价
             hi = max(float(x[2]) for x in k)
             lo = min(float(x[3]) for x in k)
             close = float(k[-1][4])
             if base <= 0 or lo <= 0:
+                stats["failed"] += 1
                 return
-            out.append({
+            items.append({
                 "symbol": self.user_symbol(ccxt_sym),
                 "price": close or last,
                 "change": (close - base) / base,          # 负=跌，正=涨
@@ -531,7 +558,7 @@ class ExchangeClient:
             })
 
         await asyncio.gather(*(one(s, l, q) for q, s, l in cands))
-        return out
+        return {"items": items, "ok": len(items), "failed": stats["failed"]}
 
     async def fetch_my_trades(self, user_symbol: str, since_ms: int = None,
                               limit: int = 100) -> list[dict]:

@@ -388,22 +388,26 @@ class WebServer:
         now = time.monotonic()
         key = days
         hit = _screen_cache.get(key)
+        rows = generated_at = None
         if hit and now - hit[0] < 600:            # 10 分钟缓存，避免反复拉几百根 K 线
-            rows = hit[1]
+            rows, generated_at = hit[1], hit[0]
         else:
             try:
-                rows = await self.client.spot_screen(days=days)
+                res = await self.client.spot_screen(days=days)
             except Exception as e:
                 log.warning(f"现货筛选失败: {e}")
                 return web.json_response({"status": "error", "message": str(e)}, status=500)
-            if rows:
-                # 只在拿到结果时缓存 —— 空结果（市场没加载完/瞬时失败）
-                # 一旦写进缓存，接下来 10 分钟点几次都是空的。
-                _screen_cache[key] = (now, rows)
-            else:
+            rows = res["items"]
+            if not rows:
                 return web.json_response(
                     {"status": "error", "message": "没取到候选标的（现货市场可能还在加载），请稍后重试"},
                     status=503)
+            generated_at = now
+            # **残缺结果不缓存**：逐个拉 K 线时只要有 ≥5% 失败（限频/超时），
+            # 这份榜就可能是错的——头部几个恰好失败时，跌幅第一会从 -77% 变
+            # 成 -17%（实测）。宁可下次现算，也不把错误数据缓存 10 分钟。
+            if res["failed"] == 0:
+                _screen_cache[key] = (now, rows)
         if mode == "drop":
             rows = sorted(rows, key=lambda r: r["change"])            # 跌最多在前
         elif mode == "gain":
@@ -411,7 +415,9 @@ class WebServer:
         else:
             rows = sorted(rows, key=lambda r: -r["range"])            # 振幅最大在前
         return web.json_response({"mode": mode, "days": days,
-                                  "total": len(rows), "items": rows[:limit]})
+                                  "total": len(rows), "items": rows[:limit],
+                                  "age_sec": int(time.monotonic() - (generated_at or now)),
+                                  "cached": bool(hit and now - hit[0] < 600)})
 
     async def api_profit_dca(self, request):
         from strategies.profit_dca import ProfitDCA
