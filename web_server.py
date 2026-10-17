@@ -173,10 +173,23 @@ class WebServer:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def api_orders(self, request):
+        """成交记录，分页 + 按市场过滤。
+
+        market=futures → mode='grid'（合约），market=spot → mode='dca'（现货）；
+        缺省返回全部。页码从 1 起，size 上限 200。
+        """
         try:
-            limit = min(int(request.query.get("limit", "100")), 500)
-            summary = self.db.get_order_summary()
-            return web.json_response({"orders": self.db.get_orders(limit), "summary": summary})
+            market = request.query.get("market", "")
+            mode = {"futures": "grid", "spot": "dca"}.get(market)
+            page = max(1, int(request.query.get("page", "1")))
+            size = min(max(10, int(request.query.get("size", "50"))), 200)
+            total = self.db.orders_count(mode)
+            return web.json_response({
+                "orders": self.db.get_orders(size, mode=mode, offset=(page - 1) * size),
+                "summary": self.db.get_order_summary(mode),
+                "total": total, "page": page, "size": size,
+                "pages": max(1, -(-total // size)),
+            })
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 

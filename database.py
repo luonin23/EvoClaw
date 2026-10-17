@@ -427,32 +427,42 @@ class Database:
             (symbol, str(trade_id), ts))
         self.conn.commit()
 
-    def get_orders(self, limit: int = 100, mode: str = None) -> list[dict]:
+    def get_orders(self, limit: int = 100, mode: str = None,
+                   offset: int = 0) -> list[dict]:
         # 按成交时间排，而不是自增 id —— 补记/回填的记录 id 更大但时间更早，
         # 按 id 排会让它们跑到最前面，看起来像"时间乱了"
+        where, args = "", []
         if mode:
-            rows = self.conn.execute(
-                """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
-                          order_id, status, dry_run, note, pnl, pnl_rate
-                   FROM orders WHERE mode=? ORDER BY ts DESC, id DESC LIMIT ?""",
-                (mode, limit)).fetchall()
-        else:
-            rows = self.conn.execute(
-                """SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
-                          order_id, status, dry_run, note, pnl, pnl_rate
-                   FROM orders ORDER BY ts DESC, id DESC LIMIT ?""", (limit,)).fetchall()
+            where = " WHERE mode=?"
+            args.append(mode)
+        rows = self.conn.execute(
+            f"""SELECT id, ts, mode, symbol, side, type, price, amount, cost, fee,
+                       order_id, status, dry_run, note, pnl, pnl_rate
+                FROM orders{where} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?""",
+            (*args, int(limit), int(offset))).fetchall()
         cols = ["id", "ts", "mode", "symbol", "side", "type", "price", "amount",
                 "cost", "fee", "order_id", "status", "dry_run", "note", "pnl", "pnl_rate"]
         return [dict(zip(cols, r)) for r in rows]
 
-    def get_order_summary(self) -> dict:
+    def orders_count(self, mode: str = None) -> int:
+        """成交总笔数（分页用），可与 get_orders 传同一个 mode。"""
+        if mode:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE mode=?", (mode,)).fetchone()
+        else:
+            row = self.conn.execute("SELECT COUNT(*) FROM orders").fetchone()
+        return int(row[0] or 0)
+
+    def get_order_summary(self, mode: str = None) -> dict:
         """成交汇总：总盈亏、总手续费、买卖笔数、平仓胜负数。
 
         「平仓」按类型判定而不是按方向 —— 空单平仓是 buy，但同样是平仓、
         同样有盈亏；按方向算会把它排除在胜率之外，与前端盈亏列口径打架。
+        现货马丁的止盈卖出（dca_sell）同样是平仓，必须计入。
         """
         closing = ("type IN ('grid_sell','grid_trail','grid_external',"
-                   "'short_close','close')")
+                   "'short_close','close','dca_sell')")
+        where = " WHERE mode=?" if mode else ""
         row = self.conn.execute(f"""
             SELECT COALESCE(SUM(pnl), 0), COALESCE(SUM(fee), 0),
                    COUNT(CASE WHEN side='sell' THEN 1 END),
@@ -460,7 +470,7 @@ class Database:
                    COUNT(CASE WHEN {closing} AND pnl > 0 THEN 1 END),
                    COUNT(CASE WHEN {closing} AND pnl <= 0 THEN 1 END),
                    COALESCE(SUM(CASE WHEN {closing} THEN cost END), 0)
-            FROM orders""").fetchone()
+            FROM orders{where}""", (mode,) if mode else ()).fetchone()
         sell_cost = row[6] or 0
         return {
             "total_pnl": round(row[0], 4),

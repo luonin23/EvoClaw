@@ -211,6 +211,17 @@ tr:hover td{background:var(--hover)}
   border-radius:20px;padding:5px 12px;cursor:pointer;white-space:nowrap;transition:color .15s,border-color .15s}
 .ptab:hover{color:var(--t1);border-color:var(--bd2)}
 .ptab.on{color:var(--accent);border-color:var(--accent)}
+/* ===== 顶部三页导航（合约 / 现货 / 配置）===== */
+.pages{display:flex;gap:8px;margin-bottom:16px}
+.ptab2{flex:0 0 auto;font-size:13px;color:var(--t2);background:var(--elev);border:1px solid var(--bd);
+  border-radius:10px;padding:9px 20px;cursor:pointer;user-select:none;white-space:nowrap;
+  transition:color .15s,border-color .15s,background .15s}
+.ptab2:hover{color:var(--t1);border-color:var(--bd2)}
+.ptab2.on{color:var(--accent);border-color:var(--accent);font-weight:600}
+/* ===== 成交记录分页条 ===== */
+.pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px;
+  font-size:12px;color:var(--t2);font-family:var(--mono)}
+.pager .btn:disabled{opacity:.4;cursor:default}
 .ptab .badge{font-size:9px;font-family:var(--mono);margin-left:5px;color:var(--bg);background:var(--warn);
   border-radius:8px;padding:0 5px}
 .pnote{font-size:11px;color:var(--t3);margin-bottom:10px;line-height:1.6}
@@ -319,29 +330,51 @@ tr:hover td{background:var(--hover)}
     <div class="card"><div class="lbl">最近状态</div><div class="val" id="sHealth" style="font-size:14px">—</div><div class="sub" id="sErr"></div></div>
   </div>
 
-  <!-- 网格 -->
-  <div class="panel" id="panelGrid" style="display:none">
-    <h2>方案B · 低杠杆网格 <span class="tag" id="gridTag"></span></h2>
-    <div id="gridBody"><div class="empty">暂无网格数据</div></div>
+  <!-- 三页导航 -->
+  <nav class="pages">
+    <div class="ptab2" id="nav-futures" onclick="showPage('futures')">合约网格</div>
+    <div class="ptab2" id="nav-spot" onclick="showPage('spot')">现货</div>
+    <div class="ptab2" id="nav-config" onclick="showPage('config')">配置</div>
+  </nav>
+
+  <!-- ===== 第一页：合约网格 + 合约成交记录 ===== -->
+  <div id="page-futures">
+    <div class="panel" id="panelGrid">
+      <h2>方案B · 低杠杆网格 <span class="tag" id="gridTag"></span></h2>
+      <div id="gridBody"><div class="empty">暂无网格数据</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>合约成交记录 <span class="tag">含模拟单</span></h2>
+      <div class="ord-sum" id="ordSumFut"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>币种</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>名义</th><th>手续费</th><th>盈亏</th><th>盈亏率</th><th>来源</th></tr></thead>
+        <tbody id="ordersFut"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
+      </table></div>
+      <div class="pager" id="pgFut"></div>
+    </div>
   </div>
 
-  <!-- 现货交易 -->
-  <div class="panel" id="panelDca" style="display:none">
-    <h2>现货交易 <span class="tag" id="dcaTag"></span></h2>
-    <div id="dcaBody"><div class="empty">暂无现货数据</div></div>
+  <!-- ===== 第二页：现货 + 现货成交记录 ===== -->
+  <div id="page-spot" style="display:none">
+    <div class="panel" id="panelDca">
+      <h2>现货交易（马丁格尔网格） <span class="tag" id="dcaTag"></span></h2>
+      <div id="dcaBody"><div class="empty">暂无现货数据</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>现货成交记录 <span class="tag">含模拟单</span></h2>
+      <div class="ord-sum" id="ordSumSpot"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>币种</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>名义</th><th>手续费</th><th>盈亏</th><th>盈亏率</th><th>来源</th></tr></thead>
+        <tbody id="ordersSpot"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
+      </table></div>
+      <div class="pager" id="pgSpot"></div>
+    </div>
   </div>
 
-  <!-- 成交 -->
-  <div class="panel">
-    <h2>成交记录 <span class="tag">含模拟单</span></h2>
-    <div class="ord-sum" id="ordSummary"></div>
-    <div class="scroll"><table>
-      <thead><tr><th>时间</th><th>币种</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>名义</th><th>手续费</th><th>盈亏</th><th>盈亏率</th><th>来源</th></tr></thead>
-      <tbody id="ordersBody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
-    </table></div>
-  </div>
-
-  <!-- 配置 -->
+  <!-- ===== 第三页：配置 ===== -->
+  <div id="page-config" style="display:none">
   <div class="panel">
     <h2>交易配置</h2>
     <div id="lockBox" class="lock">
@@ -368,6 +401,7 @@ tr:hover td{background:var(--hover)}
       </div>
     </div>
   </div>
+  </div><!-- /page-config -->
 </div>
 
 <!-- 多选弹窗（黑名单 / 手写标的 / 现货标的） -->
@@ -463,10 +497,6 @@ async function loadState(){
   $('sHealth').textContent = h.last_error ? '异常' : '正常';
   $('sHealth').className = 'val ' + (h.last_error?'neg':'pos');
   $('sErr').textContent = h.last_error||'';
-  $('panelGrid').style.display = d.mode==='grid' ? '' : 'none';
-  $('panelDca').style.display  = d.mode==='dca'  ? '' : 'none';
-  if(d.mode==='grid') loadGrid();
-  if(d.mode==='dca')  loadDca();
 }
 
 async function loadGrid(){
@@ -710,10 +740,19 @@ const TYPE_CN = {
   close:'手动·合约·多单·平仓'
 };
 
-async function loadOrders(){
-  const d = await api('/api/orders?limit=80'); if(!d||!d.orders) return;
+// ===== 成交记录：按市场分页（合约页 / 现货页各一份，互不干扰）=====
+const ORD = {futures:{page:1,pages:1,total:0}, spot:{page:1,pages:1,total:0}};
+const ORD_PAGE_SIZE = 50;
+
+async function loadOrders(market){
+  const st = ORD[market] || (ORD[market] = {page:1,pages:1,total:0});
+  const d = await api('/api/orders?market='+market+'&page='+st.page+'&size='+ORD_PAGE_SIZE);
+  if(!d||!d.orders) return;
+  st.total = d.total||0; st.pages = d.pages||1;
+  st.page = Math.min(Math.max(1, st.page), st.pages);
   const rows = d.orders, sm = d.summary||{};
-  const sum = $('ordSummary');
+  const suf = market==='futures' ? 'Fut' : 'Spot';
+  const sum = $('ordSum'+suf);
   if(sum){
     const pnlCls = (sm.total_pnl||0) >= 0 ? 'pos2' : 'neg2';
     sum.innerHTML =
@@ -724,8 +763,8 @@ async function loadOrders(){
       + '<span>买入 <b>'+(sm.buy_count||0)+'</b> 笔 · 卖出 <b>'+(sm.sell_count||0)+'</b> 笔</span>'
       + '<span>平仓胜率 <b>'+(sm.win_count||0)+'胜/'+(sm.loss_count||0)+'负 ('+((sm.win_rate||0)*100).toFixed(1)+'%)</b></span>';
   }
-  if(!rows.length){ $('ordersBody').innerHTML='<tr><td colspan="11" class="empty">暂无成交</td></tr>'; return; }
-  $('ordersBody').innerHTML = rows.map(o=>{
+  if(!rows.length){ $('orders'+suf).innerHTML='<tr><td colspan="11" class="empty">暂无成交</td></tr>'; renderPager(market); return; }
+  $('orders'+suf).innerHTML = rows.map(o=>{
     const isSell = o.side==='sell';
     // 方向看「腿」：空单开仓是卖、平仓是买，但在仓位上都属于「空」腿
     const leg = (o.type==='short_open' || o.type==='short_close') ? '空' : '多';
@@ -756,6 +795,36 @@ async function loadOrders(){
       + pnlCell
       + '<td>'+(o.dry_run?'<span style="color:var(--warn)">模拟</span>':'实盘')+'</td></tr>';
   }).join('');
+  renderPager(market);
+}
+
+function renderPager(market){
+  const st = ORD[market], el = $(market==='futures' ? 'pgFut' : 'pgSpot');
+  if(!el) return;
+  el.innerHTML =
+      '<span>共 '+st.total+' 笔 · 第 '+st.page+' / '+st.pages+' 页</span>'
+    + '<button class="btn sm" onclick="ordPage(\''+market+'\',-1)"'+(st.page<=1?' disabled':'')+'>上一页</button>'
+    + '<button class="btn sm" onclick="ordPage(\''+market+'\',1)"'+(st.page>=st.pages?' disabled':'')+'>下一页</button>';
+}
+
+function ordPage(market, delta){
+  const st = ORD[market];
+  st.page = Math.max(1, Math.min(st.pages, st.page + delta));
+  loadOrders(market);
+}
+
+// ===== 三页导航（合约 / 现货 / 配置）=====
+let CUR_PAGE = localStorage.getItem('ec_page') || 'futures';
+function showPage(id){
+  CUR_PAGE = id;
+  try{ localStorage.setItem('ec_page', id); }catch(e){}
+  for(const p of ['futures','spot','config']){
+    $('page-'+p).style.display = (p===id) ? '' : 'none';
+    $('nav-'+p).classList.toggle('on', p===id);
+  }
+  if(id==='futures'){ loadGrid(); loadOrders('futures'); }
+  else if(id==='spot'){ loadDca(); loadOrders('spot'); }
+  else if(id==='config' && $('cfgBox').style.display!=='none'){ loadParams(true); }
 }
 
 let _pendingAction = null;      // 解锁成功后要继续的动作（如「取消并重新筛选」）
@@ -1142,7 +1211,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 $('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
 
 async function togglePause(){
-  if(!PWD){ toast('请先解锁配置页再操作'); return; }
+  if(!PWD){ toast('请先在配置页解锁后再操作'); return; }
   const paused = !(STATE.health&&STATE.health.paused);
   const r = await fetch('/api/pause',{method:'POST',
     headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({paused})});
@@ -1152,8 +1221,14 @@ async function togglePause(){
   loadState();
 }
 
-async function refreshAll(){ await loadState(); await loadOrders(); }
-refreshAll();
+async function refreshAll(){
+  await loadState();
+  // 只刷新当前页的数据，省接口也省渲染；成交记录翻页状态保留在 ORD 里
+  if(CUR_PAGE==='futures'){ loadGrid(); loadOrders('futures'); }
+  else if(CUR_PAGE==='spot'){ loadDca(); loadOrders('spot'); }
+}
+showPage(CUR_PAGE);    // 恢复上次停留的页面并加载该页数据
+refreshAll();          // 顶部状态 + 当前页数据先刷一遍
 setInterval(()=>{ if(!document.hidden) refreshAll(); }, 8000);
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refreshAll(); });
 </script>
