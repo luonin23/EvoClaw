@@ -53,6 +53,7 @@ class FakeClient:
         self.transfers: list[float] = []
         self.spot_orders_status: dict[str, dict] = {}
         self.limit_orders: list[tuple] = []
+        self.fill_prices: dict[str, float] = {}     # order_id -> 实际成交均价
 
     # --- 标识 ---
     def user_symbol(self, s: str) -> str:
@@ -166,6 +167,10 @@ class FakeClient:
 
     async def fetch_order_status(self, oid, sym, kind="futures"):
         return "open"
+
+    async def fetch_order_fill(self, oid, sym, kind="futures"):
+        # 默认拿不到实际成交均价 → 调用方回退到挂单价（与真实实现的降级一致）
+        return self.fill_prices.get(str(oid))
 
     # --- 下单 ---
     async def cancel_order(self, oid, sym, kind="futures"):

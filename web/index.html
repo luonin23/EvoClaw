@@ -600,7 +600,11 @@ async function loadGrid(){
     const dayHtml = (s.day_low > 0 && s.day_high > s.day_low)
       ? '<div class="gc-day">24h 振幅区间 <b>'+nfpx(s.day_low)+'</b> ~ <b>'+nfpx(s.day_high)+'</b>'
         + ' · 现价在 <b class="'+posCls+'">'+Math.round(dpos*100)+'%</b> 位置'
-        + (dpos >= 0.6 ? '（偏高，不宜建多仓）' : (dpos <= 0.4 ? '（偏低，适合建仓）' : ''))
+        // 已持仓时「适合建仓」会误导：这里该说明的是跌破下轨后的补仓行为
+        + (hasPos && lo > 0 && px < lo
+            ? '（已跌破网格下轨 ' + ((1 - px / lo) * 100).toFixed(1) + '%，按规则向下补仓）'
+            : (dpos >= 0.6 ? '（偏高，不宜建多仓）'
+               : (dpos <= 0.4 ? (hasPos ? '（偏低）' : '（偏低，适合建仓）') : '')))
         + (s.status === 'waiting'
             ? ' · <b class="hi">等待建仓</b>：需回落到 '
               + Math.round((s.entry_pos_max||0.6)*100) + '% 以下'
@@ -612,7 +616,8 @@ async function loadGrid(){
       ? '<div class="gc-liq '+liqCls+'">'
         + (s.margin_mode==='isolated'?'逐仓':'<b>全仓(风险!)</b>') + ' · ' + (s.leverage||'?') + 'x'
         + ' · 强平价 ' + nf(s.liq_price,6)
-        + ' · 距强平 ' + ((s.liq_distance||0)*100).toFixed(1) + '%'
+        // liq_distance 对多头是负值（现价在强平价之上），显示时取绝对值
+        + ' · 距强平 ' + (Math.abs(s.liq_distance||0)*100).toFixed(1) + '%'
         + (liqDist < 0.25 ? '  ⚠ 接近强平' : '') + '</div>' : '';
 
     // ---- 价格轴：以「区间∪成本∪现价」为显示范围，保证三个标记都在视野内 ----
@@ -620,6 +625,8 @@ async function loadGrid(){
     if (hasPos && s.avg_price > 0) vals.push(s.avg_price);
     // 24h 振幅区间也纳入轴范围，保证这条带子完整可见
     if (s.day_low > 0 && s.day_high > s.day_low) vals.push(s.day_low, s.day_high);
+    // 跌破下轨后向下补的档位在下轨之外，必须纳入范围，否则全挤在轴的最左端
+    (s.levels||[]).forEach(l => { if (l.price > 0) vals.push(l.price); });
     const dLo0 = Math.min(...vals), dHi0 = Math.max(...vals);
     const padD = (dHi0 - dLo0) * 0.06 || 0.001;
     const dLo = dLo0 - padD, dHi = dHi0 + padD;

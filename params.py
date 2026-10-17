@@ -159,6 +159,15 @@ PARAMS: tuple[Param, ...] = (
     Param("grid.ext_close_cooldown_min", "int", 30, "grid_follow", "被平仓后冷静期",
           "检测到被手工平仓后，多少分钟内（且不在选币清单里时）不重新建仓",
           unit="分钟", min=0, max=1440, step=1),
+    Param("grid.breakout_extend", "bool", True, "grid_follow", "跌破区间向下补仓",
+          "价格跌破网格下轨、且已处于浮亏时，继续向下补买单摊低成本。"
+          "关闭则只持有等待反弹（原行为）", widget="switch"),
+    Param("grid.breakout_step", "float", 0.03, "grid_follow", "向下补仓间隔",
+          "每再跌破下轨这么多，补一档买单（相对下轨价格）", widget="percent",
+          unit="%", scale=100, min=0.005, max=0.2, step=0.005),
+    Param("grid.breakout_max", "int", 3, "grid_follow", "最多补仓档数",
+          "向下补仓的最大档数，每档金额 = 单格金额；补满后不再加仓",
+          unit="档", min=0, max=10, step=1),
 
     # ---------------- 网格·入场 ----------------
     Param("grid.entry_limit_only", "bool", True, "grid_entry", "只用限价建仓",

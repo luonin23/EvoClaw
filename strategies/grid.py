@@ -600,6 +600,12 @@ class GridStrategy:
                     return
                 draining = (st.get("status") or "active") == "draining"
             await self._reconcile_orders(sym, price)
+            # 跌破下轨且浮亏 → 向下补仓（必须在 _place_live 之前插入档位，
+            # 这样同一 tick 就能把新档位挂到交易所）
+            try:
+                await self._maybe_extend_down(sym, price, size_usdt, draining)
+            except Exception as e:
+                log.error(f"GRID {sym}: 向下补仓逻辑异常: {e}")
             await self._place_live(sym, equity, draining)
             # 高位试空。**draining 也要调**：掉出清单的标的如果还挂着一张没成交的
             # 开空单（或在持仓中），跳过它就没人撤单、没人管止盈止损了。
@@ -769,6 +775,67 @@ class GridStrategy:
                     "UPDATE grid_levels SET order_id=? WHERE symbol=? AND side='sell' AND status='pending'",
                     (oid, sym))
                 self.db.conn.commit()
+
+    async def _maybe_extend_down(self, sym: str, price: float, size_usdt: float,
+                                 draining: bool) -> bool:
+        """价格跌破网格下轨且浮亏 → 向下补买单摊低成本（用户批准的规则）。
+
+        背景：网格档位只存在于 [lower, upper] 内。价格跌破下轨后，所有买档
+        都已成交，区间下方没有买档；而「亏损时不重排网格」又挡住了动态跟随，
+        结果就是一路下跌、一手不补（用户实测 ZEREBRO -20% 时提问）。
+
+        规则：
+          · 只对**已持仓且现价低于持仓均价**的标的启用（否则走正常重排）
+          · 每再跌破下轨 breakout_step（默认 3%）补一档，最多 breakout_max 档
+          · 每档金额 = 单格金额（不放大，不做马丁式加倍）
+          · 补出的买单成交后，卖价至少是「当前均价 × (1+min_tp)」——绝不亏损卖出
+          · 敞口闸门 / 可用保证金 / 入选资格仍由 _place_live 统一把关
+        返回 True 表示本次新增了档位。
+        """
+        cfg = self.cfg
+        if draining or not cfg.get("breakout_extend", True):
+            return False
+        max_n = int(cfg.get("breakout_max", 3) or 0)
+        step = float(cfg.get("breakout_step", 0.03) or 0.03)
+        st = self.db.get_grid_state(sym) or {}
+        lower = float(st.get("lower", 0) or 0)
+        if max_n <= 0 or step <= 0 or lower <= 0 or price >= lower or size_usdt <= 0:
+            return False
+
+        ex_qty, ex_entry = await self._current_entry(sym)
+        # 只有在「跌破区间且低于成本」时才补 —— 否则该走动态重排，不是这里
+        if ex_qty <= 0 or ex_entry <= 0 or price >= ex_entry:
+            return False
+
+        levels = self.db.get_grid_levels(sym)
+        # 已生成的扩展档（下轨以下、且是买档）—— 无论是否成交都计数，
+        # 否则成交后的档位会被重复创建
+        existing = {round(float(l["price"]), 12) for l in levels
+                    if l["side"] == "buy" and float(l["price"]) < lower * (1 - 1e-9)}
+        # 现价已经跌破了几档（几何式：下轨 × (1-step)^k）
+        due = 0
+        for k in range(1, max_n + 1):
+            if price <= lower * ((1 - step) ** k):
+                due = k
+
+        added = 0
+        for k in range(1, due + 1):
+            lvl = self.client.round_price(sym, lower * ((1 - step) ** k), "futures")
+            if lvl <= 0 or any(abs(p - lvl) <= max(1e-9, lvl * 1e-6) for p in existing):
+                continue
+            if len(existing) >= max_n:
+                break
+            amt = self.client.amount_for_notional(sym, size_usdt, lvl, "futures")
+            if amt <= 0:
+                continue
+            # 扩展档用独立编号（1000+），与原始网格档位不冲突
+            self.db.insert_grid_level(sym, 1000 + k, lvl, "buy", amt)
+            existing.add(round(lvl, 12))
+            added += 1
+            log.warning(f"GRID {sym}: 价格 {price:.6g} 跌破下轨 {lower:.6g} "
+                        f"→ 向下补第 {k} 档买单 {amt:.0f} @ {lvl:.6g}"
+                        f"（单格 {size_usdt:.2f}U，最多 {max_n} 档）")
+        return added > 0
 
     async def _maybe_recenter(self, sym: str, st: dict, price: float, size_usdt: float,
                               grids: int, spec: dict, draining: bool) -> bool:
@@ -1503,9 +1570,20 @@ class GridStrategy:
                 if draining:
                     continue          # 只卖不买：买单即使被触及也不成交
                 if price <= op:
-                    await self._on_fill(sym, lv, "buy", op, price, draining)
+                    await self._on_fill(sym, lv, "buy", await self._real_fill_px(lv, op), price, draining)
             elif side == "sell" and price >= op:
-                await self._on_fill(sym, lv, "sell", op, price, draining)
+                await self._on_fill(sym, lv, "sell", await self._real_fill_px(lv, op), price, draining)
+
+    async def _real_fill_px(self, lv: dict, fallback: float) -> float:
+        """成交价优先取交易所的实际成交均价。
+
+        普通限价单成交价 = 挂单价；但挂在市价之上/之下的单会立即以更优价格成交，
+        此时按挂单价记账会失真（跌破下轨的补仓单就是这种情况）。
+        """
+        if self.client.dry_run or not lv.get("order_id"):
+            return fallback
+        got = await self.client.fetch_order_fill(lv["order_id"], lv["symbol"], "futures")
+        return float(got) if got else fallback
 
     async def _on_fill(self, sym: str, lv: dict, side: str, fill_price: float,
                        market: float, draining: bool = False):
@@ -1571,7 +1649,13 @@ class GridStrategy:
         st = self.db.get_grid_state(sym)
         if not st:
             return []
-        return grid_points(float(st["lower"]), float(st["upper"]), int(st["grids"]))
+        pts = grid_points(float(st["lower"]), float(st["upper"]), int(st["grids"]))
+        # 跌破下轨后补出来的档位也纳入轮转：否则扩展区补的仓卖出后，
+        # 下一档买单会跳回原区间，扩展区就用不上了。
+        lower = float(st["lower"])
+        ext = [float(l["price"]) for l in self.db.get_grid_levels(sym)
+               if l["side"] == "buy" and float(l["price"]) < lower * (1 - 1e-9)]
+        return sorted(set(pts) | set(ext))
 
     def _find_pending(self, sym: str, price: float, side: str):
         """找同价同向的待成交挂单（用于去重/累加）。"""
@@ -1595,6 +1679,15 @@ class GridStrategy:
             cand = [p for p in pts if p > fill_price * 1.0001]
             want = cand[0] if cand else fill_price * ((pts[-1] / pts[0]) ** (1.0 / max(1, len(pts) - 1)))
             side = "sell"
+            # 扩展档（下轨以下的补仓）成交后，卖价不得低于「当前均价×(1+min_tp)」。
+            # 否则会按原网格的下轨价卖出，把补仓变成亏损卖出（违背不设止损原则）。
+            if fill_price < float(st.get("lower", 0) or 0):
+                qty0, cost0 = self.db.lots_qty_cost(sym)
+                if qty0 > 1e-12:
+                    min_tp = float(self.cfg.get("min_tp_ratio", 0.002) or 0.002)
+                    floor_px = (cost0 / qty0) * (1 + min_tp)
+                    if want < floor_px:
+                        want = floor_px
         else:
             cand = [p for p in pts if p < fill_price * 0.9999]
             want = cand[-1] if cand else fill_price / ((pts[-1] / pts[0]) ** (1.0 / max(1, len(pts) - 1)))
@@ -1655,8 +1748,9 @@ class GridStrategy:
                 continue
             st = await self.client.fetch_order_status(lv["order_id"], sym, "futures")
             if st == "closed":
-                # 已成交（可能是离线期间成交的）→ 补记成交
-                await self._on_fill(sym, lv, lv["side"], float(lv["price"]), price, False)
+                # 已成交（可能是离线期间成交的）→ 补记成交（按实际成交均价）
+                await self._on_fill(sym, lv, lv["side"],
+                                    await self._real_fill_px(lv, float(lv["price"])), price, False)
                 continue
             if st in ("canceled", "expired"):
                 # 交易所明确说「撤了/过期了」→ 确实没成交，清掉单号重挂

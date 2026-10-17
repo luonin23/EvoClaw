@@ -736,6 +736,24 @@ class ExchangeClient:
         except Exception:
             return "unknown"
 
+    async def fetch_order_fill(self, order_id: str, user_symbol: str,
+                               kind: str = "futures") -> float | None:
+        """已成交订单的**实际成交均价**；拿不到返回 None。
+
+        为什么需要它：跌破下轨的补仓单可能挂在市价之上（立即成交），此时
+        实际成交价远好于挂单价。按挂单价记账会虚增成本，必须取交易所均价。
+        """
+        if not order_id or order_id.startswith("dry-"):
+            return None
+        ex = self.futures if kind == "futures" else self._spot
+        try:
+            o = await self._safe_call(ex.fetch_order(order_id, self.to_ccxt(user_symbol, kind)),
+                                      timeout=15)
+            avg = float(o.get("average") or 0)
+            return avg if avg > 0 else None
+        except Exception:
+            return None
+
     async def fetch_open_orders(self, user_symbol: str, kind: str = "futures",
                                 strict: bool = False) -> list[dict]:
         # 短 TTL 缓存：引擎 tick 和 Web status() 都会拉挂单，8 秒内共享一次请求，
