@@ -58,6 +58,7 @@ class WebServer:
         r.add_post("/api/grid/cancel", self.api_grid_cancel)
         r.add_get("/api/dca", self.api_dca)
         r.add_get("/api/orders", self.api_orders)
+        r.add_get("/api/liquidations", self.api_liquidations)
         r.add_get("/api/config", self.api_config_get)
         r.add_post("/api/config", self.api_config_set)
         r.add_get("/api/params", self.api_params_get)
@@ -187,6 +188,22 @@ class WebServer:
             return web.json_response({
                 "orders": self.db.get_orders(size, mode=mode, offset=(page - 1) * size),
                 "summary": self.db.get_order_summary(mode),
+                "total": total, "page": page, "size": size,
+                "pages": max(1, -(-total // size)),
+            })
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def api_liquidations(self, request):
+        """强平记录 + 统计（逐仓/全仓都包含）。"""
+        try:
+            page = max(1, int(request.query.get("page", "1")))
+            size = min(max(10, int(request.query.get("size", "50"))), 200)
+            stats = self.db.liquidation_stats()
+            total = stats["count"]
+            return web.json_response({
+                "items": self.db.get_liquidations(size, (page - 1) * size),
+                "stats": stats,
                 "total": total, "page": page, "size": size,
                 "pages": max(1, -(-total // size)),
             })

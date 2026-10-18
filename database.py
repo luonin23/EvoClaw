@@ -10,9 +10,21 @@ import os
 import shutil
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
+
+
+def _iso_window(ts_iso: str, seconds: int) -> tuple[str, str]:
+    """把 ISO 时间戳扩成一个 ±seconds 的 ISO 窗口（用于同表时间邻近查询）。"""
+    try:
+        dt = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        dt = datetime.now(timezone.utc)
+    return ((dt - timedelta(seconds=seconds)).isoformat(),
+            (dt + timedelta(seconds=seconds)).isoformat())
 
 
 class Database:
@@ -176,11 +188,29 @@ class Database:
                 last_buy_ts TEXT NOT NULL DEFAULT '',
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+            -- 强平记录：来自币安 forceOrders（逐仓/全仓被强平的每一笔平仓单）。
+            -- order_id 唯一 → 重复同步天然幂等。
+            CREATE TABLE IF NOT EXISTS liquidations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id TEXT NOT NULL UNIQUE,
+                ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL DEFAULT '',
+                position_side TEXT NOT NULL DEFAULT '',
+                price REAL NOT NULL DEFAULT 0,
+                amount REAL NOT NULL DEFAULT 0,
+                notional REAL NOT NULL DEFAULT 0,
+                margin_mode TEXT NOT NULL DEFAULT '',
+                pnl REAL NOT NULL DEFAULT 0,   -- 交易所收入流水汇总（含手续费）
+                raw TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_liquidations_ts ON liquidations(ts);
         """)
         self.conn.commit()
         # 迁移：为已存在的表补列（已存在则忽略）
         for _tbl, _col, _type in [("grid_state", "total_cost", "REAL NOT NULL DEFAULT 0"),
                                   ("grid_state", "status", "TEXT NOT NULL DEFAULT 'active'"),
+                                  ("liquidations", "pnl", "REAL NOT NULL DEFAULT 0"),
                                   ("orders", "pnl", "REAL NOT NULL DEFAULT 0"),
                                   ("orders", "pnl_rate", "REAL NOT NULL DEFAULT 0"),
                                   ("dca_records", "note", "TEXT NOT NULL DEFAULT ''"),
@@ -258,6 +288,124 @@ class Database:
             "UPDATE spot_orders SET status=?, filled_ts=? WHERE id=?",
             (status, filled_ts, int(row_id)))
         self.conn.commit()
+
+    # ===== 强平记录 =====
+    def insert_liquidation(self, r: dict) -> bool:
+        """写入一条强平记录；按交易所 order_id 幂等。返回是否新增。"""
+        cur = self.conn.execute(
+            """INSERT OR IGNORE INTO liquidations
+               (order_id, ts, symbol, side, position_side, price, amount, notional,
+                margin_mode, pnl, raw)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(r["order_id"]), r["ts"], r["symbol"], r.get("side", ""),
+             r.get("position_side", ""), float(r.get("price", 0)),
+             float(r.get("amount", 0)), float(r.get("notional", 0)),
+             r.get("margin_mode", ""), float(r.get("pnl", 0)), r.get("raw", "")))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def update_liquidation_pnl(self, order_id: str, pnl: float):
+        self.conn.execute("UPDATE liquidations SET pnl=? WHERE order_id=?",
+                          (float(pnl), str(order_id)))
+        self.conn.commit()
+
+    def update_liquidation_order_pnl(self, symbol: str, ts_iso: str, pnl: float,
+                                     seconds: int = 600):
+        """把监控先插入的简版强平记录的盈亏补上（只改 pnl 仍为 0 的行，
+        绝不覆盖对账路径的权威盈亏）。"""
+        lo, hi = _iso_window(ts_iso, seconds)
+        # pnl_rate 固定 0：强平盈亏是按「标的整仓」汇总的，与单张强平单的名义
+        # 不成比例，算出来会是 -857% 这种误导值。前端对强平行显示「—」。
+        self.conn.execute(
+            """UPDATE orders SET
+                   pnl = CASE WHEN pnl = 0 THEN ? ELSE pnl END,
+                   pnl_rate = 0
+               WHERE symbol=? AND type='liquidation' AND ts BETWEEN ? AND ?""",
+            (float(pnl), symbol, lo, hi))
+        self.conn.commit()
+
+    def normalize_liquidation_rates(self):
+        """历史强平行的盈亏率一律清零（该比率对强平没有意义）。"""
+        self.conn.execute(
+            "UPDATE orders SET pnl_rate=0 WHERE type='liquidation' AND pnl_rate != 0")
+        self.conn.commit()
+
+    def get_liquidations(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT id, order_id, ts, symbol, side, position_side, price, amount,
+                      notional, margin_mode, pnl
+               FROM liquidations ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?""",
+            (int(limit), int(offset))).fetchall()
+        cols = ["id", "order_id", "ts", "symbol", "side", "position_side", "price",
+                "amount", "notional", "margin_mode", "pnl"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def liquidation_stats(self) -> dict:
+        row = self.conn.execute(
+            """SELECT COUNT(*), COUNT(DISTINCT symbol), COALESCE(SUM(notional), 0),
+                      COALESCE(MIN(ts), ''), COALESCE(MAX(ts), ''), COUNT(DISTINCT ts),
+                      COALESCE(SUM(pnl), 0)
+               FROM liquidations""").fetchone()
+        return {"count": int(row[0] or 0), "symbols": int(row[1] or 0),
+                "total_notional": round(float(row[2] or 0), 4),
+                "first_ts": row[3] or "", "last_ts": row[4] or "",
+                # 同一次强平会在一秒内批量产生多张强平单（实测一次 91 张）
+                "events": int(row[5] or 0),
+                "total_pnl": round(float(row[6] or 0), 4)}
+
+    def liquidation_near(self, symbol: str, ts_iso: str, seconds: int = 600) -> dict | None:
+        """找同一标的、时间相近的强平记录（用于把「外部平仓」识别成强平）。"""
+        lo, hi = _iso_window(ts_iso, seconds)
+        row = self.conn.execute(
+            """SELECT id, order_id, ts, symbol, side, position_side, price, amount,
+                      notional, margin_mode, pnl
+               FROM liquidations WHERE symbol=? AND ts BETWEEN ? AND ?
+               ORDER BY ts LIMIT 1""", (symbol, lo, hi)).fetchone()
+        if not row:
+            return None
+        cols = ["id", "order_id", "ts", "symbol", "side", "position_side", "price",
+                "amount", "notional", "margin_mode", "pnl"]
+        return dict(zip(cols, row))
+
+    def has_order_near(self, symbol: str, ts_iso: str, seconds: int = 600) -> bool:
+        """同一标的时间窗内是否已有成交记录（避免强平记录重复插入 orders）。"""
+        lo, hi = _iso_window(ts_iso, seconds)
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE symbol=? AND ts BETWEEN ? AND ?",
+            (symbol, lo, hi)).fetchone()
+        return int(row[0] or 0) > 0
+
+    def record_liquidation_order(self, o: dict, seconds: int = 600,
+                                 overwrite: bool = False) -> bool:
+        """把一笔强平写进成交记录；同一标的时间窗内只保留一行。
+
+        overwrite=True 用于**对账补记**：本地有完整账本（数量/成本/盈亏），
+        以它为准覆盖监控先行插入的简版记录。
+        overwrite=False 用于强平监控：已有记录就跳过，绝不覆盖对账数据。
+        返回 True 表示新插入。
+        """
+        lo, hi = _iso_window(o["ts"], seconds)
+        row = self.conn.execute(
+            """SELECT id FROM orders
+               WHERE symbol=? AND type='liquidation' AND ts BETWEEN ? AND ?
+               ORDER BY id LIMIT 1""", (o["symbol"], lo, hi)).fetchone()
+        if row:
+            if overwrite:
+                self.conn.execute(
+                    """UPDATE orders SET mode=?, side=?, price=?, amount=?, cost=?,
+                              fee=?, pnl=?, pnl_rate=?, note=?, order_id=?,
+                              dry_run=?, status='filled'
+                       WHERE id=?""",
+                    (o.get("mode", "grid"), o["side"], float(o.get("price", 0)),
+                     float(o.get("amount", 0)), float(o.get("cost", 0)),
+                     float(o.get("fee", 0)), float(o.get("pnl", 0)),
+                     float(o.get("pnl_rate", 0)), o.get("note", "强制平仓"),
+                     str(o.get("order_id", "")), 1 if o.get("dry_run") else 0,
+                     int(row[0])))
+                self.conn.commit()
+            return False
+        self.insert_order({**o, "type": "liquidation"})
+        return True
 
     def realized_pnl_total(self) -> float:
         """合约累计已实现盈亏（所有平仓类记录之和）。

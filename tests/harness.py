@@ -54,6 +54,10 @@ class FakeClient:
         self.spot_orders_status: dict[str, dict] = {}
         self.limit_orders: list[tuple] = []
         self.fill_prices: dict[str, float] = {}     # order_id -> 实际成交均价
+        self.force_orders: list[dict] = []           # fetch_force_orders 的返回
+        self.income_records: list[dict] = []         # fetch_income_window 的返回
+        self.income_calls = 0
+        self._hl: dict = {}                          # symbol -> (24h high, low)
 
     # --- 标识 ---
     def user_symbol(self, s: str) -> str:
@@ -171,6 +175,13 @@ class FakeClient:
     async def fetch_order_fill(self, oid, sym, kind="futures"):
         # 默认拿不到实际成交均价 → 调用方回退到挂单价（与真实实现的降级一致）
         return self.fill_prices.get(str(oid))
+
+    async def fetch_force_orders(self, since_ms=None, end_ms=None, limit=100):
+        return list(self.force_orders)
+
+    async def fetch_income_window(self, start_ms, end_ms, limit=1000):
+        self.income_calls += 1
+        return list(self.income_records)
 
     # --- 下单 ---
     async def cancel_order(self, oid, sym, kind="futures"):

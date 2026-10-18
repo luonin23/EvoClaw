@@ -9,6 +9,7 @@ dry_run=True 时，策略层不会调用下单方法；客户端仍可读行情/
 """
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -735,6 +736,62 @@ class ExchangeClient:
             return str(o.get("status") or "unknown")
         except Exception:
             return "unknown"
+
+    async def fetch_force_orders(self, since_ms: int | None = None,
+                                 end_ms: int | None = None,
+                                 limit: int = 100) -> list[dict]:
+        """拉取**强平单**（币安 forceOrders，逐仓/全仓都包含）。
+
+        返回规范化后的列表，字段：
+          order_id / ts(ISO) / symbol / side / position_side / price / amount /
+          notional / margin_mode / raw
+        没有权限/接口失败时返回空列表（监控功能不能影响主交易循环）。
+        """
+        params: dict = {"limit": int(limit)}
+        if since_ms:
+            params["startTime"] = int(since_ms)
+        if end_ms:
+            params["endTime"] = int(end_ms)
+        try:
+            rows = await self._safe_call(
+                self.futures.fapiPrivateGetForceOrders(params), timeout=20)
+        except Exception as e:
+            log.warning(f"拉取强平记录失败（不影响交易）: {e}")
+            return []
+        out = []
+        for o in rows or []:
+            ts_ms = int(o.get("time") or 0)
+            if ts_ms <= 0:
+                continue
+            out.append({
+                "order_id": str(o.get("orderId") or ""),
+                "ts": datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(),
+                "symbol": self.user_symbol(str(o.get("symbol") or "")),
+                "side": str(o.get("side") or "").lower(),
+                "position_side": str(o.get("positionSide") or ""),
+                "price": float(o.get("avgPrice") or o.get("price") or 0),
+                "amount": float(o.get("executedQty") or o.get("origQty") or 0),
+                "notional": float(o.get("cumQuote") or 0),
+                "margin_mode": "",      # forceOrders 不返回；由持仓元数据补充
+                "raw": json.dumps(o, ensure_ascii=False)[:2000],
+            })
+        return out
+
+    async def fetch_income_window(self, start_ms: int, end_ms: int,
+                                  limit: int = 1000) -> list[dict]:
+        """拉取一段时间内的账户收入流水（用于还原强平的已实现盈亏）。
+
+        forceOrders 只给成交价/数量，不含盈亏；收入流水里同一秒的
+        REALIZED_PNL + COMMISSION 才是这笔强平真实的净盈亏。
+        """
+        try:
+            rows = await self._safe_call(self.futures.fapiPrivateGetIncome(
+                {"startTime": int(start_ms), "endTime": int(end_ms),
+                 "limit": int(limit)}), timeout=20)
+            return list(rows or [])
+        except Exception as e:
+            log.warning(f"拉取收入流水失败（不影响交易）: {e}")
+            return []
 
     async def fetch_order_fill(self, order_id: str, user_symbol: str,
                                kind: str = "futures") -> float | None:

@@ -538,16 +538,29 @@ class GridStrategy:
                         pnl += (exit_px - db_avg) * (db_qty - taken)
                     if ex_pnl is not None:
                         pnl = ex_pnl          # 交易所的已实现盈亏最权威，优先用
-                    self.db.insert_order({
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    # 先看是不是强平：币安强平单与持仓消失几乎同时发生。
+                    # 是 → 记成 liquidation（成交记录/统计都能单独识别），
+                    # 并覆盖强平监控可能先行插入的简版记录。
+                    is_liq = (not ours) and bool(self.db.liquidation_near(sym, now_iso, 600))
+                    o_type = "liquidation" if is_liq else ("grid_sell" if ours else "grid_external")
+                    note = ("强制平仓（交易所强平）" if is_liq
+                            else ("网格卖出（挂单成交·对账补记）" if ours
+                                  else "外部平仓（非本程序发起）"))
+                    rec = {
+                        "ts": now_iso,
                         "mode": "grid", "symbol": sym, "side": "sell",
-                        "type": "grid_sell" if ours else "grid_external",
                         "price": exit_px, "amount": db_qty,
                         "cost": round(exit_px * db_qty, 6),
                         "fee": round(exit_px * db_qty * 0.0005, 6),
                         "pnl": round(pnl, 6),
                         "pnl_rate": round(pnl / (db_avg * db_qty), 8) if db_avg > 0 else 0,
-                        "dry_run": False,
-                        "note": "网格卖出（挂单成交·对账补记）" if ours else "外部平仓（非本程序发起）"})
+                        "dry_run": False, "note": note,
+                    }
+                    if is_liq:
+                        self.db.record_liquidation_order(rec, overwrite=True)
+                    else:
+                        self.db.insert_order({**rec, "type": o_type})
                     self.db.upsert_grid_state(
                         sym, base_qty=0.0, total_cost=0.0,
                         realized_pnl=float(st.get("realized_pnl", 0) or 0) + pnl,
@@ -2156,6 +2169,10 @@ class GridStrategy:
             cost = float(st.get("total_cost", 0) or 0)
             avg = cost / qty if qty > 0 else 0
             lv = self.db.get_grid_levels(sym)
+            # 强平/清仓后：既没持仓、也没挂单 → 不展示（用户明确要求的显示规则）。
+            # 仍有持仓或挂单（等待建仓）的照常展示。
+            if qty <= 1e-12 and not any(l["status"] == "pending" for l in lv):
+                continue
             # 「已挂/待挂」以交易所为准：单号存在于交易所当前挂单里才算已挂。
             # DB 里存的单号可能已被成交/撤销/手动改单 —— 不能只信本地账。
             try:
@@ -2220,6 +2237,11 @@ class GridStrategy:
         for s in (self._selection or (self.config.get("grid_selection") or [])):
             sym = s.get("symbol")
             if not sym or sym in seen:
+                continue
+            # 用户明确的显示规则：既没持仓、也没挂单 → 不展示。
+            # （强平/清仓后如果还留在选币清单里，不该留下一张空卡片；
+            #   等它重新挂出建仓单或买入成交后自然会再出现。）
+            if not any(l["status"] == "pending" for l in self.db.get_grid_levels(sym)):
                 continue
             try:
                 price = self.client.last_price(sym) or await self.client.ensure_price(sym)

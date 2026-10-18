@@ -353,6 +353,7 @@ tr:hover td{background:var(--hover)}
     <div class="ptab2" id="nav-futures" onclick="showPage('futures')">合约网格</div>
     <div class="ptab2" id="nav-spot" onclick="showPage('spot')">现货</div>
     <div class="ptab2" id="nav-profit" onclick="showPage('profit')">利润定投</div>
+    <div class="ptab2" id="nav-liquidations" onclick="showPage('liquidations')">强平记录</div>
     <div class="ptab2" id="nav-config" onclick="showPage('config')">配置</div>
   </nav>
 
@@ -411,7 +412,20 @@ tr:hover td{background:var(--hover)}
     </div>
   </div>
 
-  <!-- ===== 第四页：配置 ===== -->
+  <!-- ===== 第四页：强平记录（逐仓 / 全仓）===== -->
+  <div id="page-liquidations" style="display:none">
+    <div class="panel">
+      <h2>强平记录 <span class="tag">逐仓 / 全仓</span></h2>
+      <div class="ord-sum" id="liqStats"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>币种</th><th>方向</th><th>腿</th><th>成交均价</th><th>数量</th><th>名义</th><th>强平盈亏</th><th>保证金模式</th><th>来源</th></tr></thead>
+        <tbody id="liqBody"><tr><td colspan="10" class="empty">加载中…</td></tr></tbody>
+      </table></div>
+      <div class="pager" id="pgLiq"></div>
+    </div>
+  </div>
+
+  <!-- ===== 第五页：配置 ===== -->
   <div id="page-config" style="display:none">
   <div class="panel">
     <h2>交易配置</h2>
@@ -790,6 +804,7 @@ const TYPE_CN = {
   short_close:'自动·合约·空单·平仓',
   dca_buy:'自动·现货·现货交易·开仓',
   dca_sell:'自动·现货·现货交易·平仓',
+  liquidation:'交易所·合约·强制平仓',
   close:'手动·合约·多单·平仓'
 };
 
@@ -823,20 +838,23 @@ async function loadOrders(market){
     const leg = (o.type==='short_open' || o.type==='short_close') ? '空' : '多';
     const pnl = Number(o.pnl||0);
     // 有没有盈亏看「类型」而不是「方向」——空单平仓是「买」，但它确实有盈亏
-    const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close','dca_sell'];
+    const CLOSING = ['grid_sell','grid_trail','grid_external','short_close','close','dca_sell','liquidation'];
     const hasPnl = CLOSING.indexOf(o.type) >= 0;
     // 平仓原因（止盈/止损/外部）直接跟在校验后面显示 —— 这是判断这笔交易性质的关键
     const note = String(o.note||'');
     const reason = !hasPnl ? ''
-      : (note.indexOf('止损') >= 0 ? '止损'
+      : (o.type === 'liquidation' || note.indexOf('强平') >= 0 ? '强平'
+        : note.indexOf('止损') >= 0 ? '止损'
         : note.indexOf('止盈') >= 0 ? '止盈'
         : o.type === 'grid_external' ? '外部' : '');
     const reasonHtml = reason
-      ? '·<span class="'+(reason==='止损'?'neg':(reason==='止盈'?'pos':''))+'">'+reason+'</span>'
+      ? '·<span class="'+(reason==='止损'||reason==='强平'?'neg':(reason==='止盈'?'pos':''))+'">'+reason+'</span>'
       : '';
+    // 强平盈亏是按「标的整仓」汇总的，与单张强平单名义不成比例 → 不显示比率
+    const isLiq = o.type === 'liquidation';
     const pnlCell = hasPnl
       ? '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</td>'
-        + '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfR(o.pnl_rate)+'</td>'
+        + '<td class="'+(pnl>=0?'pos':'neg')+'">'+(isLiq ? '—' : nfR(o.pnl_rate))+'</td>'
       : '<td>—</td><td>—</td>';
     return '<tr>'
       + '<td>'+esc((o.ts||'').replace('T',' ').slice(5,19))+'</td>'
@@ -866,19 +884,65 @@ function ordPage(market, delta){
   loadOrders(market);
 }
 
-// ===== 四页导航（合约 / 现货 / 利润定投 / 配置）=====
+// ===== 五页导航（合约 / 现货 / 利润定投 / 强平记录 / 配置）=====
 let CUR_PAGE = localStorage.getItem('ec_page') || 'futures';
 function showPage(id){
   CUR_PAGE = id;
   try{ localStorage.setItem('ec_page', id); }catch(e){}
-  for(const p of ['futures','spot','profit','config']){
+  for(const p of ['futures','spot','profit','liquidations','config']){
     $('page-'+p).style.display = (p===id) ? '' : 'none';
     $('nav-'+p).classList.toggle('on', p===id);
   }
   if(id==='futures'){ loadGrid(); loadOrders('futures'); }
   else if(id==='spot'){ loadDca(); loadOrders('spot'); }
   else if(id==='profit'){ loadProfitDca(); }
+  else if(id==='liquidations'){ loadLiquidations(); }
   else if(id==='config' && $('cfgBox').style.display!=='none'){ loadParams(true); }
+}
+
+// ===== 强平记录 =====
+const LIQ = {page:1, pages:1, total:0};
+async function loadLiquidations(){
+  const d = await api('/api/liquidations?page='+LIQ.page+'&size=50');
+  if(!d || !d.items) return;
+  LIQ.total = d.total||0; LIQ.pages = d.pages||1;
+  LIQ.page = Math.min(Math.max(1, LIQ.page), LIQ.pages);
+  const s = d.stats||{};
+  $('liqStats').innerHTML =
+      '<span>强平次数 <b class="'+(s.count?'neg2':'')+'">'+(s.count||0)+'</b></span>'
+    + '<span>发生批次 <b>'+(s.events||0)+'</b></span>'
+    + '<span>涉及标的 <b>'+(s.symbols||0)+'</b></span>'
+    + '<span>累计强平名义 <b>'+nf(s.total_notional,2)+' U</b></span>'
+    + '<span>强平净盈亏 <b class="'+((s.total_pnl||0)>=0?'pos2':'neg2')+'">'+nfP(s.total_pnl,4)+' U</b></span>'
+    + '<span>最近一次 <b>'+esc((s.last_ts||'—').replace('T',' ').slice(0,19))+'</b></span>'
+    + '<span>首次 <b>'+esc((s.first_ts||'—').replace('T',' ').slice(0,19))+'</b></span>';
+  if(!d.items.length){
+    $('liqBody').innerHTML = '<tr><td colspan="10" class="empty">暂无强平记录</td></tr>';
+  } else {
+    $('liqBody').innerHTML = d.items.map(x=>{
+      const leg = (x.position_side||'').toUpperCase()==='SHORT' ? '空' : '多';
+      const pnl = Number(x.pnl||0);
+      return '<tr><td>'+esc((x.ts||'').replace('T',' ').slice(0,19))+'</td>'
+        + '<td class="num">'+esc(x.symbol)+'</td>'
+        + '<td class="'+(x.side==='buy'?'pos':'neg')+'"><b>'+(x.side==='buy'?'买':'卖')+'</b></td>'
+        + '<td class="'+(leg==='空'?'neg':'pos')+'"><b>'+leg+'</b></td>'
+        + '<td>'+nf(x.price,6)+'</td><td>'+nf(x.amount,4)+'</td><td>'+nf(x.notional,2)+'</td>'
+        + '<td class="'+(pnl>=0?'pos':'neg')+'">'+nfP(pnl,4)+'</td>'
+        + '<td>'+esc(x.margin_mode||'—')+'</td>'
+        + '<td>强制平仓</td></tr>';
+    }).join('');
+  }
+  renderLiqPager();
+}
+function renderLiqPager(){
+  $('pgLiq').innerHTML =
+      '<span>共 '+LIQ.total+' 条 · 第 '+LIQ.page+' / '+LIQ.pages+' 页</span>'
+    + '<button class="btn sm" onclick="liqPage(-1)"'+(LIQ.page<=1?' disabled':'')+'>上一页</button>'
+    + '<button class="btn sm" onclick="liqPage(1)"'+(LIQ.page>=LIQ.pages?' disabled':'')+'>下一页</button>';
+}
+function liqPage(delta){
+  LIQ.page = Math.max(1, Math.min(LIQ.pages, LIQ.page + delta));
+  loadLiquidations();
 }
 
 let _pendingAction = null;      // 解锁成功后要继续的动作（如「取消并重新筛选」）
@@ -1316,6 +1380,7 @@ async function refreshAll(){
   if(CUR_PAGE==='futures'){ loadGrid(); loadOrders('futures'); }
   else if(CUR_PAGE==='spot'){ loadDca(); loadOrders('spot'); }
   else if(CUR_PAGE==='profit'){ loadProfitDca(); }
+  else if(CUR_PAGE==='liquidations'){ loadLiquidations(); }
 }
 showPage(CUR_PAGE);    // 恢复上次停留的页面并加载该页数据
 refreshAll();          // 顶部状态 + 当前页数据先刷一遍
