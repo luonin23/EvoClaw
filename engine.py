@@ -126,6 +126,19 @@ class Engine:
             for i in items:
                 i["pnl"] = group_pnl.get(key, 0.0) * (i["notional"] / total_n)
 
+        # 「历史回补 / 运行中」的分界 = v2 的第一笔订单时间。
+        # 分界之前的强平是 v1 时代的爆仓记录：只展示，不进策略统计。
+        cutoff_ms = float(self.db.get_runtime_stat("v2_first_order_ms", 0) or 0)
+        if cutoff_ms <= 0:
+            fts = self.db.first_order_ts()
+            if fts:
+                try:
+                    cutoff_ms = int(datetime.fromisoformat(fts).replace(
+                        tzinfo=timezone.utc).timestamp() * 1000)
+                    self.db.set_runtime_stat("v2_first_order_ms", cutoff_ms)
+                except Exception:
+                    cutoff_ms = 0
+
         new = 0
         for r in rows:
             inserted = self.db.insert_liquidation(r)
@@ -137,6 +150,11 @@ class Engine:
             opnl = group_pnl.get((r["symbol"], r["ts"][:19]), 0.0)
             self.db.update_liquidation_order_pnl(r["symbol"], r["ts"], opnl)
             if inserted:
+                try:
+                    before_v2 = (cutoff_ms > 0 and int(datetime.fromisoformat(
+                        r["ts"]).replace(tzinfo=timezone.utc).timestamp() * 1000) < cutoff_ms)
+                except Exception:
+                    before_v2 = False
                 self.db.record_liquidation_order({
                     "ts": r["ts"], "mode": "grid", "symbol": r["symbol"],
                     "side": r["side"] or "sell", "price": r["price"],
@@ -144,7 +162,7 @@ class Engine:
                     "fee": 0, "pnl": opnl, "pnl_rate": 0, "dry_run": False,
                     "note": f"强制平仓（{r['position_side'] or '仓位'}）",
                     "order_id": r["order_id"],
-                }, overwrite=False)
+                }, overwrite=False, source="backfill" if before_v2 else "monitor")
         self.db.set_runtime_stat("liq_sync_ts", now)
         if need_backfill:
             # 只有真正完成了 90 天回补才置位；增量路径置位会导致历史盈亏永远补不上

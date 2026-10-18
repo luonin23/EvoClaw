@@ -211,6 +211,7 @@ class Database:
         for _tbl, _col, _type in [("grid_state", "total_cost", "REAL NOT NULL DEFAULT 0"),
                                   ("grid_state", "status", "TEXT NOT NULL DEFAULT 'active'"),
                                   ("liquidations", "pnl", "REAL NOT NULL DEFAULT 0"),
+                                  ("orders", "liq_source", "TEXT NOT NULL DEFAULT ''"),
                                   ("orders", "pnl", "REAL NOT NULL DEFAULT 0"),
                                   ("orders", "pnl_rate", "REAL NOT NULL DEFAULT 0"),
                                   ("dca_records", "note", "TEXT NOT NULL DEFAULT ''"),
@@ -324,10 +325,23 @@ class Database:
             (float(pnl), symbol, lo, hi))
         self.conn.commit()
 
+    def first_order_ts(self) -> str:
+        """v2 的第一笔（非强平）订单时间 —— 区分「历史强平/运行中强平」的分界。"""
+        row = self.conn.execute(
+            "SELECT MIN(ts) FROM orders WHERE type != 'liquidation'").fetchone()
+        return row[0] or ""
+
     def normalize_liquidation_rates(self):
-        """历史强平行的盈亏率一律清零（该比率对强平没有意义）。"""
+        """历史强平行的盈亏率一律清零（该比率对强平没有意义）；
+        并把 v2 首笔订单之前的强平标记为 backfill（不进策略统计）。"""
         self.conn.execute(
             "UPDATE orders SET pnl_rate=0 WHERE type='liquidation' AND pnl_rate != 0")
+        fts = self.first_order_ts()
+        if fts:
+            self.conn.execute(
+                """UPDATE orders SET liq_source='backfill'
+                   WHERE type='liquidation' AND liq_source='' AND ts < ?""",
+                (fts,))
         self.conn.commit()
 
     def get_liquidations(self, limit: int = 100, offset: int = 0) -> list[dict]:
@@ -376,12 +390,15 @@ class Database:
         return int(row[0] or 0) > 0
 
     def record_liquidation_order(self, o: dict, seconds: int = 600,
-                                 overwrite: bool = False) -> bool:
+                                 overwrite: bool = False,
+                                 source: str = "monitor") -> bool:
         """把一笔强平写进成交记录；同一标的时间窗内只保留一行。
 
         overwrite=True 用于**对账补记**：本地有完整账本（数量/成本/盈亏），
         以它为准覆盖监控先行插入的简版记录。
         overwrite=False 用于强平监控：已有记录就跳过，绝不覆盖对账数据。
+        source：'backfill'=90 天历史回补（v2 上线前的事件，只展示、不进统计）；
+                'monitor'=运行中监控；'reconcile'=对账发现。
         返回 True 表示新插入。
         """
         lo, hi = _iso_window(o["ts"], seconds)
@@ -394,17 +411,18 @@ class Database:
                 self.conn.execute(
                     """UPDATE orders SET mode=?, side=?, price=?, amount=?, cost=?,
                               fee=?, pnl=?, pnl_rate=?, note=?, order_id=?,
-                              dry_run=?, status='filled'
+                              dry_run=?, status='filled', liq_source=?
                        WHERE id=?""",
                     (o.get("mode", "grid"), o["side"], float(o.get("price", 0)),
                      float(o.get("amount", 0)), float(o.get("cost", 0)),
                      float(o.get("fee", 0)), float(o.get("pnl", 0)),
                      float(o.get("pnl_rate", 0)), o.get("note", "强制平仓"),
                      str(o.get("order_id", "")), 1 if o.get("dry_run") else 0,
-                     int(row[0])))
+                     source, int(row[0])))
                 self.conn.commit()
             return False
-        self.insert_order({**o, "type": "liquidation"})
+        self.insert_order({**o, "mode": o.get("mode", "grid"),
+                           "type": "liquidation", "liq_source": source})
         return True
 
     def realized_pnl_total(self) -> float:
@@ -548,14 +566,15 @@ class Database:
         self.conn.execute(
             """INSERT INTO orders
                (ts, mode, symbol, side, type, price, amount, cost, fee, order_id, status,
-                dry_run, note, pnl, pnl_rate)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                dry_run, note, pnl, pnl_rate, liq_source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (o.get("ts") or datetime.now(timezone.utc).isoformat(),
              o["mode"], o["symbol"], o["side"], o["type"],
              float(o.get("price", 0)), float(o.get("amount", 0)), float(o.get("cost", 0)),
              float(o.get("fee", 0)), str(o.get("order_id", "")),
              o.get("status", "filled"), 1 if o.get("dry_run") else 0, o.get("note", ""),
-             float(o.get("pnl", 0)), float(o.get("pnl_rate", 0))),
+             float(o.get("pnl", 0)), float(o.get("pnl_rate", 0)),
+             o.get("liq_source", "")),
         )
         self.conn.commit()
 
@@ -608,11 +627,17 @@ class Database:
         同样有盈亏；按方向算会把它排除在胜率之外，与前端盈亏列口径打架。
         现货马丁的止盈卖出（dca_sell）同样是平仓，必须计入。
         """
-        closing = ("type IN ('grid_sell','grid_trail','grid_external',"
-                   "'short_close','close','dca_sell')")
+        # 平仓口径：普通平仓全算；强平（liquidation）只算 v2 运行期间的
+        # （monitor/reconcile）—— 90 天历史回补（backfill）是 v1 时代的爆仓记录，
+        # 混进来会让「总盈亏 -175U」与「胜率 84%」互相矛盾（实测发生过）。
+        # 历史强平仍在成交明细与强平记录页完整展示，只是不进策略统计。
+        closing = ("(type IN ('grid_sell','grid_trail','grid_external',"
+                   "'short_close','close','dca_sell')"
+                   " OR (type='liquidation' AND liq_source != 'backfill'))")
         where = " WHERE mode=?" if mode else ""
         row = self.conn.execute(f"""
-            SELECT COALESCE(SUM(pnl), 0), COALESCE(SUM(fee), 0),
+            SELECT COALESCE(SUM(CASE WHEN {closing} THEN pnl END), 0),
+                   COALESCE(SUM(fee), 0),
                    COUNT(CASE WHEN side='sell' THEN 1 END),
                    COUNT(CASE WHEN side='buy' THEN 1 END),
                    COUNT(CASE WHEN {closing} AND pnl > 0 THEN 1 END),

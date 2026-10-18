@@ -558,7 +558,8 @@ class GridStrategy:
                         "dry_run": False, "note": note,
                     }
                     if is_liq:
-                        self.db.record_liquidation_order(rec, overwrite=True)
+                        self.db.record_liquidation_order(rec, overwrite=True,
+                                                         source="reconcile")
                     else:
                         self.db.insert_order({**rec, "type": o_type})
                     self.db.upsert_grid_state(

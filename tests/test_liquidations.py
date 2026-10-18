@@ -151,6 +151,31 @@ class TestEngineSync(Base):
         self.assertAlmostEqual(float(rows[0]["pnl"]), -10.0, places=6)   # 100/400
         self.assertAlmostEqual(float(rows[1]["pnl"]), -30.0, places=6)   # 300/400
 
+    def test_backfill_liquidations_excluded_from_summary(self):
+        """v2 之前的强平（历史回补）不进策略统计，v2 之后的计入。"""
+        from database import Database
+        v2_first = "2026-10-10T06:05:40+00:00"
+        old = force_order("OLD1", "XUSDT", ts="2026-09-25T11:26:12+00:00",
+                          price=1.0, qty=100)
+        new = force_order("NEW1", "XUSDT", ts="2026-10-17T00:00:00+00:00",
+                          price=1.0, qty=100)
+        old["pnl"] = new["pnl"] = -50.0
+        self.db.insert_liquidation(old)
+        self.db.insert_liquidation(new)
+        self.db.record_liquidation_order(
+            {**old, "side": "sell", "fee": 0, "pnl_rate": 0, "dry_run": False,
+             "note": "强制平仓"}, source="backfill")
+        self.db.record_liquidation_order(
+            {**new, "side": "sell", "fee": 0, "pnl_rate": 0, "dry_run": False,
+             "note": "强制平仓"}, source="monitor")
+        s = self.db.get_order_summary("grid")
+        # 明细里两笔都在
+        rows = [o for o in self.db.get_orders(20) if o["type"] == "liquidation"]
+        self.assertEqual(len(rows), 2)
+        # 统计只算 v2 之后的那笔
+        self.assertAlmostEqual(s["total_pnl"], -50.0, places=6,
+                               msg="历史强平不应计入策略总盈亏")
+
     def test_sync_failure_does_not_break_engine(self):
         async def boom(since_ms=None, end_ms=None, limit=100):
             raise RuntimeError("接口 503")
