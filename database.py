@@ -331,6 +331,60 @@ class Database:
             "SELECT MIN(ts) FROM orders WHERE type != 'liquidation'").fetchone()
         return row[0] or ""
 
+    def claim_external_close(self, symbol: str, ts_iso: str, seconds: int = 600) -> int:
+        """找同时段、同标的的「外部平仓」行（对账先记、强平监控后到）。
+
+        返回行 id；没有返回 0。
+        """
+        lo, hi = _iso_window(ts_iso, seconds)
+        row = self.conn.execute(
+            """SELECT id FROM orders WHERE symbol=? AND type='grid_external'
+               AND ts BETWEEN ? AND ? ORDER BY id LIMIT 1""",
+            (symbol, lo, hi)).fetchone()
+        return int(row[0]) if row else 0
+
+    def upgrade_to_liquidation(self, row_id: int, liq: dict, pnl: float,
+                               source: str):
+        """把对账先记的「外部平仓」行升级为「强制平仓」（交易所权威数据为准）。"""
+        self.conn.execute(
+            """UPDATE orders SET type='liquidation', ts=?, price=?, amount=?, cost=?,
+                      pnl=?, pnl_rate=0, note=?, order_id=?, liq_source=?
+               WHERE id=?""",
+            (liq["ts"], float(liq.get("price", 0)), float(liq.get("amount", 0)),
+             float(liq.get("notional", 0)), float(pnl),
+             f"强制平仓（{liq.get('position_side') or '仓位'}）",
+             str(liq.get("order_id", "")), source, int(row_id)))
+        self.conn.commit()
+
+    def dedup_external_vs_liquidation(self, seconds: int = 600) -> int:
+        """清理历史双记：同一标的 ±窗口内的 grid_external 与 liquidation 是
+        同一次强平（对账路径先记 grid_external，监控同步后又插 liquidation）
+        → 删掉 grid_external 行。返回删除数。"""
+        ext = self.conn.execute(
+            "SELECT id, symbol, ts FROM orders WHERE type='grid_external'").fetchall()
+        liqs = self.conn.execute(
+            "SELECT symbol, ts FROM liquidations").fetchall()
+        from datetime import datetime as _dt
+        def _t(s):
+            try:
+                d = _dt.fromisoformat(str(s).replace("Z", "+00:00"))
+                return d.timestamp() if d.tzinfo else d.replace(tzinfo=timezone.utc).timestamp()
+            except Exception:
+                return None
+        liq_times = [(s, _t(ts)) for s, ts in liqs]
+        removed = 0
+        for oid, sym, ts in ext:
+            t = _t(ts)
+            if t is None:
+                continue
+            if any(s == sym and lt is not None and abs(t - lt) <= seconds
+                   for s, lt in liq_times):
+                self.conn.execute("DELETE FROM orders WHERE id=?", (int(oid),))
+                removed += 1
+        if removed:
+            self.conn.commit()
+        return removed
+
     def normalize_liquidation_rates(self):
         """历史强平行的盈亏率一律清零（该比率对强平没有意义）；
         并把 v2 首笔订单之前的强平标记为 backfill（不进策略统计）。"""

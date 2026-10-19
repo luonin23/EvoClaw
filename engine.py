@@ -70,6 +70,9 @@ class Engine:
           对账路径的完整盈亏会覆盖监控先行插入的简版数据
         """
         self.db.normalize_liquidation_rates()
+        removed = self.db.dedup_external_vs_liquidation()
+        if removed:
+            log.warning(f"强平监控：清理 {removed} 条与强平重复的「外部平仓」记录")
         now = time.time()
         last = float(self.db.get_runtime_stat("liq_sync_ts", 0) or 0)
         # 一次性的 90 天回补：新增盈亏字段后，历史记录也要补上真实亏损
@@ -141,6 +144,9 @@ class Engine:
 
         new = 0
         for r in rows:
+            # 对账路径可能在监控同步之前就发现了平仓（记成「外部平仓」）。
+            # 先认领那一行升级成「强制平仓」，否则同一笔亏损记两次。
+            claimed = self.db.claim_external_close(r["symbol"], r["ts"], 600)
             inserted = self.db.insert_liquidation(r)
             if inserted:
                 new += 1
@@ -148,8 +154,11 @@ class Engine:
                 self.db.update_liquidation_pnl(r["order_id"], r["pnl"])
             # 成交记录是「标的+时间」级别的一行 → 用该批次总盈亏，不按单张分摊
             opnl = group_pnl.get((r["symbol"], r["ts"][:19]), 0.0)
-            self.db.update_liquidation_order_pnl(r["symbol"], r["ts"], opnl)
-            if inserted:
+            if claimed:
+                self.db.upgrade_to_liquidation(claimed, r, opnl, source="monitor")
+            else:
+                self.db.update_liquidation_order_pnl(r["symbol"], r["ts"], opnl)
+            if inserted and not claimed:
                 try:
                     before_v2 = (cutoff_ms > 0 and int(datetime.fromisoformat(
                         r["ts"]).replace(tzinfo=timezone.utc).timestamp() * 1000) < cutoff_ms)

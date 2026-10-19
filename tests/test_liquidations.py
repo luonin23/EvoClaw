@@ -176,6 +176,59 @@ class TestEngineSync(Base):
         self.assertAlmostEqual(s["total_pnl"], -50.0, places=6,
                                msg="历史强平不应计入策略总盈亏")
 
+    def test_sync_claims_external_close_instead_of_double_counting(self):
+        """对账先记「外部平仓」、监控后到 → 升级那一行，绝不记两笔亏损。
+
+        实测事故：ZEREBRO 被强平，对账先记 grid_external −12.7558，
+        监控又插 liquidation −12.7558 → 总盈亏被扣两次。
+        """
+        ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        # 对账先记（晚于强平 9 秒发现）
+        self.db.insert_order({"ts": ts, "mode": "grid",
+            "symbol": "XUSDT", "side": "sell", "type": "grid_external",
+            "price": 0.9, "amount": 100, "cost": 90, "fee": 0,
+            "pnl": -12.75, "pnl_rate": 0, "dry_run": False,
+            "note": "外部平仓（非本程序发起）"})
+        self.cl.force_orders = [force_order("F1", "XUSDT", ts=ts,
+                                            price=0.9, qty=100)]
+        self.cl.income_records = [
+            {"symbol": "XUSDT", "incomeType": "REALIZED_PNL", "income": "-12.75"}]
+        eng = Engine(self.cl, self.db)
+        run(eng._sync_liquidations())
+        rows = [o for o in self.db.get_orders(20) if o["symbol"] == "XUSDT"]
+        self.assertEqual(len(rows), 1, "同一笔强平只能有一行")
+        self.assertEqual(rows[0]["type"], "liquidation", "应升级为强制平仓")
+        self.assertAlmostEqual(float(rows[0]["pnl"]), -12.75, places=6)
+        # 总盈亏只扣一次
+        s = self.db.get_order_summary("grid")
+        self.assertAlmostEqual(s["total_pnl"], -12.75, places=6)
+
+    def test_dedup_removes_historical_double_rows(self):
+        """历史双记清理：grid_external 与 liquidation 同标的 ±10 分钟 → 删前者。"""
+        ts = "2026-10-18T06:12:15+00:00"
+        self.db.insert_liquidation(force_order("F1", "XUSDT", ts=ts, price=0.9, qty=100))
+        self.db.insert_order({"ts": ts, "mode": "grid",
+                              "symbol": "XUSDT", "side": "sell", "type": "liquidation",
+                              "price": 0.9, "amount": 100, "cost": 90, "fee": 0,
+                              "pnl": -12.75, "pnl_rate": 0, "dry_run": False,
+                              "note": "强制平仓"})
+        self.db.insert_order({"ts": "2026-10-18T06:12:24+00:00", "mode": "grid",
+                              "symbol": "XUSDT", "side": "sell", "type": "grid_external",
+                              "price": 0.9, "amount": 100, "cost": 90, "fee": 0,
+                              "pnl": -12.75, "pnl_rate": 0, "dry_run": False,
+                              "note": "外部平仓"})
+        self.db.insert_order({"ts": "2026-10-18T07:00:00+00:00", "mode": "grid",
+                              "symbol": "YUSDT", "side": "sell", "type": "grid_external",
+                              "price": 1.0, "amount": 10, "cost": 10, "fee": 0,
+                              "pnl": 0.5, "pnl_rate": 0, "dry_run": False,
+                              "note": "外部平仓（真·外部）"})
+        removed = self.db.dedup_external_vs_liquidation()
+        self.assertEqual(removed, 1)
+        types = [(o["symbol"], o["type"]) for o in self.db.get_orders(20)]
+        self.assertIn(("XUSDT", "liquidation"), types)
+        self.assertIn(("YUSDT", "grid_external"), types)    # 时间窗不沾边，保留
+        self.assertNotIn(("XUSDT", "grid_external"), types)  # 双记行被删
+
     def test_sync_failure_does_not_break_engine(self):
         async def boom(since_ms=None, end_ms=None, limit=100):
             raise RuntimeError("接口 503")
