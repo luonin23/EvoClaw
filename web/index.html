@@ -829,7 +829,14 @@ async function loadOrders(market){
       + '<span>总手续费 <b>'+nf(sm.total_fee,4)+' U</b></span>'
       + '<span>净盈亏 <b class="'+((sm.net_pnl||0)>=0?'pos2':'neg2')+'">'+nfP(sm.net_pnl,4)+' U</b></span>'
       + '<span>买入 <b>'+(sm.buy_count||0)+'</b> 笔 · 卖出 <b>'+(sm.sell_count||0)+'</b> 笔</span>'
-      + '<span>平仓胜率 <b>'+(sm.win_count||0)+'胜/'+(sm.loss_count||0)+'负 ('+((sm.win_rate||0)*100).toFixed(1)+'%)</b></span>';
+      + '<span>平仓胜率 <b>'+(sm.win_count||0)+'胜/'+(sm.loss_count||0)+'负 ('+((sm.win_rate||0)*100).toFixed(1)+'%)</b></span>'
+    ;
+  if(market === 'futures'){
+    const lc = sm.liq_count||0, lp = sm.liq_pnl||0;
+    sum.innerHTML +=
+        '<span>强平 <b class="'+(lc?'neg2':'')+'">'+lc+'</b> 笔 · 强平金额 <b class="'+(lp<0?'neg2':'')+'">'
+      + nfP(lp,4)+' U</b></span>';
+  }
   }
   if(!rows.length){ $('orders'+suf).innerHTML='<tr><td colspan="11" class="empty">暂无成交</td></tr>'; renderPager(market); return; }
   $('orders'+suf).innerHTML = rows.map(o=>{

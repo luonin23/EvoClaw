@@ -696,7 +696,10 @@ class Database:
                    COUNT(CASE WHEN side='buy' THEN 1 END),
                    COUNT(CASE WHEN {closing} AND pnl > 0 THEN 1 END),
                    COUNT(CASE WHEN {closing} AND pnl <= 0 THEN 1 END),
-                   COALESCE(SUM(CASE WHEN {closing} THEN cost END), 0)
+                   COALESCE(SUM(CASE WHEN {closing} THEN cost END), 0),
+                   COUNT(CASE WHEN type='liquidation' AND liq_source != 'backfill' THEN 1 END),
+                   COALESCE(SUM(CASE WHEN type='liquidation' AND liq_source != 'backfill'
+                                     THEN pnl END), 0)
             FROM orders{where}""", (mode,) if mode else ()).fetchone()
         # 单笔平均盈亏率：与明细页每笔的「盈亏率」列同一口径，能直接对上。
         # （之前展示的 Σpnl/Σ卖出名义 是周转收益率 —— 网格资金反复周转，
@@ -717,6 +720,8 @@ class Database:
             "win_rate": round(row[4] / (row[4] + row[5]), 4) if (row[4] + row[5]) > 0 else 0,
             "total_pnl_rate": round(row[0] / sell_cost, 6) if sell_cost > 0 else 0,
             "avg_pnl_rate": round(float(avg_rate), 6) if avg_rate is not None else 0,
+            "liq_count": int(row[7] or 0),
+            "liq_pnl": round(float(row[8] or 0), 4),
         }
 
     # ===== 网格 =====
