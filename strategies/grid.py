@@ -1604,6 +1604,16 @@ class GridStrategy:
         amt = float(lv["amount"])
         st = self.db.get_grid_state(sym) or {}
         realized = float(st.get("realized_pnl", 0) or 0)
+        # 重复成交守卫：插针瞬间成交时 _check_fills 会漏（价格快照未触及），
+        # 对账发现数量差 → _backfill_trades 按成交明细补录；随后价格再次触及
+        # 同一档位，若不拦这里就会再记一笔（实测 68 组重复，卖出行连 pnl 都双算）。
+        # 同档位合法的第二次成交需要「成交→反向成交→重新挂单」整轮循环，秒级不可能，
+        # 5 分钟窗口安全。
+        if self.db.has_similar_order(sym, side, fill_price, amt, window=300):
+            self.db.fill_grid_level(lv["id"])
+            log.warning(f"GRID {sym}: {side} {amt:.0f} @ {fill_price:.6g} 已由对账补录，"
+                        f"跳过重复记账（仅标记档位成交）")
+            return
 
         self.db.fill_grid_level(lv["id"])
         trade_pnl = 0.0

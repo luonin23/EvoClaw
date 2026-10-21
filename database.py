@@ -636,6 +636,68 @@ class Database:
         self.conn.execute("UPDATE orders SET status=? WHERE order_id=?", (status, order_id))
         self.conn.commit()
 
+    def has_similar_order(self, symbol: str, side: str, price: float, amount: float,
+                          window: int = 300, seconds: int = 300) -> bool:
+        """是否已存在内容相近的成交记录（同币/同向/价差<0.2%/量差<2%/时间±window 秒）。
+
+        供 _on_fill 防重复：对账补录（backfill）先落账时，正常成交检测不再二次记账。
+        """
+        lo, hi = _iso_window(datetime.now(timezone.utc).isoformat(), seconds)
+        row = self.conn.execute(
+            """SELECT COUNT(*) FROM orders
+               WHERE symbol=? AND side=? AND type IN ('grid_buy','grid_sell','grid_trail')
+                 AND amount BETWEEN ? AND ?
+                 AND price BETWEEN ? AND ?
+                 AND ts BETWEEN ? AND ?""",
+            (symbol, side,
+             float(amount) * 0.98, float(amount) * 1.02,
+             float(price) * 0.998, float(price) * 1.002, lo, hi)).fetchone()
+        return int(row[0] or 0) > 0
+
+    def dedup_backfill_orders(self, seconds: int = 120) -> int:
+        """清理历史双记：同一笔成交被「成交明细补录」和正常路径各记一行。
+
+        匹配键：symbol + type + side + price + amount 全同，时间差 ≤ seconds。
+        删「补录」行，保留正常行（真·漏记后补、没有孪生的补录行保留）。
+        返回删除数。
+        """
+        from collections import defaultdict
+        rows = self.conn.execute(
+            """SELECT id, ts, symbol, type, side, price, amount, note
+               FROM orders WHERE type LIKE 'grid_%' OR type='dca_buy'
+               ORDER BY ts""").fetchall()
+        groups = defaultdict(list)
+        for r in rows:
+            groups[(r[2], r[3], r[4], round(r[5], 10), round(r[6], 6))].append(r)
+        ids = []
+        for g in groups.values():
+            if len(g) < 2:
+                continue
+            def _t(s):
+                try:
+                    d = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+                    return d.timestamp() if d.tzinfo else d.replace(
+                        tzinfo=timezone.utc).timestamp()
+                except Exception:
+                    return None
+            for i in range(len(g)):
+                for j in range(len(g)):
+                    if i == j:
+                        continue
+                    ti, tj = _t(g[i][1]), _t(g[j][1])
+                    if ti is None or tj is None or abs(ti - tj) > seconds:
+                        continue
+                    # i 是补录行、j 是正常行 → 删 i
+                    if "成交明细补录" in (g[i][7] or "") and "成交明细补录" not in (g[j][7] or ""):
+                        ids.append(g[i][0])
+        n = 0
+        for oid in set(ids):
+            cur = self.conn.execute("DELETE FROM orders WHERE id=?", (int(oid),))
+            n += cur.rowcount
+        if n:
+            self.conn.commit()
+        return n
+
     # ===== 交易所成交明细去重（补录用）=====
     def trade_seen(self, symbol: str, trade_id: str) -> bool:
         return self.conn.execute(

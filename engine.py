@@ -73,6 +73,9 @@ class Engine:
         removed = self.db.dedup_external_vs_liquidation()
         if removed:
             log.warning(f"强平监控：清理 {removed} 条与强平重复的「外部平仓」记录")
+        dup = self.db.dedup_backfill_orders()
+        if dup:
+            log.warning(f"成交记录：清理 {dup} 条与正常记账重复的「补录」行")
         now = time.time()
         last = float(self.db.get_runtime_stat("liq_sync_ts", 0) or 0)
         # 一次性的 90 天回补：新增盈亏字段后，历史记录也要补上真实亏损
