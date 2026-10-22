@@ -809,8 +809,8 @@ class GridStrategy:
         cfg = self.cfg
         if draining or not cfg.get("breakout_extend", True):
             return False
-        max_n = int(cfg.get("breakout_max", 3) or 0)
-        step = float(cfg.get("breakout_step", 0.03) or 0.03)
+        max_n = int(cfg.get("breakout_max", 2) or 0)
+        step = float(cfg.get("breakout_step", 0.05) or 0.03)
         st = self.db.get_grid_state(sym) or {}
         lower = float(st.get("lower", 0) or 0)
         if max_n <= 0 or step <= 0 or lower <= 0 or price >= lower or size_usdt <= 0:
@@ -2038,12 +2038,41 @@ class GridStrategy:
             return False
         return True
 
+    async def _symbol_exposure_ok(self, sym: str, equity: float) -> bool:
+        """单币敞口上限：该币名义（持仓市值 + 待成交买单）÷ 权益 超限就不再买入。
+
+        两次强平（ZEREBRO/DOOD）的共同根因是单币名义占到权益 70~88% ——
+        3 倍杠杆下这种仓位跌 30% 必然打穿。全局敞口闸门管总量，这里管集中度。
+        只拦新买入，不强平已有持仓（与「不设止损」一致）。0 = 不限制。
+        """
+        ratio = float(self.cfg.get("max_symbol_exposure", 0) or 0)
+        if ratio <= 0:
+            return True
+        if equity <= 0:
+            return False
+        qty, _ = self.db.lots_qty_cost(sym)
+        price = self.client.last_price(sym) or 0
+        notional = qty * price if qty > 0 and price > 0 else 0.0
+        for l in self.db.get_grid_levels(sym):
+            if l["status"] == "pending" and l["side"] == "buy":
+                notional += float(l["price"]) * float(l["amount"])
+        if notional > equity * ratio:
+            s = _throttle.emit(f"grid_symexp:{sym}")
+            if s is not None:
+                log.warning(
+                    f"GRID {sym}: 单币名义 {notional:.2f}U 已占权益 "
+                    f"{notional / equity * 100:.0f}%（上限 {ratio * 100:.0f}%）→ 暂停该币买入{s}")
+            return False
+        return True
+
     async def _exposure_ok(self, sym: str, equity: float) -> bool:
         ratio = float(self.cfg.get("max_exposure_ratio", 3.0) or 3.0)
         if ratio <= 0:
             return True
         if equity <= 0:
             self._warn_once(f"grid_noeq:{sym}", "GRID 权益为 0，暂停买入")
+            return False
+        if not await self._symbol_exposure_ok(sym, equity):
             return False
         try:
             positions = await self.client.get_positions()

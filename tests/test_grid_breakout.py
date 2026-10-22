@@ -71,7 +71,7 @@ class TestExtendDown(Base):
             self.assertAlmostEqual(float(l["price"]) * float(l["amount"]), 5.0, places=6)
 
     def test_is_idempotent(self):
-        g = self.make()
+        g = self.make(breakout_max=3)
         run(g._maybe_extend_down(SYM, 0.030757, 5.0, False))
         run(g._maybe_extend_down(SYM, 0.030757, 5.0, False))
         self.assertEqual(len(self.ext_levels()), 3, "重复调用不应重复补档")
