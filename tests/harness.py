@@ -55,6 +55,7 @@ class FakeClient:
         self.limit_orders: list[tuple] = []
         self.fill_prices: dict[str, float] = {}     # order_id -> 实际成交均价
         self.force_orders: list[dict] = []           # fetch_force_orders 的返回
+        self._reverse: dict = {"X/USDT:USDT": "X"}   # 符号映射（ markets 已加载）
         self.income_records: list[dict] = []         # fetch_income_window 的返回
         self.income_calls = 0
         self._hl: dict = {}                          # symbol -> (24h high, low)

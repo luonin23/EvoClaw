@@ -72,6 +72,9 @@ def _client_oid() -> str:
 
 
 class ExchangeClient:
+    # 类级默认：__new__ 跳过 __init__ 构造的测试实例也有兜底
+    _ban_until: float = 0.0
+
     def __init__(self, config: dict):
         self.config = config
         self.dry_run = bool(config.get("dry_run", True))
@@ -103,9 +106,23 @@ class ExchangeClient:
 
     # ===== 基础设施 =====
     async def _safe_call(self, coro, timeout=20):
+        """统一请求入口：封禁期直接本地失败（不再发请求加重封禁），
+        收到 418/429 时解析「banned until」并全网暂停到解封。"""
         if self._closed:
             raise RuntimeError("ExchangeClient already closed")
-        return await asyncio.wait_for(coro, timeout=timeout)
+        if time.time() < self._ban_until:
+            raise RuntimeError(
+                f"币安 IP 封禁中，剩余 {int(self._ban_until - time.time())}s 自动恢复")
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except Exception as e:
+            m = re.search(r"banned until (\d+)", str(e))
+            if m:
+                self._ban_until = int(m.group(1)) / 1000 + 5
+                log.warning(f"币安 IP 封禁（418），暂停全部请求至 "
+                            f"{datetime.fromtimestamp(self._ban_until, tz=timezone.utc):%H:%M:%S} UTC，"
+                            f"期间本地快速失败、不再发请求")
+            raise
 
     async def close(self):
         if self._closed:

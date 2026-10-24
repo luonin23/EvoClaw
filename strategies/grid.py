@@ -513,6 +513,14 @@ class GridStrategy:
                 positions = None
                 log.warning(f"GRID {sym}: 读取持仓失败，本轮跳过对账: {e}")
             if positions is not None:
+                # 市场表未就绪（启动早期/418 风暴中 load_markets 失败）时，
+                # user_symbol 无法把 'CFX/USDT:USDT' 映射成 'CFXUSDT'，
+                # 持仓匹配必然全部落空 → 会把「有持仓」误判成「已被外部平仓」，
+                # 然后 grid_state 被清（CFX/IOST/STRK 实测三连误清）。直接跳过对账。
+                if not self.client._reverse:
+                    log.warning("GRID 对账跳过：市场表未加载（符号映射为空）")
+                    positions = None
+            if positions is not None:
                 ex_qty, ex_entry = 0.0, 0.0
                 for p in positions:
                     if (self.client.user_symbol(p.get("symbol", "")) == sym
@@ -523,6 +531,25 @@ class GridStrategy:
                 db_cost = float(st.get("total_cost", 0) or 0)
                 db_avg = (db_cost / db_qty) if db_qty > 0 else 0
                 if ex_qty <= 1e-12 and db_qty > 1e-12:
+                    # 二次确认：交易所一次「空结果」可能只是接口抖动。隔 2 秒重查，
+                    # 两次都是 0 才认定仓位真的没了（实测一次抖动就误清了三个持仓）。
+                    await asyncio.sleep(2)
+                    try:
+                        recheck = await self.client.get_positions()
+                        ex2 = sum(
+                            float(p.get("contracts", 0) or 0)
+                            for p in recheck
+                            if self.client.user_symbol(p.get("symbol", "")) == sym
+                            and p.get("side") == "long")
+                        if ex2 > 1e-12:
+                            log.warning(f"GRID {sym}: 对账重查发现持仓仍在"
+                                        f"（{ex2:.0f} 张）→ 撤销外部平仓判定，本轮跳过")
+                            positions = None
+                            ex_qty = ex2
+                    except Exception as e:
+                        log.warning(f"GRID {sym}: 对账二次确认失败，跳过本轮: {e}")
+                        positions = None
+                if positions is not None and ex_qty <= 1e-12 and db_qty > 1e-12:
                     # 交易所已经没持仓、本地却记着有 → 被外部平掉了（手工平仓/强平）。
                     # 必须清空本地并撤掉失效挂单，同时**把这笔平仓补记进成交记录**，
                     # 否则成交记录里凭空少一笔、已实现盈亏也对不上。
