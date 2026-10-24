@@ -538,10 +538,24 @@ async function loadState(){
   $('bRun').className = 'badge ' + (h.paused?'warn':'ok');
   $('btnPause').textContent = h.paused ? '恢复' : '暂停';
   $('btnPause').className = 'btn ' + (h.paused?'primary':'danger');
-  $('sFut').textContent = nf(d.futures_balance&&d.futures_balance.balance);
-  $('sFutFree').textContent = '可用 ' + nf(d.futures_balance&&d.futures_balance.available);
-  $('sSpot').textContent = nf(d.spot_balance&&d.spot_balance.total);
-  $('sSpotFree').textContent = '可用 ' + nf(d.spot_balance&&d.spot_balance.free);
+  // 余额查询失败（如币安 IP 封禁）时显示「—」而不是误导性的 0
+  const fb = d.futures_balance||{};
+  if (fb.error){
+    const m = fb.error.match(/剩余 (\d+)s/);
+    $('sFut').textContent = '—';
+    $('sFutFree').textContent = m ? ('限频中 ' + Math.ceil(m[1]/60) + ' 分钟后恢复') : '查询失败';
+  } else {
+    $('sFut').textContent = nf(fb.balance);
+    $('sFutFree').textContent = '可用 ' + nf(fb.available);
+  }
+  const sb = d.spot_balance||{};
+  if (sb.error){
+    $('sSpot').textContent = '—';
+    $('sSpotFree').textContent = '限频中';
+  } else {
+    $('sSpot').textContent = nf(sb.total);
+    $('sSpotFree').textContent = '可用 ' + nf(sb.free);
+  }
   const up = d.uptime||0, hh=Math.floor(up/3600), mm=Math.floor(up%3600/60);
   $('sUp').textContent = hh+'h'+mm+'m';
   $('sTick').textContent = 'tick ' + (h.tick||0) + (h.last_ok_seconds_ago!=null?(' · 正常 '+(h.last_ok_seconds_ago|0)+'s 前'):'');

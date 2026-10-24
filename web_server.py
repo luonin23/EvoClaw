@@ -117,7 +117,8 @@ class WebServer:
         except Exception as e:
             fut = {"balance": 0, "available": 0, "error": str(e)}
         spot = {"free": 0, "total": 0}
-        if cfg.get("mode") == "dca":
+        if cfg.get("mode") in ("dca", "grid"):
+            # 现货相关功能（马丁/利润定投/划转）在 grid 模式下也在用，余额照常显示
             try:
                 spot = await self.client.get_spot_balance("USDT")
             except Exception as e:
