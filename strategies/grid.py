@@ -8,6 +8,7 @@
   · 不设止损：价格跌出区间就一直持有底仓等回来；靠低杠杆 + 敞口闸门防强平。
 """
 
+import asyncio
 import logging
 import math
 import time
@@ -2080,8 +2081,11 @@ class GridStrategy:
         qty, _ = self.db.lots_qty_cost(sym)
         price = self.client.last_price(sym) or 0
         notional = qty * price if qty > 0 and price > 0 else 0.0
+        # 只计「已实际挂在交易所」的买单（order_id 非空）。纯计划档位不算——
+        # 它们挂出前还会逐张过这道闸；全算的话 9 档建仓计划的名义会把自己
+        # 拦死（ERA 实测：41U 计划名义=权益 220%，实际一张未挂）。
         for l in self.db.get_grid_levels(sym):
-            if l["status"] == "pending" and l["side"] == "buy":
+            if l["status"] == "pending" and l["side"] == "buy" and l.get("order_id"):
                 notional += float(l["price"]) * float(l["amount"])
         if notional > equity * ratio:
             s = _throttle.emit(f"grid_symexp:{sym}")
